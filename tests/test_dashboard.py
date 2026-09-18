@@ -118,6 +118,8 @@ def test_dashboard_renders_fallback_without_network() -> None:
     assert not at.exception
     titles = [str(element.value) for element in at.title]
     assert any("EnjoyStats" in title for title in titles)
+    sidebar_headers = [str(element.value) for element in at.sidebar.header]
+    assert any("Upload a game" in header for header in sidebar_headers)
     subheaders = [str(element.value) for element in at.subheader]
     assert "Offensive" in subheaders
     assert "Defensive" in subheaders

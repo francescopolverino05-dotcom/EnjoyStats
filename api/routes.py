@@ -14,10 +14,11 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import Field
 
+from analytics.game_ingest import GamePayload, MatchSummary, collect_game
 from analytics.spatial_zones import SpatialBreakdown, spatial_breakdown
 from analytics.temporal_stats import TemporalBreakdown, temporal_breakdown
 from data_models.events import MatchEvent
-from data_models.player_stats import StrictModel
+from data_models.player_stats import PlayerMatchProfile, StrictModel
 from data_models.video_sync import PlaylistPanel, TimeFrame, build_playlist_panel
 from storage.db_aggregator import StorageError
 
@@ -193,3 +194,73 @@ async def get_spatial_analytics(
         time_frame=time_frame,
     )
     return spatial_breakdown(events, team_id=team_id, player_id=player_id)
+
+
+class IngestResult(StrictModel):
+    """Collected four-pillar rundown after an uploaded game is ingested."""
+
+    match_id: UUID
+    upserted_events: int = Field(ge=0)
+    upserted_profiles: int = Field(ge=0)
+    summary: MatchSummary
+    players: list[PlayerMatchProfile]
+
+
+@advanced_router.post(
+    "/matches/{match_id}/ingest",
+    response_model=IngestResult,
+    summary="Upload a tagged game, auto-collect stats, return the rundown",
+)
+async def ingest_tagged_game(
+    match_id: UUID,
+    payload: GamePayload,
+    store: Any = Depends(get_event_store),
+) -> IngestResult:
+    """Collect player-match pillars from an uploaded AutoData event feed."""
+
+    if payload.match_id is not None and payload.match_id != match_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="JSON match_id does not match the match_id in the URL path.",
+        )
+    for event in payload.events:
+        if event.match_id != match_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="JSON match_id does not match the match_id in the URL path.",
+            )
+    try:
+        rundown = collect_game(
+            GamePayload(match_id=match_id, players=payload.players, events=payload.events)
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    upsert_events = getattr(store, "upsert_match_events", None)
+    if not callable(upsert_events):
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Event store is not available on this aggregator.",
+        )
+    written = upsert_events(match_id, rundown.events)
+    if hasattr(written, "__await__"):
+        written = await written
+
+    upsert_profile = getattr(store, "upsert_player_profile", None)
+    if not callable(upsert_profile):
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail="Profile store is not available on this aggregator.",
+        )
+    for profile in rundown.players:
+        result = upsert_profile(match_id, profile)
+        if hasattr(result, "__await__"):
+            await result
+
+    return IngestResult(
+        match_id=match_id,
+        upserted_events=int(written),
+        upserted_profiles=len(rundown.players),
+        summary=rundown.summary,
+        players=rundown.players,
+    )
