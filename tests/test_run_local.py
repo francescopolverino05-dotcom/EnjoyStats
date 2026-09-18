@@ -40,6 +40,7 @@ def test_run_local_script_covers_stack_phases() -> None:
     assert "/docs" in text
     assert "streamlit" in text
     assert "8501" in text
+    assert "maxUploadSize=3072" in text
     assert "trap cleanup INT TERM EXIT" in text
     assert "http://localhost:8000/docs" in text
     assert "http://localhost:8501" in text

@@ -31,11 +31,13 @@ from matplotlib.patches import Ellipse, Rectangle
 from app.client import DEFAULT_BASE_URL, ProfileLoad, fetch_player_profile
 from app.dummy_data import PitchAction, catalog
 from app.ingest import (
+    collect_from_film_path,
     collect_sample_match,
     collect_uploaded_bytes,
     load_from_rundown,
     persist_rundown,
     profile_label,
+    save_uploaded_film,
 )
 from analytics.game_ingest import MatchRundown, rundown_from_mapping, rundown_to_json
 from app.metrics import PassDirections
@@ -692,7 +694,7 @@ def render_match_summary(rundown: MatchRundown) -> None:
 
     summary = rundown.summary
     st.subheader("Match rundown")
-    st.caption("Automatically collected from the tagged game feed.")
+    st.caption("Automatically collected from the match film.")
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Events", summary.event_count)
     c2.metric("Players", summary.player_count)
@@ -700,29 +702,43 @@ def render_match_summary(rundown: MatchRundown) -> None:
     c4.metric("Shots", summary.shots)
     c5.metric("Passes", summary.passes)
     st.caption(
-        f"Match `{summary.match_id}`  ·  {summary.duration_minutes:.1f} minutes of tagged play"
+        f"Match `{summary.match_id}`  ·  {summary.duration_minutes:.1f} minutes of collected play"
     )
 
 
 def render_sidebar() -> tuple[str, UUID, UUID, MatchRundown | None]:
-    """Upload a game or pick a catalog match, then choose a player rundown."""
+    """Upload a match film (or a catalog match) and open a player rundown."""
 
     rundown_key = "collected_rundown"
     persist_key = "ingest_persist_message"
+    upload_dir = ROOT / ".local-run" / "uploads"
 
     st.sidebar.header("Upload a game")
     st.sidebar.caption(
-        "Drop a tagged AutoData JSON export. EnjoyStats collects player stats "
-        "automatically and opens the full four-pillar rundown."
+        "Drop a full match film (up to 3 GB). EnjoyStats watches the video, "
+        "auto-collects events, and opens the four-pillar rundown. "
+        "No tag JSON and no separate auto-tag repo."
     )
-    uploaded = st.sidebar.file_uploader(
-        "Tagged match JSON",
-        type=["json"],
-        help="A JSON array of events, or an object with match_id, players, and events.",
+    film = st.sidebar.file_uploader(
+        "Match film",
+        type=["mp4", "mov", "mkv", "avi", "m4v", "webm"],
+        help="Broadcast or tactical camera. Local files up to 3 GB.",
     )
-    collect_upload = st.sidebar.button("Collect uploaded game", type="primary")
+    film_path = st.sidebar.text_input(
+        "Or local path (best for ~3 GB files)",
+        value="",
+        help="Absolute path on this machine. Avoids copying a 3 GB upload into RAM.",
+    ).strip()
+    collect_film = st.sidebar.button("Collect stats from film", type="primary")
     collect_sample = st.sidebar.button("Collect sample match")
     clear_collected = st.sidebar.button("Clear collected match")
+    with st.sidebar.expander("Advanced: tagged JSON"):
+        uploaded_json = st.file_uploader(
+            "AutoData JSON (optional)",
+            type=["json"],
+            help="Only if you already have event tags.",
+        )
+        collect_json = st.button("Collect tagged JSON")
     base_url = st.sidebar.text_input("FastAPI base URL", value=DEFAULT_BASE_URL).strip()
     if not base_url:
         base_url = DEFAULT_BASE_URL
@@ -740,12 +756,33 @@ def render_sidebar() -> tuple[str, UUID, UUID, MatchRundown | None]:
             st.session_state[persist_key] = message
         except ValueError as exc:
             error = str(exc)
-    elif collect_upload:
-        if uploaded is None:
-            error = "Choose a JSON game file first."
+    elif collect_film:
+        source_path = film_path
+        try:
+            if film is not None and not source_path:
+                suffix = Path(getattr(film, "name", "match.mp4")).suffix or ".mp4"
+                dest = upload_dir / f"upload{suffix.lower()}"
+                save_uploaded_film(film, dest)
+                source_path = str(dest)
+            if not source_path:
+                error = "Choose a match film or paste a local path first."
+            else:
+                with st.spinner(
+                    "Watching the film and collecting stats. "
+                    "A full match can take several minutes on CPU."
+                ):
+                    rundown = collect_from_film_path(source_path)
+                st.session_state[rundown_key] = rundown_to_json(rundown)
+                _persisted, message = asyncio.run(persist_rundown(base_url, rundown))
+                st.session_state[persist_key] = message
+        except ValueError as exc:
+            error = str(exc)
+    elif collect_json:
+        if uploaded_json is None:
+            error = "Choose a JSON tag file first, or upload a film instead."
         else:
             try:
-                rundown = collect_uploaded_bytes(uploaded.getvalue())
+                rundown = collect_uploaded_bytes(uploaded_json.getvalue())
                 st.session_state[rundown_key] = rundown_to_json(rundown)
                 _persisted, message = asyncio.run(persist_rundown(base_url, rundown))
                 st.session_state[persist_key] = message

@@ -10,3 +10,4 @@ streamlit>=1.36,<2
 matplotlib>=3.8,<4
 seaborn>=0.13,<1
 numpy>=1.26,<3
+opencv-python-headless>=4.9,<5

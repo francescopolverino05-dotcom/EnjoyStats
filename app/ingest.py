@@ -1,9 +1,10 @@
-"""Dashboard helpers for uploading a tagged game and showing the rundown."""
+"""Dashboard helpers for uploading a match film and showing the rundown."""
 
 from __future__ import annotations
 
 import json
 from collections.abc import Sequence
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -16,6 +17,11 @@ from analytics.game_ingest import (
     parse_game_payload,
 )
 from analytics.sample_game import sample_game_payload
+from analytics.video_auto_collect import (
+    MAX_VIDEO_BYTES,
+    VIDEO_SUFFIXES,
+    collect_from_video,
+)
 from app.client import DEFAULT_BASE_URL, REQUEST_TIMEOUT_S, ProfileLoad, probe_api
 from app.dummy_data import PitchAction
 from app.metrics import directions_from_distribution
@@ -64,7 +70,7 @@ def load_from_rundown(rundown: MatchRundown, player_id: UUID) -> ProfileLoad:
         directions=directions_from_distribution(profile.distribution),
         source="collected",
         message=(
-            f"Auto-collected {rundown.summary.event_count} tagged events "
+            f"Auto-collected {rundown.summary.event_count} events "
             f"into a {rundown.summary.player_count}-player rundown."
         ),
         api_online=True,
@@ -86,6 +92,43 @@ def collect_uploaded_bytes(raw_bytes: bytes) -> MatchRundown:
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError(f"Game file is not valid JSON ({exc}).") from exc
     return collect_game(parse_game_payload(decoded))
+
+
+def save_uploaded_film(uploaded: Any, destination: Path) -> Path:
+    """Write an uploaded film to disk in 8 MiB chunks (up to 3 GB)."""
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    written = 0
+    read = getattr(uploaded, "read", None)
+    seek = getattr(uploaded, "seek", None)
+    if callable(seek):
+        seek(0)
+    if not callable(read):
+        raise ValueError("Upload is not a readable film file.")
+    with destination.open("wb") as out:
+        while True:
+            chunk = read(8 * 1024 * 1024)
+            if not chunk:
+                break
+            written += len(chunk)
+            if written > MAX_VIDEO_BYTES:
+                out.close()
+                destination.unlink(missing_ok=True)
+                raise ValueError("Match film exceeds the 3 GB upload limit.")
+            out.write(chunk)
+    if written <= 0:
+        destination.unlink(missing_ok=True)
+        raise ValueError("Uploaded film is empty.")
+    return destination
+
+
+def collect_from_film_path(path: str | Path) -> MatchRundown:
+    """Auto-tag a match film on disk and collect the four-pillar rundown."""
+
+    resolved = Path(path).expanduser()
+    if resolved.suffix.lower() not in VIDEO_SUFFIXES:
+        raise ValueError("Choose a match film (mp4, mov, mkv, avi, m4v, webm), not a tag JSON.")
+    return collect_from_video(resolved)
 
 
 async def persist_rundown(
