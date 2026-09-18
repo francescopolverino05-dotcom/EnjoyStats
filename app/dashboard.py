@@ -8,6 +8,7 @@ Launch from the repository root::
 from __future__ import annotations
 
 import asyncio
+import importlib
 import math
 import sys
 from collections.abc import Callable, Sequence
@@ -30,6 +31,11 @@ from matplotlib.patches import Ellipse, Rectangle
 
 from app.client import DEFAULT_BASE_URL, ProfileLoad, fetch_player_profile
 from app.dummy_data import PitchAction, catalog
+from app.metrics import PassDirections
+
+import app.ingest as _ingest_mod
+
+importlib.reload(_ingest_mod)
 from app.ingest import (
     collect_from_film_path,
     collect_sample_match,
@@ -40,7 +46,6 @@ from app.ingest import (
     save_uploaded_film,
 )
 from analytics.game_ingest import MatchRundown, rundown_from_mapping, rundown_to_json
-from app.metrics import PassDirections
 from config.pitch_config import (
     CENTRE_CIRCLE_RADIUS_M,
     FIFA_PITCH,
