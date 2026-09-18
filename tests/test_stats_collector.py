@@ -103,6 +103,8 @@ def test_collector_applies_shot_pass_duel_and_recovery() -> None:
     assert snapshot.distribution.pass_locations.into_penalty_area.total == 1
     assert snapshot.defensive.aerial_duels.success == 1
     assert snapshot.defensive.ball_recoveries.defensive_third == 1
+    assert snapshot.distribution.pass_directions.sideways.total == 1
+    assert snapshot.distribution.pass_thirds.final_third.total == 1
 
 
 def test_collector_ignores_other_players() -> None:

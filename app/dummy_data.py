@@ -9,12 +9,19 @@ from uuid import UUID
 
 from data_models.player_stats import (
     AttemptSplit,
+    BallLostStats,
     BallRecoveryStats,
+    BlockStats,
     DefensiveStats,
     DistributionStats,
+    FoulStats,
+    InterceptionStats,
     OffensiveStats,
+    PassDirectionStats,
     PassLocationStats,
+    PassThirdStats,
     PlayerMatchProfile,
+    PossessionStats,
 )
 
 from app.metrics import PassDirections
@@ -115,12 +122,14 @@ def _playmaker_profile() -> PlayerMatchProfile:
         player_id=PLAYMAKER_ID,
         team_id=TEAM_ID,
         jersey_number=8,
+        player_name="Alex Playmaker",
         position="CAM",
-        offensive=OffensiveStats(minutes=0.1, assists=1),
+        offensive=OffensiveStats(minutes=0.1, assists=1, throw_ins=1),
         defensive=DefensiveStats(
             aerial_duels=AttemptSplit(success=1, total=1),
             ground_duels=AttemptSplit(success=0, total=0),
             ball_recoveries=BallRecoveryStats(middle_third=1),
+            ppda=8.5,
         ),
         distribution=DistributionStats(
             passes=AttemptSplit(success=3, total=3),
@@ -129,7 +138,11 @@ def _playmaker_profile() -> PlayerMatchProfile:
                 short=AttemptSplit(success=2, total=2),
                 medium=AttemptSplit(success=1, total=1),
             ),
+            pass_thirds=PassThirdStats(middle_third=AttemptSplit(success=3, total=3)),
+            into_final_third=AttemptSplit(success=1, total=1),
+            pass_directions=PassDirectionStats(forward=AttemptSplit(success=3, total=3)),
         ),
+        possession=PossessionStats(time_minutes=0.1, percentage=2.0),
         collected_at=_KICKOFF,
     )
 
@@ -142,6 +155,7 @@ def _striker_profile() -> PlayerMatchProfile:
         player_id=STRIKER_ID,
         team_id=TEAM_ID,
         jersey_number=9,
+        player_name="Sam Striker",
         position="ST",
         offensive=OffensiveStats(
             minutes=0.1,
@@ -154,12 +168,16 @@ def _striker_profile() -> PlayerMatchProfile:
             ground_duels=AttemptSplit(success=1, total=1),
             aerial_duels=AttemptSplit(success=0, total=1),
             ball_recoveries=BallRecoveryStats(final_third=1),
+            ppda=11.2,
         ),
         distribution=DistributionStats(
             passes=AttemptSplit(success=1, total=1),
             cutbacks=AttemptSplit(success=0, total=0),
             pass_locations=PassLocationStats(short=AttemptSplit(success=1, total=1)),
+            pass_thirds=PassThirdStats(final_third=AttemptSplit(success=1, total=1)),
+            pass_directions=PassDirectionStats(sideways=AttemptSplit(success=1, total=1)),
         ),
+        possession=PossessionStats(time_minutes=0.1, percentage=1.5),
         collected_at=_KICKOFF,
     )
 
@@ -172,6 +190,7 @@ def _controller_profile() -> PlayerMatchProfile:
         player_id=CONTROLLER_ID,
         team_id=TEAM_ID,
         jersey_number=6,
+        player_name="Chris Controller",
         position="CM",
         offensive=OffensiveStats(
             minutes=78.5,
@@ -183,15 +202,37 @@ def _controller_profile() -> PlayerMatchProfile:
             missed_shots=1,
             shots_inside_penalty_area=2,
             shots_outside_penalty_area=2,
+            offsides=1,
+            freekicks=2,
+            corners=3,
+            penalty_kicks=1,
+            throw_ins=4,
         ),
         defensive=DefensiveStats(
             aerial_duels=AttemptSplit(success=5, total=8),
             ground_duels=AttemptSplit(success=9, total=12),
+            blocks=BlockStats(shots=2, crosses=1, passes=3),
+            fouls=FoulStats(committed=2, won=3),
+            interceptions=InterceptionStats(
+                total=6,
+                defensive_third=2,
+                middle_third=3,
+                final_third=1,
+            ),
             ball_recoveries=BallRecoveryStats(
                 defensive_third=4,
                 middle_third=7,
                 final_third=2,
             ),
+            ball_lost=BallLostStats(
+                defensive_third=2,
+                middle_third=5,
+                final_third=3,
+            ),
+            yellow_cards=1,
+            red_cards=0,
+            goals_against=1,
+            ppda=9.4,
         ),
         distribution=DistributionStats(
             passes=AttemptSplit(success=48, total=55),
@@ -204,7 +245,19 @@ def _controller_profile() -> PlayerMatchProfile:
                 long=AttemptSplit(success=8, total=10),
                 into_penalty_area=AttemptSplit(success=5, total=8),
             ),
+            pass_thirds=PassThirdStats(
+                defensive_third=AttemptSplit(success=10, total=12),
+                middle_third=AttemptSplit(success=24, total=28),
+                final_third=AttemptSplit(success=14, total=15),
+            ),
+            into_final_third=AttemptSplit(success=9, total=12),
+            pass_directions=PassDirectionStats(
+                forward=AttemptSplit(success=24, total=28),
+                sideways=AttemptSplit(success=16, total=19),
+                backward=AttemptSplit(success=8, total=8),
+            ),
         ),
+        possession=PossessionStats(time_minutes=11.2, percentage=14.3),
         collected_at=_KICKOFF,
     )
 
@@ -264,6 +317,7 @@ def fallback_profile(match_id: UUID, player_id: UUID) -> PlayerMatchProfile:
         player_id=player_id,
         team_id=TEAM_ID,
         jersey_number=10,
+        player_name="Preview Player",
         position="AM",
         offensive=OffensiveStats(
             minutes=64.0,
@@ -274,26 +328,56 @@ def fallback_profile(match_id: UUID, player_id: UUID) -> PlayerMatchProfile:
             missed_shots=1,
             shots_inside_penalty_area=2,
             shots_outside_penalty_area=1,
+            offsides=1,
+            freekicks=1,
+            corners=2,
+            throw_ins=3,
         ),
         defensive=DefensiveStats(
             aerial_duels=AttemptSplit(success=3, total=5),
             ground_duels=AttemptSplit(success=4, total=6),
+            blocks=BlockStats(shots=1, crosses=0, passes=2),
+            fouls=FoulStats(committed=1, won=2),
+            interceptions=InterceptionStats(
+                total=3, defensive_third=1, middle_third=2
+            ),
             ball_recoveries=BallRecoveryStats(
                 defensive_third=2,
                 middle_third=3,
                 final_third=1,
             ),
+            ball_lost=BallLostStats(
+                defensive_third=1,
+                middle_third=2,
+                final_third=1,
+            ),
+            yellow_cards=1,
+            ppda=10.1,
         ),
         distribution=DistributionStats(
             passes=AttemptSplit(success=20, total=24),
             progressive_passes=AttemptSplit(success=6, total=8),
             cutbacks=AttemptSplit(success=1, total=2),
+            crosses=AttemptSplit(success=1, total=2),
             pass_locations=PassLocationStats(
                 short=AttemptSplit(success=10, total=12),
                 medium=AttemptSplit(success=7, total=8),
                 long=AttemptSplit(success=3, total=4),
+                into_penalty_area=AttemptSplit(success=2, total=3),
+            ),
+            pass_thirds=PassThirdStats(
+                defensive_third=AttemptSplit(success=4, total=5),
+                middle_third=AttemptSplit(success=11, total=13),
+                final_third=AttemptSplit(success=5, total=6),
+            ),
+            into_final_third=AttemptSplit(success=4, total=6),
+            pass_directions=PassDirectionStats(
+                forward=AttemptSplit(success=10, total=12),
+                sideways=AttemptSplit(success=6, total=8),
+                backward=AttemptSplit(success=4, total=4),
             ),
         ),
+        possession=PossessionStats(time_minutes=7.5, percentage=11.8),
     )
 
 

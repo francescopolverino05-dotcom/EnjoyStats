@@ -43,9 +43,9 @@ def directions_from_distribution(
 ) -> PassDirections:
     """Resolve a direction split for the UI.
 
-    Live AutoData feeds do not store compass tags. When ``explicit`` is omitted,
-    progressive passes stand in for forward, cutbacks for backward, and the
-    remaining attempts are treated as sideways.
+    Prefers tagged :attr:`~data_models.player_stats.DistributionStats.pass_directions`
+    when that split is populated. Otherwise progressive passes stand in for
+    forward, cutbacks for backward, and the remaining attempts are sideways.
 
     Args:
         distribution: Nested passing pillar from :class:`PlayerMatchProfile`.
@@ -54,6 +54,14 @@ def directions_from_distribution(
 
     if explicit is not None:
         return explicit
+    tagged = distribution.pass_directions
+    tagged_total = tagged.forward.total + tagged.sideways.total + tagged.backward.total
+    if tagged_total:
+        return PassDirections(
+            forward=tagged.forward.total,
+            sideways=tagged.sideways.total,
+            backward=tagged.backward.total,
+        )
     forward = distribution.progressive_passes.total
     backward = distribution.cutbacks.total
     sideways = max(distribution.passes.total - forward - backward, 0)

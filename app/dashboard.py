@@ -39,7 +39,7 @@ from config.pitch_config import (
     PENALTY_SPOT_DISTANCE_M,
     PitchDimensions,
 )
-from data_models.player_stats import PlayerMatchProfile
+from data_models.player_stats import AttemptSplit, PlayerMatchProfile
 
 FetchFn = Callable[[str, UUID, UUID], ProfileLoad]
 
@@ -398,33 +398,59 @@ def _pct(value: float) -> str:
     return f"{value:.0%}"
 
 
+def _split_rows(*pairs: tuple[str, AttemptSplit]) -> list[dict[str, object]]:
+    return [
+        {
+            "Stat": label,
+            "Success": split.success,
+            "Total": split.total,
+            "Accuracy": _pct(split.success_rate),
+        }
+        for label, split in pairs
+    ]
+
+
 def render_offensive(profile: PlayerMatchProfile) -> None:
-    """High-level finishing boxes for the offensive pillar."""
+    """Finishing, set pieces, and shot geography."""
 
     st.subheader("Offensive")
-    st.caption("Goals, chance creation, and shot geography.")
+    st.caption("Goals, chance creation, shooting, and restarts.")
     offensive = profile.offensive
+    identity = st.columns(2)
+    identity[0].metric("Minutes played", f"{offensive.minutes:.1f}")
+    identity[1].metric(
+        "Number / name",
+        f"#{profile.jersey_number or '—'} {profile.player_name or profile.position or 'Player'}",
+    )
     top = st.columns(2)
     top[0].metric("Goals", offensive.goals)
     top[1].metric("Assists", offensive.assists)
-    bottom = st.columns(2)
-    bottom[0].metric("Shots on target", offensive.shots_on_target)
-    bottom[1].metric(
+    shots = st.columns(2)
+    shots[0].metric("Total shots", offensive.total_shots)
+    shots[1].metric("Shots on target", offensive.shots_on_target)
+    more = st.columns(2)
+    more[0].metric("Shooting accuracy", _pct(offensive.shot_accuracy))
+    more[1].metric(
         "Inside / outside PA",
         f"{offensive.shots_inside_penalty_area} / {offensive.shots_outside_penalty_area}",
     )
-    st.caption(
-        f"Minutes {offensive.minutes:.1f}  ·  "
-        f"{offensive.total_shots} total shots  ·  "
-        f"accuracy {_pct(offensive.shot_accuracy)}"
-    )
+    rest = st.columns(2)
+    rest[0].metric("Shots blocked", offensive.blocked_shots)
+    rest[1].metric("Shots missed", offensive.missed_shots)
+    set_pieces = st.columns(2)
+    set_pieces[0].metric("Offsides", offensive.offsides)
+    set_pieces[1].metric("Penalty kicks", offensive.penalty_kicks)
+    restarts = st.columns(3)
+    restarts[0].metric("Freekicks", offensive.freekicks)
+    restarts[1].metric("Corners", offensive.corners)
+    restarts[2].metric("Throw-ins", offensive.throw_ins)
 
 
 def render_defensive(profile: PlayerMatchProfile) -> None:
-    """Duel rates and recoveries by tactical third."""
+    """Duels, recoveries, cards, and pressing."""
 
     st.subheader("Defensive")
-    st.caption("Duel success and zonal ball recoveries.")
+    st.caption("Duels, recoveries, turnovers, cards, and pressing intensity.")
     defensive = profile.defensive
     ground = defensive.ground_duels
     aerial = defensive.aerial_duels
@@ -433,13 +459,52 @@ def render_defensive(profile: PlayerMatchProfile) -> None:
     c2.metric("Aerial duel win %", _pct(aerial.success_rate), f"{aerial.success}/{aerial.total}")
     c1.progress(ground.success_rate)
     c2.progress(aerial.success_rate)
-    recoveries = defensive.ball_recoveries
-    st.markdown("**Ball recoveries by tactical third**")
+    cards = st.columns(3)
+    cards[0].metric("Yellow cards", defensive.yellow_cards)
+    cards[1].metric("Red cards", defensive.red_cards)
+    cards[2].metric("Goals against", defensive.goals_against)
+    press = st.columns(2)
+    press[0].metric("PPDA", f"{defensive.ppda:.1f}")
+    press[1].metric(
+        "Interceptions",
+        defensive.interceptions.total,
+        f"{defensive.interceptions.defensive_third}/{defensive.interceptions.middle_third}/{defensive.interceptions.final_third}",
+    )
+    fouls = st.columns(2)
+    fouls[0].metric("Fouls", defensive.fouls.committed)
+    fouls[1].metric("Fouls won", defensive.fouls.won)
+    blocks = defensive.blocks
+    st.markdown("**Blocks**")
     st.dataframe(
         [
-            {"Third": "Defensive", "Recoveries": recoveries.defensive_third},
-            {"Third": "Middle", "Recoveries": recoveries.middle_third},
-            {"Third": "Final", "Recoveries": recoveries.final_third},
+            {"Type": "Shots", "Blocks": blocks.shots},
+            {"Type": "Crosses", "Blocks": blocks.crosses},
+            {"Type": "Passes", "Blocks": blocks.passes},
+            {"Type": "Total", "Blocks": blocks.total},
+        ],
+        hide_index=True,
+        width="stretch",
+    )
+    recoveries = defensive.ball_recoveries
+    lost = defensive.ball_lost
+    st.markdown("**Recoveries and balls lost by third**")
+    st.dataframe(
+        [
+            {
+                "Third": "Defensive",
+                "Recoveries": recoveries.defensive_third,
+                "Ball lost": lost.defensive_third,
+            },
+            {
+                "Third": "Middle",
+                "Recoveries": recoveries.middle_third,
+                "Ball lost": lost.middle_third,
+            },
+            {
+                "Third": "Final",
+                "Recoveries": recoveries.final_third,
+                "Ball lost": lost.final_third,
+            },
         ],
         hide_index=True,
         width="stretch",
@@ -447,29 +512,85 @@ def render_defensive(profile: PlayerMatchProfile) -> None:
 
 
 def render_distribution(profile: PlayerMatchProfile, directions: PassDirections) -> None:
-    """Pass accuracy plus forward / sideways / backward breakdown."""
+    """Pass accuracy, thirds, length, direction, and chance creation."""
 
     st.subheader("Distribution")
-    st.caption("Passing accuracy and direction of travel.")
-    passing = profile.distribution.passes
+    st.caption("Passing by third, length, direction, and destination.")
+    dist = profile.distribution
+    passing = dist.passes
     st.metric(
         "Pass accuracy",
         _pct(passing.success_rate),
         f"{passing.success}/{passing.total} completed",
     )
+    st.markdown("**Passes by tactical third**")
+    st.dataframe(
+        _split_rows(
+            ("Defensive third", dist.pass_thirds.defensive_third),
+            ("Middle third", dist.pass_thirds.middle_third),
+            ("Final third", dist.pass_thirds.final_third),
+            ("Into final third", dist.into_final_third),
+            ("Into PA", dist.pass_locations.into_penalty_area),
+        ),
+        hide_index=True,
+        width="stretch",
+    )
+    st.markdown("**Pass length**")
+    st.dataframe(
+        _split_rows(
+            ("Short", dist.pass_locations.short),
+            ("Medium", dist.pass_locations.medium),
+            ("Long", dist.pass_locations.long),
+        ),
+        hide_index=True,
+        width="stretch",
+    )
     st.markdown("**Direction of distribution**")
     d1, d2, d3 = st.columns(3)
-    d1.metric("Forward", directions.forward)
-    d2.metric("Sideways", directions.sideways)
-    d3.metric("Backward", directions.backward)
+    d1.metric("Forward", f"{dist.pass_directions.forward.success}/{dist.pass_directions.forward.total}" if dist.pass_directions.forward.total else directions.forward)
+    d2.metric("Sideways", f"{dist.pass_directions.sideways.success}/{dist.pass_directions.sideways.total}" if dist.pass_directions.sideways.total else directions.sideways)
+    d3.metric("Backward", f"{dist.pass_directions.backward.success}/{dist.pass_directions.backward.total}" if dist.pass_directions.backward.total else directions.backward)
+    st.markdown("**Chance creation**")
+    st.dataframe(
+        _split_rows(
+            ("Crosses", dist.crosses),
+            ("Progressive passes", dist.progressive_passes),
+            ("Cutbacks", dist.cutbacks),
+        ),
+        hide_index=True,
+        width="stretch",
+    )
+
+
+def render_possession(profile: PlayerMatchProfile) -> None:
+    """Possession time, share, recoveries, and balls lost."""
+
+    st.subheader("Possession")
+    st.caption("On-ball time plus recoveries and turnovers by third.")
+    possession = profile.possession
+    p1, p2 = st.columns(2)
+    p1.metric("Possession time", f"{possession.time_minutes:.1f} min")
+    p2.metric("Possession %", f"{possession.percentage:.1f}%")
+    recoveries = profile.defensive.ball_recoveries
+    lost = profile.defensive.ball_lost
+    st.markdown("**Recoveries / ball lost**")
     st.dataframe(
         [
             {
-                "Direction": row["Direction"],
-                "Passes": row["Passes"],
-                "Share": _pct(float(row["Share"])),
-            }
-            for row in directions.as_rows()
+                "Third": "Defensive",
+                "Recoveries": recoveries.defensive_third,
+                "Ball lost": lost.defensive_third,
+            },
+            {
+                "Third": "Middle",
+                "Recoveries": recoveries.middle_third,
+                "Ball lost": lost.middle_third,
+            },
+            {
+                "Third": "Final",
+                "Recoveries": recoveries.final_third,
+                "Ball lost": lost.final_third,
+            },
         ],
         hide_index=True,
         width="stretch",
@@ -507,10 +628,11 @@ def render_dashboard(load: ProfileLoad) -> None:
     header_l, header_r = st.columns([3, 1])
     with header_l:
         jersey = f"#{profile.jersey_number} " if profile.jersey_number else ""
+        name = profile.player_name or profile.position or "Player"
         st.title("EnjoyStats")
         st.markdown("### Player match dashboard")
         st.write(
-            f"{jersey}{profile.position or 'Player'}  ·  "
+            f"{jersey}{name}  ·  {profile.position or 'Player'}  ·  "
             f"match `{profile.match_id}`  ·  player `{profile.player_id}`"
         )
     with header_r:
@@ -520,13 +642,16 @@ def render_dashboard(load: ProfileLoad) -> None:
             st.warning("Dummy fallback")
         st.caption(load.message)
 
-    offensive_col, defensive_col, distribution_col = st.columns(3)
-    with offensive_col:
+    top_l, top_r = st.columns(2)
+    with top_l:
         render_offensive(profile)
-    with defensive_col:
+    with top_r:
         render_defensive(profile)
-    with distribution_col:
+    bottom_l, bottom_r = st.columns(2)
+    with bottom_l:
         render_distribution(profile, load.directions)
+    with bottom_r:
+        render_possession(profile)
     render_tactical_pitch(load.actions)
 
 

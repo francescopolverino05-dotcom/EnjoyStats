@@ -37,9 +37,14 @@ class EventType(StrEnum):
     FOUL_WON = "foul_won"
     INTERCEPTION = "interception"
     BALL_RECOVERY = "ball_recovery"
+    BALL_LOST = "ball_lost"
     OFFSIDE = "offside"
     FREE_KICK = "free_kick"
     CORNER = "corner"
+    THROW_IN = "throw_in"
+    YELLOW_CARD = "yellow_card"
+    RED_CARD = "red_card"
+    GOAL_CONCEDED = "goal_conceded"
 
 
 class ShotOutcome(StrEnum):
@@ -103,6 +108,7 @@ class MatchEvent(StrictModel):
         is_goal: Whether a shot resulted in a goal.
         is_assist: Whether a pass was credited as an assist.
         is_progressive: Whether a pass is tagged as progressive.
+        is_penalty: Whether a shot was taken from the penalty spot.
         shot_outcome: Shot result, required when ``event_type`` is shot/goal.
         attacking_left_to_right: Team attacking direction for this period.
         recorded_at: UTC timestamp when the tag was received.
@@ -124,6 +130,7 @@ class MatchEvent(StrictModel):
     is_goal: bool = False
     is_assist: bool = False
     is_progressive: bool = False
+    is_penalty: bool = False
     shot_outcome: ShotOutcome | None = None
     attacking_left_to_right: bool = True
     recorded_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))

@@ -26,6 +26,7 @@ from data_models.player_stats import (
     OffensiveStats,
     PlayerMatchProfile,
     PlayerMatchStats,
+    PossessionStats,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -39,6 +40,7 @@ INSERT INTO player_match_stats (
     stats_id,
     team_id,
     jersey_number,
+    player_name,
     position,
     minutes,
     goals,
@@ -52,19 +54,24 @@ INSERT INTO player_match_stats (
     offsides,
     freekicks,
     corners,
+    penalty_kicks,
+    throw_ins,
     defensive,
     distribution,
+    possession,
     collected_at,
     updated_at
 ) VALUES (
-    $1, $2, $3, $4, $5, $6,
-    $7, $8, $9, $10, $11, $12,
-    $13, $14, $15, $16, $17, $18,
-    $19::jsonb, $20::jsonb, $21, NOW()
+    $1, $2, $3, $4, $5, $6, $7,
+    $8, $9, $10, $11, $12, $13,
+    $14, $15, $16, $17, $18, $19,
+    $20, $21,
+    $22::jsonb, $23::jsonb, $24::jsonb, $25, NOW()
 )
 ON CONFLICT (player_id, match_id) DO UPDATE SET
     team_id = EXCLUDED.team_id,
     jersey_number = EXCLUDED.jersey_number,
+    player_name = EXCLUDED.player_name,
     position = EXCLUDED.position,
     minutes = EXCLUDED.minutes,
     goals = EXCLUDED.goals,
@@ -78,8 +85,11 @@ ON CONFLICT (player_id, match_id) DO UPDATE SET
     offsides = EXCLUDED.offsides,
     freekicks = EXCLUDED.freekicks,
     corners = EXCLUDED.corners,
+    penalty_kicks = EXCLUDED.penalty_kicks,
+    throw_ins = EXCLUDED.throw_ins,
     defensive = EXCLUDED.defensive,
     distribution = EXCLUDED.distribution,
+    possession = EXCLUDED.possession,
     collected_at = EXCLUDED.collected_at,
     updated_at = NOW()
 RETURNING stats_id
@@ -98,6 +108,7 @@ SELECT
     stats_id,
     team_id,
     jersey_number,
+    player_name,
     position,
     minutes,
     goals,
@@ -111,8 +122,11 @@ SELECT
     offsides,
     freekicks,
     corners,
+    penalty_kicks,
+    throw_ins,
     defensive,
     distribution,
+    possession,
     collected_at
 FROM player_match_stats
 WHERE player_id = $1 AND match_id = $2
@@ -484,12 +498,14 @@ def _bind_profile_arguments(
     offensive: OffensiveStats = profile.offensive
     defensive_payload = _to_jsonb_payload(profile.defensive)
     distribution_payload = _to_jsonb_payload(profile.distribution)
+    possession_payload = _to_jsonb_payload(profile.possession)
     return (
         profile.player_id,
         match_id,
         profile.stats_id,
         profile.team_id,
         profile.jersey_number,
+        profile.player_name,
         profile.position,
         offensive.minutes,
         offensive.goals,
@@ -503,8 +519,11 @@ def _bind_profile_arguments(
         offensive.offsides,
         offensive.freekicks,
         offensive.corners,
+        offensive.penalty_kicks,
+        offensive.throw_ins,
         _jsonb_param(defensive_payload),
         _jsonb_param(distribution_payload),
+        _jsonb_param(possession_payload),
         profile.collected_at,
     )
 
@@ -539,17 +558,24 @@ def _row_to_profile(row: Mapping[str, Any]) -> PlayerMatchProfile:
         offsides=int(row["offsides"]),
         freekicks=int(row["freekicks"]),
         corners=int(row["corners"]),
+        penalty_kicks=int(row.get("penalty_kicks") or 0),
+        throw_ins=int(row.get("throw_ins") or 0),
     )
+    possession_raw = row.get("possession") or {}
     return PlayerMatchProfile(
         stats_id=row["stats_id"],
         match_id=row["match_id"],
         player_id=row["player_id"],
         team_id=row["team_id"],
         jersey_number=row["jersey_number"],
+        player_name=str(row.get("player_name") or ""),
         position=row["position"],
         offensive=offensive,
         defensive=DefensiveStats.model_validate(_decode_jsonb(row["defensive"])),
         distribution=DistributionStats.model_validate(_decode_jsonb(row["distribution"])),
+        possession=PossessionStats.model_validate(
+            _decode_jsonb(possession_raw) if possession_raw else {}
+        ),
         collected_at=row["collected_at"],
     )
 

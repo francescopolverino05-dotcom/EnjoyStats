@@ -44,7 +44,7 @@ def _without_computed_fields(value: Any, *, parent_key: str | None = None) -> An
         for key, item in value.items():
             if key in computed:
                 continue
-            if key == "total" and parent_key in {"blocks", "ball_recoveries"}:
+            if key == "total" and parent_key in {"blocks", "ball_recoveries", "ball_lost"}:
                 continue
             cleaned[key] = _without_computed_fields(item, parent_key=key)
         return cleaned

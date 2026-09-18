@@ -14,6 +14,7 @@ from data_models.player_stats import (
     OffensiveStats,
     PassLocationStats,
     PlayerMatchStats,
+    PossessionStats,
 )
 
 
@@ -90,6 +91,9 @@ def test_defensive_nested_duels_and_zonal_recoveries() -> None:
         .record_interception("middle")
         .record_recovery("final")
         .record_recovery("defensive")
+        .record_ball_lost("middle")
+        .record_yellow_card()
+        .record_goal_against()
     )
     assert defensive.aerial_duels.success == 1
     assert defensive.aerial_duels.total == 1
@@ -103,6 +107,9 @@ def test_defensive_nested_duels_and_zonal_recoveries() -> None:
     assert defensive.ball_recoveries.final_third == 1
     assert defensive.ball_recoveries.defensive_third == 1
     assert defensive.ball_recoveries.total == 2
+    assert defensive.ball_lost.middle_third == 1
+    assert defensive.yellow_cards == 1
+    assert defensive.goals_against == 1
 
 
 def test_interceptions_require_zonal_sum_when_present() -> None:
@@ -127,6 +134,30 @@ def test_distribution_length_bands_reconcile() -> None:
     assert stats.pass_locations.medium.total == 1
     assert stats.pass_locations.long.total == 1
     assert stats.pass_locations.into_penalty_area.success == 1
+
+
+def test_distribution_thirds_and_directions_reconcile() -> None:
+    stats = (
+        DistributionStats()
+        .record_pass(
+            succeeded=True,
+            band="short",
+            start_third="middle",
+            direction="forward",
+            into_final_third=True,
+        )
+        .record_pass(
+            succeeded=False,
+            band="medium",
+            start_third="defensive",
+            direction="sideways",
+        )
+    )
+    assert stats.pass_thirds.middle_third.success == 1
+    assert stats.pass_thirds.defensive_third.total == 1
+    assert stats.into_final_third.success == 1
+    assert stats.pass_directions.forward.success == 1
+    assert stats.pass_directions.sideways.failed == 1
 
 
 def test_distribution_rejects_crosses_above_passes() -> None:
@@ -158,6 +189,8 @@ def test_player_match_stats_three_pillars() -> None:
     assert row.offensive.minutes == 12.0
     assert row.defensive.aerial_duels.total == 0
     assert row.distribution.passes.total == 0
+    assert row.possession.percentage == 0.0
+    assert row.player_name == ""
     updated = row.replace_pillars(offensive=row.offensive.record_assist())
     assert updated.offensive.assists == 1
     assert updated.stats_id == row.stats_id
@@ -166,3 +199,14 @@ def test_player_match_stats_three_pillars() -> None:
 def test_unknown_fields_are_rejected() -> None:
     with pytest.raises(ValidationError):
         OffensiveStats(xg=0.4)  # type: ignore[call-arg]
+
+
+def test_possession_and_penalty_kick_recording() -> None:
+    stats = OffensiveStats().record_shot(
+        inside_penalty_area=True, is_goal=True, is_penalty=True
+    )
+    assert stats.penalty_kicks == 1
+    assert stats.goals == 1
+    possession = PossessionStats(time_minutes=12.34, percentage=18.88)
+    assert possession.time_minutes == 12.3
+    assert possession.percentage == 18.9

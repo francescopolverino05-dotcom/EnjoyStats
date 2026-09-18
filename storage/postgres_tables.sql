@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS player_match_stats (
     team_id                         UUID NOT NULL,
     jersey_number                   SMALLINT
                                     CHECK (jersey_number IS NULL OR jersey_number BETWEEN 1 AND 99),
+    player_name                     TEXT NOT NULL DEFAULT '',
     position                        TEXT NOT NULL DEFAULT '',
 
     -- Flattened OffensiveStats (leaderboard / ranking columns)
@@ -54,12 +55,16 @@ CREATE TABLE IF NOT EXISTS player_match_stats (
     offsides                        INTEGER NOT NULL DEFAULT 0 CHECK (offsides >= 0),
     freekicks                       INTEGER NOT NULL DEFAULT 0 CHECK (freekicks >= 0),
     corners                         INTEGER NOT NULL DEFAULT 0 CHECK (corners >= 0),
+    penalty_kicks                   INTEGER NOT NULL DEFAULT 0 CHECK (penalty_kicks >= 0),
+    throw_ins                       INTEGER NOT NULL DEFAULT 0 CHECK (throw_ins >= 0),
 
-    -- Nested DefensiveStats / DistributionStats as JSONB documents
+    -- Nested DefensiveStats / DistributionStats / PossessionStats as JSONB
     defensive                       JSONB NOT NULL DEFAULT '{}'::jsonb
                                     CHECK (jsonb_typeof(defensive) = 'object'),
     distribution                    JSONB NOT NULL DEFAULT '{}'::jsonb
                                     CHECK (jsonb_typeof(distribution) = 'object'),
+    possession                      JSONB NOT NULL DEFAULT '{}'::jsonb
+                                    CHECK (jsonb_typeof(possession) = 'object'),
 
     collected_at                    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at                      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -74,6 +79,9 @@ CREATE TABLE IF NOT EXISTS player_match_stats (
     ),
     CONSTRAINT player_match_stats_goals_subset_chk CHECK (
         goals <= shots_on_target
+    ),
+    CONSTRAINT player_match_stats_penalties_subset_chk CHECK (
+        penalty_kicks <= total_shots
     )
 );
 
@@ -83,6 +91,9 @@ CREATE INDEX IF NOT EXISTS player_match_stats_defensive_gin_idx
 
 CREATE INDEX IF NOT EXISTS player_match_stats_distribution_gin_idx
     ON player_match_stats USING GIN (distribution);
+
+CREATE INDEX IF NOT EXISTS player_match_stats_possession_gin_idx
+    ON player_match_stats USING GIN (possession);
 
 -- B-tree helpers for flattened offensive leaderboards.
 CREATE INDEX IF NOT EXISTS player_match_stats_match_goals_idx
@@ -96,3 +107,9 @@ CREATE INDEX IF NOT EXISTS player_match_stats_match_shots_idx
 
 CREATE INDEX IF NOT EXISTS player_match_stats_team_id_idx
     ON player_match_stats (team_id, match_id);
+
+-- Idempotent column adds for volumes created before the expanded spec.
+ALTER TABLE player_match_stats ADD COLUMN IF NOT EXISTS player_name TEXT NOT NULL DEFAULT '';
+ALTER TABLE player_match_stats ADD COLUMN IF NOT EXISTS penalty_kicks INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE player_match_stats ADD COLUMN IF NOT EXISTS throw_ins INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE player_match_stats ADD COLUMN IF NOT EXISTS possession JSONB NOT NULL DEFAULT '{}'::jsonb;

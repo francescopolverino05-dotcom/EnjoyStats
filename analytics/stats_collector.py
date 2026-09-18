@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from config.pitch_config import PenaltyBox
+from config.pitch_config import PenaltyBox, PitchThird
 from data_models.events import EventType, MatchEvent, PassLengthBand, ShotOutcome, TaggedMatchEvent
 from data_models.player_stats import DistributionStats, PlayerMatchStats
 
@@ -73,6 +73,7 @@ class PlayerStatsCollector:
                 blocked=event.shot_outcome is ShotOutcome.BLOCKED,
                 missed=event.shot_outcome is ShotOutcome.MISSED,
                 is_goal=event.is_goal or event.event_type is EventType.GOAL,
+                is_penalty=event.is_penalty,
             )
         elif event.event_type is EventType.ASSIST:
             offensive = offensive.record_assist()
@@ -85,6 +86,10 @@ class PlayerStatsCollector:
                 distribution = self._record_pass(distribution, event)
         elif event.event_type is EventType.CORNER:
             offensive = offensive.record_corner()
+            if event.end_location is not None:
+                distribution = self._record_pass(distribution, event)
+        elif event.event_type is EventType.THROW_IN:
+            offensive = offensive.record_throw_in()
             if event.end_location is not None:
                 distribution = self._record_pass(distribution, event)
         elif event.event_type in {EventType.PASS, EventType.CROSS, EventType.CUTBACK}:
@@ -107,6 +112,14 @@ class PlayerStatsCollector:
             defensive = defensive.record_interception(third)
         elif event.event_type is EventType.BALL_RECOVERY:
             defensive = defensive.record_recovery(third)
+        elif event.event_type is EventType.BALL_LOST:
+            defensive = defensive.record_ball_lost(third)
+        elif event.event_type is EventType.YELLOW_CARD:
+            defensive = defensive.record_yellow_card()
+        elif event.event_type is EventType.RED_CARD:
+            defensive = defensive.record_red_card()
+        elif event.event_type is EventType.GOAL_CONCEDED:
+            defensive = defensive.record_goal_against()
 
         clock_minutes = float(event.minute) + (event.second / 60.0)
         if clock_minutes > offensive.minutes:
@@ -128,6 +141,20 @@ class PlayerStatsCollector:
         """Apply a pass-like event onto distribution metrics."""
 
         band = event.pass_band.value if event.pass_band is not None else PassLengthBand.SHORT.value
+        start_third = event.start_third.value
+        into_final = False
+        direction: str | None = None
+        if event.end_location is not None:
+            into_final = (
+                event.start_third is not PitchThird.FINAL
+                and event.end_location.third is PitchThird.FINAL
+            )
+            direction = _pass_direction(
+                event.start_location.x,
+                event.start_location.y,
+                event.end_location.x,
+                event.end_location.y,
+            )
         return distribution.record_pass(
             succeeded=event.successful or is_assist,
             band=band,
@@ -135,7 +162,20 @@ class PlayerStatsCollector:
             is_cross=event.event_type is EventType.CROSS,
             is_cutback=event.event_type is EventType.CUTBACK,
             is_progressive=event.is_progressive,
+            start_third=start_third,
+            into_final_third=into_final,
+            direction=direction,
         )
+
+
+def _pass_direction(start_x: float, start_y: float, end_x: float, end_y: float) -> str:
+    """Classify a pass as forward, sideways, or backward on the attacking frame."""
+
+    dx = end_x - start_x
+    dy = end_y - start_y
+    if abs(dx) >= abs(dy):
+        return "forward" if dx >= 0 else "backward"
+    return "sideways"
 
 
 def new_collector(
@@ -145,6 +185,7 @@ def new_collector(
     team_id: UUID,
     jersey_number: int | None = None,
     position: str = "",
+    player_name: str = "",
 ) -> PlayerStatsCollector:
     """Construct a zeroed collector for a player at kick-off.
 
@@ -154,6 +195,7 @@ def new_collector(
         team_id: Team the player represents in this match.
         jersey_number: Shirt number, if known.
         position: Primary position code (e.g. ``CM``).
+        player_name: Display name used on the dashboard.
     """
 
     return PlayerStatsCollector(
@@ -162,6 +204,7 @@ def new_collector(
             player_id=player_id,
             team_id=team_id,
             jersey_number=jersey_number,
+            player_name=player_name,
             position=position,
         )
     )

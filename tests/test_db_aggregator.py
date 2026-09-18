@@ -148,10 +148,15 @@ def test_schema_defines_hybrid_tables_and_gin_indexes() -> None:
         "freekicks",
         "corners",
         "minutes",
+        "player_name",
+        "penalty_kicks",
+        "throw_ins",
     ):
         assert column in joined
     assert "defensive                       jsonb" in joined
     assert "distribution                    jsonb" in joined
+    assert "possession                      jsonb" in joined
+    assert "using gin (possession)" in joined
     assert "on conflict (player_id, match_id) do update set" in UPSERT_PLAYER_PROFILE_SQL.lower()
     assert len(statements) >= 8
 
@@ -190,12 +195,13 @@ async def test_upsert_player_profile_maps_pillars_and_conflict_target() -> None:
     assert upsert_sql == UPSERT_PLAYER_PROFILE_SQL
     assert args[0] == profile.player_id
     assert args[1] == match_id
-    assert args[6] == 67.5
-    assert args[7] == 1
+    assert args[7] == 67.5
     assert args[8] == 1
-    assert json.loads(args[18])["aerial_duels"]["success"] == 2
-    assert json.loads(args[19])["passes"]["total"] == 22
-    assert "success_rate" not in args[18]
+    assert args[9] == 1
+    assert json.loads(args[21])["aerial_duels"]["success"] == 2
+    assert json.loads(args[22])["passes"]["total"] == 22
+    assert "success_rate" not in args[21]
+    assert json.loads(args[23])["percentage"] == 0.0
 
 
 @pytest.mark.asyncio
@@ -244,22 +250,26 @@ async def test_fetch_player_profile_round_trip_mapping() -> None:
         "stats_id": args[2],
         "team_id": args[3],
         "jersey_number": args[4],
-        "position": args[5],
-        "minutes": args[6],
-        "goals": args[7],
-        "assists": args[8],
-        "total_shots": args[9],
-        "shots_on_target": args[10],
-        "blocked_shots": args[11],
-        "missed_shots": args[12],
-        "shots_inside_penalty_area": args[13],
-        "shots_outside_penalty_area": args[14],
-        "offsides": args[15],
-        "freekicks": args[16],
-        "corners": args[17],
-        "defensive": args[18],
-        "distribution": args[19],
-        "collected_at": args[20],
+        "player_name": args[5],
+        "position": args[6],
+        "minutes": args[7],
+        "goals": args[8],
+        "assists": args[9],
+        "total_shots": args[10],
+        "shots_on_target": args[11],
+        "blocked_shots": args[12],
+        "missed_shots": args[13],
+        "shots_inside_penalty_area": args[14],
+        "shots_outside_penalty_area": args[15],
+        "offsides": args[16],
+        "freekicks": args[17],
+        "corners": args[18],
+        "penalty_kicks": args[19],
+        "throw_ins": args[20],
+        "defensive": args[21],
+        "distribution": args[22],
+        "possession": args[23],
+        "collected_at": args[24],
     }
     aggregator = DatabaseAggregator("postgresql://unused", pool=_FakePool(connection))
     loaded = await aggregator.fetch_player_profile(profile.player_id, profile.match_id)
@@ -268,6 +278,8 @@ async def test_fetch_player_profile_round_trip_mapping() -> None:
     assert loaded.offensive.goals == 1
     assert loaded.defensive.aerial_duels.total == 3
     assert loaded.distribution.passes.success == 18
+    assert loaded.offensive.penalty_kicks == 0
+    assert loaded.possession.percentage == 0.0
     assert FETCH_PLAYER_PROFILE_SQL in connection.statements[0][0]
 
 

@@ -19,7 +19,7 @@ from app.dummy_data import (
     fallback_profile,
 )
 from app.metrics import PassDirections, directions_from_distribution
-from data_models.player_stats import AttemptSplit, DistributionStats, PassLocationStats
+from data_models.player_stats import AttemptSplit, DistributionStats, PassDirectionStats, PassLocationStats
 
 
 def test_catalog_covers_demo_and_showcase_players() -> None:
@@ -60,11 +60,16 @@ def test_direction_split_uses_explicit_or_derives_from_distribution() -> None:
                 medium=AttemptSplit(success=3, total=4),
                 long=AttemptSplit(success=1, total=1),
             ),
+            pass_directions=PassDirectionStats(
+                forward=AttemptSplit(success=5, total=6),
+                sideways=AttemptSplit(success=2, total=3),
+                backward=AttemptSplit(success=1, total=1),
+            ),
         )
     )
-    assert derived.forward == 4
-    assert derived.backward == 2
-    assert derived.sideways == 4
+    assert derived.forward == 6
+    assert derived.sideways == 3
+    assert derived.backward == 1
     assert derived.as_rows()[0]["Direction"] == "Forward"
 
 
@@ -112,6 +117,7 @@ def test_dashboard_renders_fallback_without_network() -> None:
     assert "Offensive" in subheaders
     assert "Defensive" in subheaders
     assert "Distribution" in subheaders
+    assert "Possession" in subheaders
     assert "Tactical pitch" in subheaders
 
 

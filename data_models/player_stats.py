@@ -1,14 +1,14 @@
 """Pydantic schemas for football player statistics.
 
-The collection layer splits every player-match row into the three pillars used
-by Opta, Wyscout, and StatsBomb-derived pipelines:
+The collection layer splits every player-match row into four pillars:
 
 * :class:`OffensiveStats` — finishing and chance creation, stored flat so the
   most queried shooting columns can be indexed without JSON unpacking.
-* :class:`DefensiveStats` — nested duel, block, foul, interception, and zonal
-  recovery structures.
-* :class:`DistributionStats` — nested success/total ratios for passing, crosses,
-  cutbacks, progressive distribution, and pass locations.
+* :class:`DefensiveStats` — nested duel, block, foul, card, interception,
+  recovery, and ball-lost structures.
+* :class:`DistributionStats` — nested success/total ratios for passing by
+  length, third, direction, and destination.
+* :class:`PossessionStats` — on-ball time and possession share.
 
 All counts are non-negative integers. Ratio helpers are derived
 :attr:`computed_field` values and are never persisted independently of the
@@ -118,6 +118,8 @@ class OffensiveStats(StrictModel):
         offsides: Times the player was judged offside.
         freekicks: Set-piece free kicks taken by the player.
         corners: Corner kicks taken by the player.
+        penalty_kicks: Penalty kicks taken (also counted in ``total_shots``).
+        throw_ins: Throw-ins taken.
     """
 
     minutes: float = Field(
@@ -141,6 +143,8 @@ class OffensiveStats(StrictModel):
     offsides: int = Field(default=0, ge=0, description="Offside judgements against the player.")
     freekicks: int = Field(default=0, ge=0, description="Free kicks taken.")
     corners: int = Field(default=0, ge=0, description="Corner kicks taken.")
+    penalty_kicks: int = Field(default=0, ge=0, description="Penalty kicks taken.")
+    throw_ins: int = Field(default=0, ge=0, description="Throw-ins taken.")
 
     @field_validator("minutes")
     @classmethod
@@ -168,6 +172,11 @@ class OffensiveStats(StrictModel):
         if self.goals > self.shots_on_target:
             raise ValueError(
                 f"goals ({self.goals}) cannot exceed shots_on_target ({self.shots_on_target})."
+            )
+        if self.penalty_kicks > self.total_shots:
+            raise ValueError(
+                f"penalty_kicks ({self.penalty_kicks}) cannot exceed total_shots "
+                f"({self.total_shots})."
             )
         return self
 
@@ -197,6 +206,7 @@ class OffensiveStats(StrictModel):
         blocked: bool = False,
         missed: bool | None = None,
         is_goal: bool = False,
+        is_penalty: bool = False,
     ) -> OffensiveStats:
         """Return a copy with one shot (and optional goal) applied.
 
@@ -209,6 +219,7 @@ class OffensiveStats(StrictModel):
             blocked: Shot was blocked by an outfield defender.
             missed: Shot missed the target and was not blocked. Inferred when omitted.
             is_goal: Whether the shot resulted in a goal for the shooting team.
+            is_penalty: Whether the attempt was a penalty kick.
 
         Returns:
             A new :class:`OffensiveStats` instance with reconciled shot counters.
@@ -239,6 +250,7 @@ class OffensiveStats(StrictModel):
                 + int(inside_penalty_area),
                 "shots_outside_penalty_area": self.shots_outside_penalty_area
                 + int(not inside_penalty_area),
+                "penalty_kicks": self.penalty_kicks + int(is_penalty),
             }
         )
 
@@ -261,6 +273,11 @@ class OffensiveStats(StrictModel):
         """Return a copy with one additional corner kick taken."""
 
         return self.model_copy(update={"corners": self.corners + 1})
+
+    def record_throw_in(self) -> OffensiveStats:
+        """Return a copy with one additional throw-in taken."""
+
+        return self.model_copy(update={"throw_ins": self.throw_ins + 1})
 
 
 class BlockStats(StrictModel):
@@ -412,6 +429,10 @@ class BallRecoveryStats(StrictModel):
         return self.model_copy(update={field_name: getattr(self, field_name) + 1})
 
 
+class BallLostStats(BallRecoveryStats):
+    """Turnovers / balls lost split by tactical third."""
+
+
 class DefensiveStats(StrictModel):
     """Nested defensive actions for a player in a single match.
 
@@ -422,6 +443,11 @@ class DefensiveStats(StrictModel):
         fouls: Fouls conceded and fouls won.
         interceptions: Interceptions with optional zonal split.
         ball_recoveries: Recoveries split by defensive, middle, and final third.
+        ball_lost: Turnovers split by defensive, middle, and final third.
+        yellow_cards: Yellow cards received.
+        red_cards: Red cards received (straight or second yellow).
+        goals_against: Goals conceded while the player was on the pitch.
+        ppda: Passes allowed per defensive action (pressing intensity).
     """
 
     aerial_duels: AttemptSplit = Field(default_factory=AttemptSplit)
@@ -430,6 +456,22 @@ class DefensiveStats(StrictModel):
     fouls: FoulStats = Field(default_factory=FoulStats)
     interceptions: InterceptionStats = Field(default_factory=InterceptionStats)
     ball_recoveries: BallRecoveryStats = Field(default_factory=BallRecoveryStats)
+    ball_lost: BallLostStats = Field(default_factory=BallLostStats)
+    yellow_cards: int = Field(default=0, ge=0, description="Yellow cards received.")
+    red_cards: int = Field(default=0, ge=0, description="Red cards received.")
+    goals_against: int = Field(default=0, ge=0, description="Goals conceded while on the pitch.")
+    ppda: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Passes per defensive action (pressing intensity).",
+    )
+
+    @field_validator("ppda")
+    @classmethod
+    def ppda_two_decimals(cls, value: float) -> float:
+        """Store PPDA at two decimal places."""
+
+        return round(value, 2)
 
     def record_aerial_duel(self, *, succeeded: bool) -> DefensiveStats:
         """Return a copy with one aerial duel applied."""
@@ -461,6 +503,26 @@ class DefensiveStats(StrictModel):
         """Return a copy with one ball recovery in ``third``."""
 
         return self.model_copy(update={"ball_recoveries": self.ball_recoveries.record(third)})
+
+    def record_ball_lost(self, third: str) -> DefensiveStats:
+        """Return a copy with one turnover in ``third``."""
+
+        return self.model_copy(update={"ball_lost": self.ball_lost.record(third)})
+
+    def record_yellow_card(self) -> DefensiveStats:
+        """Return a copy with one additional yellow card."""
+
+        return self.model_copy(update={"yellow_cards": self.yellow_cards + 1})
+
+    def record_red_card(self) -> DefensiveStats:
+        """Return a copy with one additional red card."""
+
+        return self.model_copy(update={"red_cards": self.red_cards + 1})
+
+    def record_goal_against(self) -> DefensiveStats:
+        """Return a copy with one additional goal conceded."""
+
+        return self.model_copy(update={"goals_against": self.goals_against + 1})
 
 
 class PassLocationStats(StrictModel):
@@ -508,6 +570,45 @@ class PassLocationStats(StrictModel):
         return self.model_copy(update=updates)
 
 
+class PassThirdStats(StrictModel):
+    """Pass attempts grouped by the tactical third they were played from."""
+
+    defensive_third: AttemptSplit = Field(default_factory=AttemptSplit)
+    middle_third: AttemptSplit = Field(default_factory=AttemptSplit)
+    final_third: AttemptSplit = Field(default_factory=AttemptSplit)
+
+    def record(self, third: str, *, succeeded: bool) -> PassThirdStats:
+        """Return a copy with one pass from ``third``."""
+
+        field_name = {
+            "defensive": "defensive_third",
+            "middle": "middle_third",
+            "final": "final_third",
+        }.get(third)
+        if field_name is None:
+            raise ValueError(f"Unknown tactical third: {third!r}.")
+        return self.model_copy(
+            update={field_name: getattr(self, field_name).add(succeeded=succeeded)}
+        )
+
+
+class PassDirectionStats(StrictModel):
+    """Pass attempts grouped by direction of travel on the attacking frame."""
+
+    forward: AttemptSplit = Field(default_factory=AttemptSplit)
+    sideways: AttemptSplit = Field(default_factory=AttemptSplit)
+    backward: AttemptSplit = Field(default_factory=AttemptSplit)
+
+    def record(self, direction: str, *, succeeded: bool) -> PassDirectionStats:
+        """Return a copy with one pass of ``direction``."""
+
+        if direction not in {"forward", "sideways", "backward"}:
+            raise ValueError(f"Unknown pass direction: {direction!r}.")
+        return self.model_copy(
+            update={direction: getattr(self, direction).add(succeeded=succeeded)}
+        )
+
+
 class DistributionStats(StrictModel):
     """Nested success/total passing metrics for a player in a single match.
 
@@ -522,6 +623,9 @@ class DistributionStats(StrictModel):
         cutbacks: Low, backward or square deliveries from the byline.
         progressive_passes: Passes that move the ball significantly toward goal.
         pass_locations: Length-band and penalty-area destination splits.
+        pass_thirds: Passes played from each tactical third.
+        into_final_third: Passes that enter the final third.
+        pass_directions: Forward / sideways / backward splits.
     """
 
     passes: AttemptSplit = Field(default_factory=AttemptSplit)
@@ -529,6 +633,9 @@ class DistributionStats(StrictModel):
     cutbacks: AttemptSplit = Field(default_factory=AttemptSplit)
     progressive_passes: AttemptSplit = Field(default_factory=AttemptSplit)
     pass_locations: PassLocationStats = Field(default_factory=PassLocationStats)
+    pass_thirds: PassThirdStats = Field(default_factory=PassThirdStats)
+    into_final_third: AttemptSplit = Field(default_factory=AttemptSplit)
+    pass_directions: PassDirectionStats = Field(default_factory=PassDirectionStats)
 
     @model_validator(mode="after")
     def length_bands_must_match_headline_passes(self) -> Self:
@@ -558,7 +665,42 @@ class DistributionStats(StrictModel):
             raise ValueError("progressive_passes.total cannot exceed passes.total.")
         if self.pass_locations.into_penalty_area.total > self.passes.total:
             raise ValueError("passes into the penalty area cannot exceed passes.total.")
+        if self.into_final_third.total > self.passes.total:
+            raise ValueError("passes into the final third cannot exceed passes.total.")
+        self._require_split_matches(
+            (
+                self.pass_thirds.defensive_third,
+                self.pass_thirds.middle_third,
+                self.pass_thirds.final_third,
+            ),
+            label="third split",
+        )
+        self._require_split_matches(
+            (
+                self.pass_directions.forward,
+                self.pass_directions.sideways,
+                self.pass_directions.backward,
+            ),
+            label="direction split",
+        )
         return self
+
+    def _require_split_matches(self, parts: tuple[AttemptSplit, ...], *, label: str) -> None:
+        """When a split is populated, require it to reconcile with ``passes``."""
+
+        split_total = sum(part.total for part in parts)
+        split_success = sum(part.success for part in parts)
+        if split_total or split_success:
+            if split_total != self.passes.total:
+                raise ValueError(
+                    f"{label} totals must equal passes.total when provided "
+                    f"({split_total} != {self.passes.total})."
+                )
+            if split_success != self.passes.success:
+                raise ValueError(
+                    f"{label} successes must equal passes.success when provided "
+                    f"({split_success} != {self.passes.success})."
+                )
 
     def record_pass(
         self,
@@ -569,6 +711,9 @@ class DistributionStats(StrictModel):
         is_cross: bool = False,
         is_cutback: bool = False,
         is_progressive: bool = False,
+        start_third: str | None = None,
+        into_final_third: bool = False,
+        direction: str | None = None,
     ) -> DistributionStats:
         """Return a copy with one pass applied to headline and location splits.
 
@@ -579,25 +724,67 @@ class DistributionStats(StrictModel):
             is_cross: Whether the pass is also tagged as a cross.
             is_cutback: Whether the pass is also tagged as a cutback.
             is_progressive: Whether the pass is tagged as progressive.
+            start_third: ``\"defensive\"``, ``\"middle\"``, or ``\"final\"`` when known.
+            into_final_third: Whether the pass entered the final third.
+            direction: ``\"forward\"``, ``\"sideways\"``, or ``\"backward\"`` when known.
         """
 
-        return self.model_copy(
-            update={
-                "passes": self.passes.add(succeeded=succeeded),
-                "crosses": self.crosses.add(succeeded=succeeded) if is_cross else self.crosses,
-                "cutbacks": self.cutbacks.add(succeeded=succeeded) if is_cutback else self.cutbacks,
-                "progressive_passes": (
-                    self.progressive_passes.add(succeeded=succeeded)
-                    if is_progressive
-                    else self.progressive_passes
-                ),
-                "pass_locations": self.pass_locations.record(
-                    band=band,
-                    succeeded=succeeded,
-                    into_penalty_area=into_penalty_area,
-                ),
-            }
-        )
+        updates: dict[str, object] = {
+            "passes": self.passes.add(succeeded=succeeded),
+            "crosses": self.crosses.add(succeeded=succeeded) if is_cross else self.crosses,
+            "cutbacks": self.cutbacks.add(succeeded=succeeded) if is_cutback else self.cutbacks,
+            "progressive_passes": (
+                self.progressive_passes.add(succeeded=succeeded)
+                if is_progressive
+                else self.progressive_passes
+            ),
+            "pass_locations": self.pass_locations.record(
+                band=band,
+                succeeded=succeeded,
+                into_penalty_area=into_penalty_area,
+            ),
+        }
+        if start_third is not None:
+            updates["pass_thirds"] = self.pass_thirds.record(
+                start_third, succeeded=succeeded
+            )
+        if into_final_third:
+            updates["into_final_third"] = self.into_final_third.add(succeeded=succeeded)
+        if direction is not None:
+            updates["pass_directions"] = self.pass_directions.record(
+                direction, succeeded=succeeded
+            )
+        return self.model_copy(update=updates)
+
+
+class PossessionStats(StrictModel):
+    """On-ball time and share of possession for a player in a single match.
+
+    Attributes:
+        time_minutes: Minutes the player (or their team while they played)
+            spent in possession.
+        percentage: Possession share in ``[0, 100]``.
+    """
+
+    time_minutes: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=150.0,
+        description="Minutes in possession.",
+    )
+    percentage: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=100.0,
+        description="Possession share as a percentage.",
+    )
+
+    @field_validator("time_minutes", "percentage")
+    @classmethod
+    def one_decimal(cls, value: float) -> float:
+        """Store possession clocks at one decimal place."""
+
+        return round(value, 1)
 
 
 class PlayerMatchStats(StrictModel):
@@ -609,10 +796,12 @@ class PlayerMatchStats(StrictModel):
         player_id: Player the row belongs to.
         team_id: Team the player represented in the match.
         jersey_number: Shirt number worn in the match, if known.
+        player_name: Display name used on the dashboard.
         position: Primary position code (e.g. ``CB``, ``CM``, ``ST``).
         offensive: Flattened attacking metrics.
         defensive: Nested defensive metrics.
         distribution: Nested passing metrics.
+        possession: On-ball time and possession share.
         collected_at: UTC timestamp when the row was last written.
     """
 
@@ -621,10 +810,12 @@ class PlayerMatchStats(StrictModel):
     player_id: UUID
     team_id: UUID
     jersey_number: int | None = Field(default=None, ge=1, le=99)
+    player_name: str = Field(default="", max_length=80, description="Player display name.")
     position: str = Field(default="", max_length=8, description="Primary position code.")
     offensive: OffensiveStats = Field(default_factory=OffensiveStats)
     defensive: DefensiveStats = Field(default_factory=DefensiveStats)
     distribution: DistributionStats = Field(default_factory=DistributionStats)
+    possession: PossessionStats = Field(default_factory=PossessionStats)
     collected_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @field_validator("position")
@@ -640,6 +831,7 @@ class PlayerMatchStats(StrictModel):
         offensive: OffensiveStats | None = None,
         defensive: DefensiveStats | None = None,
         distribution: DistributionStats | None = None,
+        possession: PossessionStats | None = None,
     ) -> PlayerMatchStats:
         """Return a copy with any supplied pillars replaced and timestamp refreshed.
 
@@ -647,6 +839,7 @@ class PlayerMatchStats(StrictModel):
             offensive: Replacement attacking block, if any.
             defensive: Replacement defensive block, if any.
             distribution: Replacement passing block, if any.
+            possession: Replacement possession block, if any.
         """
 
         return self.model_copy(
@@ -654,6 +847,7 @@ class PlayerMatchStats(StrictModel):
                 "offensive": offensive if offensive is not None else self.offensive,
                 "defensive": defensive if defensive is not None else self.defensive,
                 "distribution": distribution if distribution is not None else self.distribution,
+                "possession": possession if possession is not None else self.possession,
                 "collected_at": datetime.now(timezone.utc),
             }
         )
@@ -687,9 +881,11 @@ class PlayerMatchProfile(PlayerMatchStats):
             player_id=stats.player_id,
             team_id=stats.team_id,
             jersey_number=stats.jersey_number,
+            player_name=stats.player_name,
             position=stats.position,
             offensive=stats.offensive,
             defensive=stats.defensive,
             distribution=stats.distribution,
+            possession=stats.possession,
             collected_at=stats.collected_at,
         )
