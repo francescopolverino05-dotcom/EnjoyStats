@@ -240,9 +240,14 @@ def parse_and_collect(raw: object) -> MatchRundown:
 
 
 def rundown_to_json(rundown: MatchRundown) -> dict[str, Any]:
-    """Serialize a rundown for Streamlit session state."""
+    """Serialize a rundown for Streamlit session state.
 
-    return rundown.model_dump(mode="json")
+    Computed fields (``success_rate``, ``shot_accuracy``, ``total`` on nested
+    splits) are omitted so StrictModel rehydration does not fail with
+    ``extra="forbid"``.
+    """
+
+    return rundown.model_dump(mode="json", exclude_computed_fields=True)
 
 
 def rundown_from_mapping(payload: Mapping[str, Any]) -> MatchRundown:

@@ -7,7 +7,13 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
-from analytics.game_ingest import collect_game, parse_and_collect, parse_game_payload
+from analytics.game_ingest import (
+    collect_game,
+    parse_and_collect,
+    parse_game_payload,
+    rundown_from_mapping,
+    rundown_to_json,
+)
 from analytics.sample_game import PLAYMAKER_ID, STRIKER_ID, sample_game_payload
 from api.main import create_app
 from app.ingest import actions_from_events, collect_sample_match, load_from_rundown
@@ -55,6 +61,9 @@ def test_sample_match_rundown_covers_four_pillars() -> None:
     assert load.profile.offensive.goals == 1
     assert any(action.is_goal for action in load.actions)
     assert actions_from_events(rundown.events, PLAYMAKER_ID)
+    restored = rundown_from_mapping(rundown_to_json(rundown))
+    assert restored.summary.goals == rundown.summary.goals
+    assert restored.players[0].player_id == rundown.players[0].player_id
 
 
 def test_parse_rejects_empty_and_mixed_matches() -> None:
