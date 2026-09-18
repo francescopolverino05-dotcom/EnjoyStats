@@ -1,6 +1,14 @@
 """Pydantic schemas for football event tagging and player statistics."""
 
 from data_models.events import EventType, MatchEvent, TaggedMatchEvent
+from data_models.video_sync import (
+    PlaylistClip,
+    PlaylistPanel,
+    ShotHighlightKind,
+    TimeFrame,
+    VideoSyncAnchor,
+    build_playlist_panel,
+)
 from data_models.player_stats import (
     AttemptSplit,
     BallLostStats,
@@ -37,7 +45,12 @@ __all__ = [
     "PassThirdStats",
     "PlayerMatchProfile",
     "PlayerMatchStats",
+    "PlaylistClip",
+    "PlaylistPanel",
     "PossessionStats",
+    "ShotHighlightKind",
     "StrictModel",
     "TaggedMatchEvent",
+    "TimeFrame",
+    "VideoSyncAnchor",
 ]

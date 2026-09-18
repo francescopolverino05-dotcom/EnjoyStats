@@ -113,3 +113,73 @@ ALTER TABLE player_match_stats ADD COLUMN IF NOT EXISTS player_name TEXT NOT NUL
 ALTER TABLE player_match_stats ADD COLUMN IF NOT EXISTS penalty_kicks INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE player_match_stats ADD COLUMN IF NOT EXISTS throw_ins INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE player_match_stats ADD COLUMN IF NOT EXISTS possession JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+-- AutoData Advanced: 1,000+ tagged events per match with video-sync anchors.
+CREATE TABLE IF NOT EXISTS match_events (
+    event_id                    UUID PRIMARY KEY,
+    match_id                    UUID NOT NULL
+                                REFERENCES matches (match_id) ON DELETE CASCADE,
+    team_id                     UUID NOT NULL,
+    player_id                   UUID,
+    period                      SMALLINT NOT NULL DEFAULT 1
+                                CHECK (period BETWEEN 1 AND 5),
+    minute                      INTEGER NOT NULL DEFAULT 0
+                                CHECK (minute BETWEEN 0 AND 150),
+    second                      SMALLINT NOT NULL DEFAULT 0
+                                CHECK (second BETWEEN 0 AND 59),
+    event_type                  TEXT NOT NULL,
+    x                           NUMERIC(6, 3) NOT NULL
+                                CHECK (x >= 0 AND x <= 100),
+    y                           NUMERIC(6, 3) NOT NULL
+                                CHECK (y >= 0 AND y <= 100),
+    end_x                       NUMERIC(6, 3)
+                                CHECK (end_x IS NULL OR (end_x >= 0 AND end_x <= 100)),
+    end_y                       NUMERIC(6, 3)
+                                CHECK (end_y IS NULL OR (end_y >= 0 AND end_y <= 100)),
+    successful                  BOOLEAN NOT NULL DEFAULT TRUE,
+    is_goal                     BOOLEAN NOT NULL DEFAULT FALSE,
+    is_assist                   BOOLEAN NOT NULL DEFAULT FALSE,
+    is_progressive              BOOLEAN NOT NULL DEFAULT FALSE,
+    is_penalty                  BOOLEAN NOT NULL DEFAULT FALSE,
+    shot_outcome                TEXT,
+    attacking_left_to_right     BOOLEAN NOT NULL DEFAULT TRUE,
+    video_timestamp_ms          BIGINT NOT NULL DEFAULT 0
+                                CHECK (video_timestamp_ms >= 0),
+    clip_url                    TEXT NOT NULL DEFAULT '',
+    recorded_at                 TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS match_events_match_clock_idx
+    ON match_events (match_id, period, minute, second, video_timestamp_ms);
+
+CREATE INDEX IF NOT EXISTS match_events_match_team_type_idx
+    ON match_events (match_id, team_id, event_type);
+
+CREATE INDEX IF NOT EXISTS match_events_match_player_idx
+    ON match_events (match_id, player_id);
+
+CREATE INDEX IF NOT EXISTS match_events_video_seek_idx
+    ON match_events (match_id, video_timestamp_ms);
+
+-- Seek index used by the video player when a playlist row is clicked.
+CREATE TABLE IF NOT EXISTS video_clip_index (
+    event_id                    UUID PRIMARY KEY
+                                REFERENCES match_events (event_id) ON DELETE CASCADE,
+    match_id                    UUID NOT NULL
+                                REFERENCES matches (match_id) ON DELETE CASCADE,
+    team_id                     UUID NOT NULL,
+    player_id                   UUID,
+    event_type                  TEXT NOT NULL,
+    highlight_kind              TEXT NOT NULL,
+    video_timestamp_ms          BIGINT NOT NULL
+                                CHECK (video_timestamp_ms >= 0),
+    clip_url                    TEXT NOT NULL,
+    duration_ms                 INTEGER NOT NULL DEFAULT 8000
+                                CHECK (duration_ms >= 250)
+);
+
+CREATE INDEX IF NOT EXISTS video_clip_index_seek_idx
+    ON video_clip_index (match_id, video_timestamp_ms);
+
+CREATE INDEX IF NOT EXISTS video_clip_index_kind_idx
+    ON video_clip_index (match_id, highlight_kind, video_timestamp_ms);

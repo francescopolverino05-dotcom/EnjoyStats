@@ -31,6 +31,7 @@ RUN python -m venv /opt/venv \
         "uvicorn[standard]>=0.30,<1" \
         "sqlalchemy[asyncio]>=2.0.30,<3" \
         "asyncpg>=0.29,<1" \
+        "numpy>=1.26,<3" \
     && /opt/venv/bin/pip install --no-deps .
 
 FROM python:3.11-slim AS runtime

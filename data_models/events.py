@@ -111,6 +111,8 @@ class MatchEvent(StrictModel):
         is_penalty: Whether a shot was taken from the penalty spot.
         shot_outcome: Shot result, required when ``event_type`` is shot/goal.
         attacking_left_to_right: Team attacking direction for this period.
+        video_timestamp_ms: Seek offset in the match video, in milliseconds.
+        clip_url: Highlight clip URL used by the AutoData Advanced playlist.
         recorded_at: UTC timestamp when the tag was received.
     """
 
@@ -133,6 +135,16 @@ class MatchEvent(StrictModel):
     is_penalty: bool = False
     shot_outcome: ShotOutcome | None = None
     attacking_left_to_right: bool = True
+    video_timestamp_ms: int = Field(
+        default=0,
+        ge=0,
+        description="Seek offset in the match video, in milliseconds.",
+    )
+    clip_url: str = Field(
+        default="",
+        max_length=2048,
+        description="Highlight clip URL for clickable playlist anchors.",
+    )
     recorded_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
     @field_validator("second")

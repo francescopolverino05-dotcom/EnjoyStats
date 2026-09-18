@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Final, Protocol, cast
@@ -20,6 +20,7 @@ from uuid import UUID
 import asyncpg
 from pydantic import BaseModel, ValidationError
 
+from data_models.events import MatchEvent
 from data_models.player_stats import (
     DefensiveStats,
     DistributionStats,
@@ -27,6 +28,12 @@ from data_models.player_stats import (
     PlayerMatchProfile,
     PlayerMatchStats,
     PossessionStats,
+)
+from data_models.video_sync import (
+    highlight_kind,
+    resolve_clip_url,
+    resolve_video_timestamp_ms,
+    video_anchor_from_event,
 )
 
 LOGGER = logging.getLogger(__name__)
@@ -130,6 +137,74 @@ SELECT
     collected_at
 FROM player_match_stats
 WHERE player_id = $1 AND match_id = $2
+"""
+
+UPSERT_MATCH_EVENT_SQL: Final[str] = """
+INSERT INTO match_events (
+    event_id, match_id, team_id, player_id, period, minute, second,
+    event_type, x, y, end_x, end_y, successful, is_goal, is_assist,
+    is_progressive, is_penalty, shot_outcome, attacking_left_to_right,
+    video_timestamp_ms, clip_url, recorded_at
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7,
+    $8, $9, $10, $11, $12, $13, $14, $15,
+    $16, $17, $18, $19,
+    $20, $21, $22
+)
+ON CONFLICT (event_id) DO UPDATE SET
+    match_id = EXCLUDED.match_id,
+    team_id = EXCLUDED.team_id,
+    player_id = EXCLUDED.player_id,
+    period = EXCLUDED.period,
+    minute = EXCLUDED.minute,
+    second = EXCLUDED.second,
+    event_type = EXCLUDED.event_type,
+    x = EXCLUDED.x,
+    y = EXCLUDED.y,
+    end_x = EXCLUDED.end_x,
+    end_y = EXCLUDED.end_y,
+    successful = EXCLUDED.successful,
+    is_goal = EXCLUDED.is_goal,
+    is_assist = EXCLUDED.is_assist,
+    is_progressive = EXCLUDED.is_progressive,
+    is_penalty = EXCLUDED.is_penalty,
+    shot_outcome = EXCLUDED.shot_outcome,
+    attacking_left_to_right = EXCLUDED.attacking_left_to_right,
+    video_timestamp_ms = EXCLUDED.video_timestamp_ms,
+    clip_url = EXCLUDED.clip_url,
+    recorded_at = EXCLUDED.recorded_at
+"""
+
+UPSERT_VIDEO_CLIP_INDEX_SQL: Final[str] = """
+INSERT INTO video_clip_index (
+    event_id, match_id, team_id, player_id, event_type, highlight_kind,
+    video_timestamp_ms, clip_url, duration_ms
+) VALUES (
+    $1, $2, $3, $4, $5, $6, $7, $8, $9
+)
+ON CONFLICT (event_id) DO UPDATE SET
+    match_id = EXCLUDED.match_id,
+    team_id = EXCLUDED.team_id,
+    player_id = EXCLUDED.player_id,
+    event_type = EXCLUDED.event_type,
+    highlight_kind = EXCLUDED.highlight_kind,
+    video_timestamp_ms = EXCLUDED.video_timestamp_ms,
+    clip_url = EXCLUDED.clip_url,
+    duration_ms = EXCLUDED.duration_ms
+"""
+
+FETCH_MATCH_EVENTS_SQL: Final[str] = """
+SELECT
+    event_id, match_id, team_id, player_id, period, minute, second,
+    event_type, x, y, end_x, end_y, successful, is_goal, is_assist,
+    is_progressive, is_penalty, shot_outcome, attacking_left_to_right,
+    video_timestamp_ms, clip_url, recorded_at
+FROM match_events
+WHERE match_id = $1
+  AND ($2::uuid IS NULL OR team_id = $2)
+  AND ($3::uuid IS NULL OR player_id = $3)
+  AND ($4::smallint IS NULL OR period = $4)
+ORDER BY period, minute, second, video_timestamp_ms, event_id
 """
 
 
@@ -487,6 +562,166 @@ class DatabaseAggregator:
             raise PlayerProfilePersistenceError(
                 "Stored player_match_stats row is not a valid PlayerMatchProfile."
             ) from exc
+
+    async def upsert_match_events(
+        self,
+        match_id: UUID,
+        events: Sequence[MatchEvent],
+    ) -> int:
+        """Persist a batch of tagged events and their video-seek index rows.
+
+        Designed for AutoData Advanced match feeds (1,000+ events). All writes
+        run in one transaction after ensuring the parent ``matches`` row exists.
+
+        Args:
+            match_id: Parent match. Must equal every event's ``match_id``.
+            events: Tagged events with video-sync anchors.
+
+        Returns:
+            Number of events upserted.
+
+        Raises:
+            ValueError: If an event belongs to a different match.
+            PlayerProfilePersistenceError: If PostgreSQL rejects the write.
+        """
+
+        if not events:
+            return 0
+        for event in events:
+            if event.match_id != match_id:
+                raise ValueError(
+                    f"event.match_id ({event.match_id}) does not match "
+                    f"argument match_id ({match_id})."
+                )
+        try:
+            pool = self._require_pool()
+            async with pool.acquire() as connection:
+                async with connection.transaction():
+                    await connection.execute(ENSURE_MATCH_SQL, match_id)
+                    await connection.executemany(
+                        UPSERT_MATCH_EVENT_SQL,
+                        [_match_event_arguments(event) for event in events],
+                    )
+                    await connection.executemany(
+                        UPSERT_VIDEO_CLIP_INDEX_SQL,
+                        [_video_clip_arguments(event) for event in events],
+                    )
+            return len(events)
+        except StorageError:
+            raise
+        except ValueError:
+            raise
+        except (OSError, TypeError, asyncpg.PostgresError) as exc:
+            LOGGER.exception("Failed to upsert match events match_id=%s", match_id)
+            raise PlayerProfilePersistenceError(
+                "Unable to upsert match_events rows."
+            ) from exc
+
+    async def fetch_match_events(
+        self,
+        match_id: UUID,
+        *,
+        team_id: UUID | None = None,
+        player_id: UUID | None = None,
+        period: int | None = None,
+    ) -> list[MatchEvent]:
+        """Load tagged events for a match, optionally narrowed by team/player/half."""
+
+        try:
+            pool = self._require_pool()
+            async with pool.acquire() as connection:
+                rows = await connection.fetch(
+                    FETCH_MATCH_EVENTS_SQL,
+                    match_id,
+                    team_id,
+                    player_id,
+                    period,
+                )
+        except StorageError:
+            raise
+        except (OSError, asyncpg.PostgresError, TypeError, ValueError) as exc:
+            LOGGER.exception("Failed to fetch match events match_id=%s", match_id)
+            raise PlayerProfilePersistenceError(
+                "Unable to load match_events rows."
+            ) from exc
+        return [_row_to_match_event(row) for row in rows]
+
+
+def _match_event_arguments(event: MatchEvent) -> tuple[object, ...]:
+    """Bind parameters for :data:`UPSERT_MATCH_EVENT_SQL`."""
+
+    return (
+        event.event_id,
+        event.match_id,
+        event.team_id,
+        event.player_id,
+        event.period,
+        event.minute,
+        event.second,
+        event.event_type.value,
+        event.x,
+        event.y,
+        event.end_x,
+        event.end_y,
+        event.successful,
+        event.is_goal,
+        event.is_assist,
+        event.is_progressive,
+        event.is_penalty,
+        None if event.shot_outcome is None else event.shot_outcome.value,
+        event.attacking_left_to_right,
+        resolve_video_timestamp_ms(event),
+        resolve_clip_url(event),
+        event.recorded_at,
+    )
+
+
+def _video_clip_arguments(event: MatchEvent) -> tuple[object, ...]:
+    """Bind parameters for :data:`UPSERT_VIDEO_CLIP_INDEX_SQL`."""
+
+    anchor = video_anchor_from_event(event)
+    return (
+        event.event_id,
+        event.match_id,
+        event.team_id,
+        event.player_id,
+        event.event_type.value,
+        highlight_kind(event),
+        anchor.video_timestamp_ms,
+        anchor.clip_url,
+        anchor.duration_ms,
+    )
+
+
+def _row_to_match_event(row: Mapping[str, Any]) -> MatchEvent:
+    """Rehydrate a ``match_events`` row."""
+
+    return MatchEvent.model_validate(
+        {
+            "event_id": row["event_id"],
+            "match_id": row["match_id"],
+            "team_id": row["team_id"],
+            "player_id": row["player_id"],
+            "period": int(row["period"]),
+            "minute": int(row["minute"]),
+            "second": int(row["second"]),
+            "event_type": row["event_type"],
+            "x": float(row["x"]),
+            "y": float(row["y"]),
+            "end_x": None if row["end_x"] is None else float(row["end_x"]),
+            "end_y": None if row["end_y"] is None else float(row["end_y"]),
+            "successful": bool(row["successful"]),
+            "is_goal": bool(row["is_goal"]),
+            "is_assist": bool(row["is_assist"]),
+            "is_progressive": bool(row["is_progressive"]),
+            "is_penalty": bool(row["is_penalty"]),
+            "shot_outcome": row["shot_outcome"],
+            "attacking_left_to_right": bool(row["attacking_left_to_right"]),
+            "video_timestamp_ms": int(row["video_timestamp_ms"]),
+            "clip_url": str(row["clip_url"] or ""),
+            "recorded_at": row["recorded_at"],
+        }
+    )
 
 
 def _bind_profile_arguments(

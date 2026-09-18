@@ -183,6 +183,9 @@ def create_app(
     )
     _register_exception_handlers(application)
     _register_routes(application)
+    from api.routes import advanced_router
+
+    application.include_router(advanced_router)
     return application
 
 

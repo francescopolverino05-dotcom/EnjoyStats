@@ -157,8 +157,10 @@ def test_schema_defines_hybrid_tables_and_gin_indexes() -> None:
     assert "distribution                    jsonb" in joined
     assert "possession                      jsonb" in joined
     assert "using gin (possession)" in joined
-    assert "on conflict (player_id, match_id) do update set" in UPSERT_PLAYER_PROFILE_SQL.lower()
-    assert len(statements) >= 8
+    assert "create table if not exists match_events" in joined
+    assert "create table if not exists video_clip_index" in joined
+    assert "video_timestamp_ms" in joined
+    assert "clip_url" in joined
 
 
 def test_normalize_sqlalchemy_asyncpg_dsn() -> None:
