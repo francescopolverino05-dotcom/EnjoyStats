@@ -539,18 +539,17 @@ class DistributionStats(StrictModel):
         band_success = (
             locations.short.success + locations.medium.success + locations.long.success
         )
-        if band_total == 0 and band_success == 0:
-            return self
-        if band_total != self.passes.total:
-            raise ValueError(
-                "short + medium + long pass totals must equal passes.total when a "
-                f"length split is provided ({band_total} != {self.passes.total})."
-            )
-        if band_success != self.passes.success:
-            raise ValueError(
-                "short + medium + long pass successes must equal passes.success when a "
-                f"length split is provided ({band_success} != {self.passes.success})."
-            )
+        if band_total or band_success:
+            if band_total != self.passes.total:
+                raise ValueError(
+                    "short + medium + long pass totals must equal passes.total when a "
+                    f"length split is provided ({band_total} != {self.passes.total})."
+                )
+            if band_success != self.passes.success:
+                raise ValueError(
+                    "short + medium + long pass successes must equal passes.success when a "
+                    f"length split is provided ({band_success} != {self.passes.success})."
+                )
         if self.crosses.total > self.passes.total:
             raise ValueError("crosses.total cannot exceed passes.total.")
         if self.cutbacks.total > self.passes.total:
