@@ -19,6 +19,7 @@ from data_models.player_stats import (
     PlayerMatchProfile,
 )
 from storage.db_aggregator import PlayerProfilePersistenceError, StorageError
+from tests.fakes import InMemoryProfileStore
 
 
 def _sample_profile(**overrides: object) -> PlayerMatchProfile:
@@ -58,31 +59,6 @@ def _sample_profile(**overrides: object) -> PlayerMatchProfile:
 
 def _json_payload(profile: PlayerMatchProfile) -> dict[str, Any]:
     return profile.model_dump(mode="json", exclude_computed_fields=True)
-
-
-class InMemoryProfileStore:
-    """Test double that records upserts without PostgreSQL."""
-
-    def __init__(self) -> None:
-        self.rows: dict[tuple[UUID, UUID], PlayerMatchProfile] = {}
-
-    async def upsert_player_profile(
-        self,
-        match_id: UUID,
-        profile: PlayerMatchProfile,
-    ) -> UUID:
-        if profile.match_id != match_id:
-            raise ValueError("profile.match_id does not match argument match_id.")
-        stored = PlayerMatchProfile.from_stats(profile)
-        self.rows[(profile.player_id, match_id)] = stored
-        return stored.stats_id
-
-    async def fetch_player_profile(
-        self,
-        player_id: UUID,
-        match_id: UUID,
-    ) -> PlayerMatchProfile | None:
-        return self.rows.get((player_id, match_id))
 
 
 class _FailingStore(InMemoryProfileStore):
