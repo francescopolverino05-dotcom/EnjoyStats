@@ -17,20 +17,21 @@ dependencies = [
     "uvicorn[standard]>=0.30,<1",
     "sqlalchemy[asyncio]>=2.0.30,<3",
     "asyncpg>=0.29,<1",
+    "httpx>=0.27,<1",
+    "streamlit>=1.36,<2",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.2,<9",
     "pytest-asyncio>=0.23,<1",
-    "httpx>=0.27,<1",
 ]
 
 [project.scripts]
 enjoystats = "api.main:run"
 
 [tool.setuptools.packages.find]
-include = ["config*", "data_models*", "analytics*", "storage*", "api*"]
+include = ["config*", "data_models*", "analytics*", "storage*", "api*", "app*"]
 
 [tool.setuptools.package-data]
 config = ["py.typed"]
@@ -38,6 +39,7 @@ data_models = ["py.typed"]
 analytics = ["py.typed"]
 storage = ["py.typed"]
 api = ["py.typed"]
+app = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
