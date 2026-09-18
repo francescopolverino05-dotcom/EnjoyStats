@@ -17,6 +17,7 @@ def test_compose_stack_wires_db_api_and_dashboard() -> None:
         in compose
     )
     assert "condition: service_healthy" in compose
+    assert '"5432:5432"' in compose
     assert '"8000:8000"' in compose
     assert '"8501:8501"' in compose
     assert "ENJOYSTATS_API_URL" in compose
