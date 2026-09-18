@@ -351,6 +351,23 @@ class DatabaseAggregator:
             LOGGER.exception("Failed to apply PostgreSQL schema.")
             raise StorageError("Unable to apply postgres_tables.sql.") from exc
 
+    async def ping(self) -> None:
+        """Execute ``SELECT 1`` to confirm the pool is usable.
+
+        Raises:
+            StorageError: If the pool is closed or PostgreSQL does not answer.
+        """
+
+        try:
+            pool = self._require_pool()
+            async with pool.acquire() as connection:
+                await connection.execute("SELECT 1")
+        except StorageError:
+            raise
+        except (OSError, asyncpg.PostgresError) as exc:
+            LOGGER.exception("PostgreSQL health check failed.")
+            raise StorageError("PostgreSQL health check failed.") from exc
+
     async def upsert_player_profile(
         self,
         match_id: UUID,

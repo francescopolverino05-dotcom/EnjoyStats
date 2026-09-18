@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Final
 from uuid import UUID
@@ -26,6 +27,84 @@ CONTROLLER_ID: Final[UUID] = UUID("44444444-4444-4444-4444-444444444444")
 TEAM_ID: Final[UUID] = UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
 
 _KICKOFF = datetime(2026, 9, 18, 15, 0, tzinfo=timezone.utc)
+
+
+@dataclass(frozen=True, slots=True)
+class PitchAction:
+    """A single tagged location used by the 2D pitch plot.
+
+    Missing ``x``/``y`` (or end coordinates on a pass) are skipped at render
+    time so incomplete live tags never crash the dashboard.
+    """
+
+    event_type: str
+    x: float | None
+    y: float | None
+    end_x: float | None = None
+    end_y: float | None = None
+    successful: bool = True
+    is_goal: bool = False
+    shot_outcome: str | None = None
+
+
+def _pass(x: float, y: float, end_x: float, end_y: float, *, successful: bool = True) -> PitchAction:
+    return PitchAction(
+        event_type="pass",
+        x=x,
+        y=y,
+        end_x=end_x,
+        end_y=end_y,
+        successful=successful,
+    )
+
+
+def _shot(
+    x: float,
+    y: float,
+    *,
+    is_goal: bool = False,
+    shot_outcome: str,
+) -> PitchAction:
+    return PitchAction(
+        event_type="shot",
+        x=x,
+        y=y,
+        end_x=100.0 if is_goal else None,
+        end_y=50.0 if is_goal else None,
+        successful=shot_outcome == "on_target",
+        is_goal=is_goal,
+        shot_outcome=shot_outcome,
+    )
+
+
+def _playmaker_actions() -> tuple[PitchAction, ...]:
+    """Playmaker passes from the 5-second attacking move."""
+
+    return (
+        _pass(42.0, 48.0, 50.0, 50.0),
+        _pass(50.0, 50.0, 60.0, 49.0),
+        _pass(62.0, 50.0, 78.0, 52.0),
+    )
+
+
+def _striker_actions() -> tuple[PitchAction, ...]:
+    """Striker duel location is omitted; the finish is the PA goal."""
+
+    return (_shot(88.0, 50.0, is_goal=True, shot_outcome="on_target"),)
+
+
+def _controller_actions() -> tuple[PitchAction, ...]:
+    """Richer showcase scatter: mixed passes and shot outcomes."""
+
+    return (
+        _pass(38.0, 40.0, 55.0, 45.0),
+        _pass(55.0, 45.0, 70.0, 30.0),
+        _pass(48.0, 60.0, 46.0, 78.0, successful=False),
+        _shot(91.0, 48.0, is_goal=True, shot_outcome="on_target"),
+        _shot(84.0, 62.0, shot_outcome="missed"),
+        _shot(79.0, 40.0, shot_outcome="on_target"),
+        PitchAction(event_type="shot", x=None, y=None, shot_outcome="blocked"),
+    )
 
 
 def _playmaker_profile() -> PlayerMatchProfile:
@@ -142,6 +221,12 @@ DUMMY_DIRECTIONS: Final[dict[tuple[UUID, UUID], PassDirections]] = {
     (SHOWCASE_MATCH_ID, CONTROLLER_ID): PassDirections(forward=28, sideways=19, backward=8),
 }
 
+DUMMY_ACTIONS: Final[dict[tuple[UUID, UUID], tuple[PitchAction, ...]]] = {
+    (SIM_MATCH_ID, PLAYMAKER_ID): _playmaker_actions(),
+    (SIM_MATCH_ID, STRIKER_ID): _striker_actions(),
+    (SHOWCASE_MATCH_ID, CONTROLLER_ID): _controller_actions(),
+}
+
 
 def catalog() -> list[dict[str, object]]:
     """Sidebar options: one entry per dummy/live-known player."""
@@ -219,3 +304,45 @@ def fallback_directions(match_id: UUID, player_id: UUID) -> PassDirections:
     if cached is not None:
         return cached
     return PassDirections(forward=12, sideways=8, backward=4)
+
+
+def _generic_actions() -> tuple[PitchAction, ...]:
+    """Preview tags used when the selected IDs have no stored locations."""
+
+    return (
+        _pass(40.0, 50.0, 58.0, 52.0),
+        _shot(88.0, 50.0, is_goal=True, shot_outcome="on_target"),
+        _shot(82.0, 35.0, shot_outcome="missed"),
+        PitchAction(event_type="pass", x=None, y=55.0, end_x=70.0, end_y=50.0),
+    )
+
+
+def match_actions(
+    match_id: UUID,
+    player_id: UUID,
+    *,
+    include_generic: bool = False,
+) -> tuple[PitchAction, ...]:
+    """Return tagged shot/pass locations for a player-match pair.
+
+    Args:
+        match_id: Selected match UUID.
+        player_id: Selected player UUID.
+        include_generic: When True, unknown IDs get a small preview sequence
+            that includes a missing-coordinate tag. When False, unknown IDs
+            yield an empty tuple so a live profile is not decorated with
+            simulated locations.
+    """
+
+    cached = DUMMY_ACTIONS.get((match_id, player_id))
+    if cached is not None:
+        return cached
+    if include_generic:
+        return _generic_actions()
+    return ()
+
+
+def fallback_actions(match_id: UUID, player_id: UUID) -> tuple[PitchAction, ...]:
+    """Tagged shot/pass locations for the pitch plot, including a generic preview."""
+
+    return match_actions(match_id, player_id, include_generic=True)

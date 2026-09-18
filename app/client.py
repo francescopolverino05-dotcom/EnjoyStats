@@ -2,17 +2,24 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Any, Literal
 from uuid import UUID
 
 import httpx
 
-from app.dummy_data import fallback_directions, fallback_profile
+from app.dummy_data import (
+    PitchAction,
+    fallback_actions,
+    fallback_directions,
+    fallback_profile,
+    match_actions,
+)
 from app.metrics import PassDirections, directions_from_distribution
 from data_models.player_stats import PlayerMatchProfile
 
-DEFAULT_BASE_URL = "http://127.0.0.1:8000"
+DEFAULT_BASE_URL = os.environ.get("ENJOYSTATS_API_URL", "http://127.0.0.1:8000")
 REQUEST_TIMEOUT_S = 3.0
 
 
@@ -25,6 +32,7 @@ class ProfileLoad:
     source: Literal["live", "fallback"]
     message: str
     api_online: bool
+    actions: tuple[PitchAction, ...] = ()
 
 
 def _without_computed_fields(value: Any, *, parent_key: str | None = None) -> Any:
@@ -53,6 +61,7 @@ def _fallback(match_id: UUID, player_id: UUID, *, api_online: bool, reason: str)
         source="fallback",
         message=reason,
         api_online=api_online,
+        actions=fallback_actions(match_id, player_id),
     )
 
 
@@ -136,4 +145,5 @@ async def fetch_player_profile(
         source="live",
         message="Live profile loaded from FastAPI.",
         api_online=True,
+        actions=match_actions(match_id, player_id, include_generic=False),
     )

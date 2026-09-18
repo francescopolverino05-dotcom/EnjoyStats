@@ -282,3 +282,20 @@ async def test_connect_required_before_upsert() -> None:
 def test_schema_file_lives_beside_aggregator() -> None:
     assert SCHEMA_PATH == Path(__file__).resolve().parents[1] / "storage" / "postgres_tables.sql"
     assert SCHEMA_PATH.is_file()
+
+
+@pytest.mark.asyncio
+async def test_ping_runs_select_one() -> None:
+    connection = _FakeConnection()
+    aggregator = DatabaseAggregator("postgresql://unused", pool=_FakePool(connection))
+    await aggregator.ping()
+    assert connection.statements[0][0] == "SELECT 1"
+
+
+@pytest.mark.asyncio
+async def test_ping_wraps_connection_failures() -> None:
+    connection = _FakeConnection()
+    connection.fail_on = "SELECT 1"
+    aggregator = DatabaseAggregator("postgresql://unused", pool=_FakePool(connection))
+    with pytest.raises(StorageError, match="health check"):
+        await aggregator.ping()

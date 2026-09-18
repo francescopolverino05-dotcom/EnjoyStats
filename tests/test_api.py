@@ -99,6 +99,12 @@ def test_openapi_title(client: TestClient) -> None:
     assert response.json()["info"]["title"] == API_TITLE
 
 
+def test_health_ok_when_aggregator_is_injected(client: TestClient) -> None:
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "service": "api"}
+
+
 def test_get_player_profile(client: TestClient, store: InMemoryProfileStore) -> None:
     profile = _sample_profile()
     store.rows[(profile.player_id, profile.match_id)] = profile

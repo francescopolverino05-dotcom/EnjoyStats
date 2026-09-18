@@ -15,6 +15,7 @@ from app.dummy_data import (
     SIM_MATCH_ID,
     STRIKER_ID,
     catalog,
+    fallback_actions,
     fallback_profile,
 )
 from app.metrics import PassDirections, directions_from_distribution
@@ -75,6 +76,8 @@ async def test_fetch_falls_back_when_api_is_offline() -> None:
     assert load.api_online is False
     assert load.profile.player_id == PLAYMAKER_ID
     assert "unreachable" in load.message.lower()
+    assert len(load.actions) == 3
+    assert all(action.event_type == "pass" for action in load.actions)
 
 
 @pytest.mark.asyncio
@@ -90,6 +93,8 @@ async def test_fetch_uses_live_payload_when_api_returns_profile() -> None:
     assert load.source == "live"
     assert load.profile.offensive.goals == 1
     assert load.api_online is True
+    assert len(load.actions) == 1
+    assert load.actions[0].is_goal is True
 
 
 def test_dashboard_renders_fallback_without_network() -> None:
@@ -107,3 +112,10 @@ def test_dashboard_renders_fallback_without_network() -> None:
     assert "Offensive" in subheaders
     assert "Defensive" in subheaders
     assert "Distribution" in subheaders
+    assert "Tactical pitch" in subheaders
+
+
+def test_unknown_fallback_actions_include_a_missing_coordinate() -> None:
+    actions = fallback_actions(uuid4(), uuid4())
+    assert any(action.x is None or action.y is None for action in actions)
+    assert any(action.event_type == "shot" and action.is_goal for action in actions)

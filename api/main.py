@@ -157,6 +157,7 @@ def create_app(
             engine = DatabaseAggregator(resolved_settings.database_url)
             try:
                 await engine.connect()
+                await engine.apply_schema()
             except StorageError:
                 LOGGER.exception("PostgreSQL aggregator failed to start.")
                 raise
@@ -296,6 +297,21 @@ def _register_exception_handlers(application: FastAPI) -> None:
 
 def _register_routes(application: FastAPI) -> None:
     """Register versioned player-profile endpoints."""
+
+    @application.get(
+        "/health",
+        summary="Liveness and database readiness",
+        responses={503: {"description": "Database aggregator is unavailable."}},
+    )
+    async def health(store: PlayerProfileStore = Depends(get_aggregator)) -> dict[str, str]:
+        """Return ``ok`` once the aggregator can answer a trivial query."""
+
+        ping = getattr(store, "ping", None)
+        if callable(ping):
+            result = ping()
+            if hasattr(result, "__await__"):
+                await result
+        return {"status": "ok", "service": "api"}
 
     @application.get(
         "/api/v1/matches/{match_id}/players/{player_id}",

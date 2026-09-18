@@ -19,6 +19,8 @@ dependencies = [
     "asyncpg>=0.29,<1",
     "httpx>=0.27,<1",
     "streamlit>=1.36,<2",
+    "matplotlib>=3.8,<4",
+    "seaborn>=0.13,<1",
 ]
 
 [project.optional-dependencies]
@@ -37,7 +39,7 @@ include = ["config*", "data_models*", "analytics*", "storage*", "api*", "app*"]
 config = ["py.typed"]
 data_models = ["py.typed"]
 analytics = ["py.typed"]
-storage = ["py.typed"]
+storage = ["py.typed", "postgres_tables.sql"]
 api = ["py.typed"]
 app = ["py.typed"]
 
