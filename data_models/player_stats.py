@@ -657,3 +657,39 @@ class PlayerMatchStats(StrictModel):
                 "collected_at": datetime.now(timezone.utc),
             }
         )
+
+
+class PlayerMatchProfile(PlayerMatchStats):
+    """Persistence-facing player-match profile used by the storage layer.
+
+    The schema is identical to :class:`PlayerMatchStats`. The dedicated name
+    exists so database adapters can depend on a stable persistence type while
+    collectors continue to emit the in-memory stats object (a compatible
+    subclass instance).
+    """
+
+    @classmethod
+    def from_stats(cls, stats: PlayerMatchStats) -> PlayerMatchProfile:
+        """Build a profile from an in-memory :class:`PlayerMatchStats` row.
+
+        Args:
+            stats: Collector snapshot across the three statistical pillars.
+
+        Returns:
+            A :class:`PlayerMatchProfile` with the same field values.
+        """
+
+        if isinstance(stats, cls):
+            return stats
+        return cls(
+            stats_id=stats.stats_id,
+            match_id=stats.match_id,
+            player_id=stats.player_id,
+            team_id=stats.team_id,
+            jersey_number=stats.jersey_number,
+            position=stats.position,
+            offensive=stats.offensive,
+            defensive=stats.defensive,
+            distribution=stats.distribution,
+            collected_at=stats.collected_at,
+        )

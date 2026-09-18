@@ -27,12 +27,13 @@ dev = [
 ]
 
 [tool.setuptools.packages.find]
-include = ["config*", "data_models*", "analytics*"]
+include = ["config*", "data_models*", "analytics*", "storage*"]
 
 [tool.setuptools.package-data]
 config = ["py.typed"]
 data_models = ["py.typed"]
 analytics = ["py.typed"]
+storage = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

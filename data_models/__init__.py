@@ -11,6 +11,7 @@ from data_models.player_stats import (
     InterceptionStats,
     OffensiveStats,
     PassLocationStats,
+    PlayerMatchProfile,
     PlayerMatchStats,
     StrictModel,
 )
@@ -27,6 +28,7 @@ __all__ = [
     "MatchEvent",
     "OffensiveStats",
     "PassLocationStats",
+    "PlayerMatchProfile",
     "PlayerMatchStats",
     "StrictModel",
     "TaggedMatchEvent",
