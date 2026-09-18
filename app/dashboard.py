@@ -30,6 +30,14 @@ from matplotlib.patches import Ellipse, Rectangle
 
 from app.client import DEFAULT_BASE_URL, ProfileLoad, fetch_player_profile
 from app.dummy_data import PitchAction, catalog
+from app.ingest import (
+    collect_sample_match,
+    collect_uploaded_bytes,
+    load_from_rundown,
+    persist_rundown,
+    profile_label,
+)
+from analytics.game_ingest import MatchRundown, rundown_from_mapping, rundown_to_json
 from app.metrics import PassDirections
 from config.pitch_config import (
     CENTRE_CIRCLE_RADIUS_M,
@@ -660,6 +668,8 @@ def render_dashboard(load: ProfileLoad) -> None:
     with header_r:
         if load.source == "live":
             st.success("Live FastAPI")
+        elif load.source == "collected":
+            st.success("Collected match")
         else:
             st.warning("Dummy fallback")
         st.caption(load.message)
@@ -677,21 +687,98 @@ def render_dashboard(load: ProfileLoad) -> None:
     render_tactical_pitch(load.actions)
 
 
-def render_sidebar() -> tuple[str, UUID, UUID]:
-    """Match / player selectors that drive the GET request."""
+def render_match_summary(rundown: MatchRundown) -> None:
+    """Headline match totals collected from the uploaded event feed."""
 
+    summary = rundown.summary
+    st.subheader("Match rundown")
+    st.caption("Automatically collected from the tagged game feed.")
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Events", summary.event_count)
+    c2.metric("Players", summary.player_count)
+    c3.metric("Goals", summary.goals)
+    c4.metric("Shots", summary.shots)
+    c5.metric("Passes", summary.passes)
+    st.caption(
+        f"Match `{summary.match_id}`  ·  {summary.duration_minutes:.1f} minutes of tagged play"
+    )
+
+
+def render_sidebar() -> tuple[str, UUID, UUID, MatchRundown | None]:
+    """Upload a game or pick a catalog match, then choose a player rundown."""
+
+    rundown_key = "collected_rundown"
+    persist_key = "ingest_persist_message"
+
+    st.sidebar.header("Upload a game")
+    st.sidebar.caption(
+        "Drop a tagged AutoData JSON export. EnjoyStats collects player stats "
+        "automatically and opens the full four-pillar rundown."
+    )
+    uploaded = st.sidebar.file_uploader(
+        "Tagged match JSON",
+        type=["json"],
+        help="A JSON array of events, or an object with match_id, players, and events.",
+    )
+    collect_upload = st.sidebar.button("Collect uploaded game", type="primary")
+    collect_sample = st.sidebar.button("Collect sample match")
+    clear_collected = st.sidebar.button("Clear collected match")
+    base_url = st.sidebar.text_input("FastAPI base URL", value=DEFAULT_BASE_URL).strip()
+    if not base_url:
+        base_url = DEFAULT_BASE_URL
+
+    if clear_collected:
+        st.session_state.pop(rundown_key, None)
+        st.session_state.pop(persist_key, None)
+
+    error: str | None = None
+    if collect_sample:
+        try:
+            rundown = collect_sample_match()
+            st.session_state[rundown_key] = rundown_to_json(rundown)
+            _persisted, message = asyncio.run(persist_rundown(base_url, rundown))
+            st.session_state[persist_key] = message
+        except ValueError as exc:
+            error = str(exc)
+    elif collect_upload:
+        if uploaded is None:
+            error = "Choose a JSON game file first."
+        else:
+            try:
+                rundown = collect_uploaded_bytes(uploaded.getvalue())
+                st.session_state[rundown_key] = rundown_to_json(rundown)
+                _persisted, message = asyncio.run(persist_rundown(base_url, rundown))
+                st.session_state[persist_key] = message
+            except ValueError as exc:
+                error = str(exc)
+    if error:
+        st.sidebar.error(error)
+
+    stored = st.session_state.get(rundown_key)
+    if stored:
+        rundown = rundown_from_mapping(stored)
+        st.sidebar.success(
+            f"Collected {rundown.summary.event_count} events · "
+            f"{rundown.summary.player_count} players"
+        )
+        persist_message = st.session_state.get(persist_key)
+        if persist_message:
+            st.sidebar.caption(str(persist_message))
+        player_map = {profile_label(profile): profile.player_id for profile in rundown.players}
+        player_label = st.sidebar.selectbox("Player rundown", options=list(player_map.keys()))
+        return base_url, rundown.match_id, player_map[player_label], rundown
+
+    st.sidebar.divider()
     st.sidebar.header("Match selection")
     st.sidebar.caption("Choosing a match or player loads `/api/v1/matches/{id}/players/{id}`.")
-    base_url = st.sidebar.text_input("FastAPI base URL", value=DEFAULT_BASE_URL)
     matches = _match_options()
     match_label = st.sidebar.selectbox("Match UUID", options=list(matches.keys()))
     match_id = matches[match_label]
     players = _player_options(match_id)
     player_label = st.sidebar.selectbox("Player ID", options=list(players.keys()))
     player_id = players[player_label]
-    st.sidebar.divider()
     st.sidebar.caption("If FastAPI is down, dummy values for this selection still render.")
-    return base_url.strip() or DEFAULT_BASE_URL, match_id, player_id
+    return base_url, match_id, player_id, None
 
 
 def main(*, fetch: FetchFn = _run_fetch) -> None:
@@ -703,8 +790,12 @@ def main(*, fetch: FetchFn = _run_fetch) -> None:
         layout="wide",
     )
     _inject_styles()
-    base_url, match_id, player_id = render_sidebar()
-    load = fetch(base_url, match_id, player_id)
+    base_url, match_id, player_id, rundown = render_sidebar()
+    if rundown is not None:
+        render_match_summary(rundown)
+        load = load_from_rundown(rundown, player_id)
+    else:
+        load = fetch(base_url, match_id, player_id)
     render_dashboard(load)
 
 

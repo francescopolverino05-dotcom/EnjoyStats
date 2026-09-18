@@ -29,7 +29,7 @@ class ProfileLoad:
 
     profile: PlayerMatchProfile
     directions: PassDirections
-    source: Literal["live", "fallback"]
+    source: Literal["live", "fallback", "collected"]
     message: str
     api_online: bool
     actions: tuple[PitchAction, ...] = ()

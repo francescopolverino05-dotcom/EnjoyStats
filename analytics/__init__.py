@@ -1,5 +1,6 @@
 """Real-time aggregation, temporal heatmaps, and spatial zone mapping."""
 
+from analytics.game_ingest import collect_game
 from analytics.spatial_zones import map_to_play_zone, spatial_breakdown
 from analytics.stats_collector import PlayerStatsCollector, new_collector
 from analytics.temporal_stats import (
@@ -11,6 +12,7 @@ from analytics.temporal_stats import (
 
 __all__ = [
     "PlayerStatsCollector",
+    "collect_game",
     "detect_pass_strings",
     "map_to_play_zone",
     "new_collector",
