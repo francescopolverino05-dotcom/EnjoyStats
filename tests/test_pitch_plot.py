@@ -50,11 +50,7 @@ def test_draw_football_pitch_uses_normalized_0_100_grid() -> None:
         ]
         assert touchlines, "Expected a 0–100 touchline rectangle."
         box_depth = FIFA_PITCH.penalty_area_depth_norm
-        penalty_boxes = [
-            patch
-            for patch in rectangles
-            if abs(patch.get_width() - box_depth) < 1e-9
-        ]
+        penalty_boxes = [patch for patch in rectangles if abs(patch.get_width() - box_depth) < 1e-9]
         assert len(penalty_boxes) == 2
         xs = sorted(patch.get_x() for patch in penalty_boxes)
         assert xs[0] == NORMALIZED_MIN

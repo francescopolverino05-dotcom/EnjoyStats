@@ -202,9 +202,7 @@ def test_unknown_fields_are_rejected() -> None:
 
 
 def test_possession_and_penalty_kick_recording() -> None:
-    stats = OffensiveStats().record_shot(
-        inside_penalty_area=True, is_goal=True, is_penalty=True
-    )
+    stats = OffensiveStats().record_shot(inside_penalty_area=True, is_goal=True, is_penalty=True)
     assert stats.penalty_kicks == 1
     assert stats.goals == 1
     possession = PossessionStats(time_minutes=12.34, percentage=18.88)

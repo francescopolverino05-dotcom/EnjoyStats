@@ -465,10 +465,11 @@ def render_defensive(profile: PlayerMatchProfile) -> None:
     cards[2].metric("Goals against", defensive.goals_against)
     press = st.columns(2)
     press[0].metric("PPDA", f"{defensive.ppda:.1f}")
+    intercepts = defensive.interceptions
     press[1].metric(
         "Interceptions",
-        defensive.interceptions.total,
-        f"{defensive.interceptions.defensive_third}/{defensive.interceptions.middle_third}/{defensive.interceptions.final_third}",
+        intercepts.total,
+        f"{intercepts.defensive_third}/{intercepts.middle_third}/{intercepts.final_third}",
     )
     fouls = st.columns(2)
     fouls[0].metric("Fouls", defensive.fouls.committed)
@@ -547,9 +548,30 @@ def render_distribution(profile: PlayerMatchProfile, directions: PassDirections)
     )
     st.markdown("**Direction of distribution**")
     d1, d2, d3 = st.columns(3)
-    d1.metric("Forward", f"{dist.pass_directions.forward.success}/{dist.pass_directions.forward.total}" if dist.pass_directions.forward.total else directions.forward)
-    d2.metric("Sideways", f"{dist.pass_directions.sideways.success}/{dist.pass_directions.sideways.total}" if dist.pass_directions.sideways.total else directions.sideways)
-    d3.metric("Backward", f"{dist.pass_directions.backward.success}/{dist.pass_directions.backward.total}" if dist.pass_directions.backward.total else directions.backward)
+    d1.metric(
+        "Forward",
+        (
+            f"{dist.pass_directions.forward.success}/{dist.pass_directions.forward.total}"
+            if dist.pass_directions.forward.total
+            else directions.forward
+        ),
+    )
+    d2.metric(
+        "Sideways",
+        (
+            f"{dist.pass_directions.sideways.success}/{dist.pass_directions.sideways.total}"
+            if dist.pass_directions.sideways.total
+            else directions.sideways
+        ),
+    )
+    d3.metric(
+        "Backward",
+        (
+            f"{dist.pass_directions.backward.success}/{dist.pass_directions.backward.total}"
+            if dist.pass_directions.backward.total
+            else directions.backward
+        ),
+    )
     st.markdown("**Chance creation**")
     st.dataframe(
         _split_rows(

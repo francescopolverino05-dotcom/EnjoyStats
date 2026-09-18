@@ -165,7 +165,9 @@ def test_schema_defines_hybrid_tables_and_gin_indexes() -> None:
 
 def test_normalize_sqlalchemy_asyncpg_dsn() -> None:
     assert (
-        normalize_asyncpg_dsn("postgresql+asyncpg://enjoystats:enjoystats@localhost:5432/enjoystats")
+        normalize_asyncpg_dsn(
+            "postgresql+asyncpg://enjoystats:enjoystats@localhost:5432/enjoystats"
+        )
         == "postgresql://enjoystats:enjoystats@localhost:5432/enjoystats"
     )
 

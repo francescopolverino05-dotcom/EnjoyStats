@@ -129,9 +129,7 @@ async def fetch_player_profile(
             reason=f"API returned HTTP {response.status_code} — showing dummy values.",
         )
     try:
-        profile = PlayerMatchProfile.model_validate(
-            _without_computed_fields(response.json())
-        )
+        profile = PlayerMatchProfile.model_validate(_without_computed_fields(response.json()))
     except (ValueError, TypeError) as exc:
         return _fallback(
             match_id,

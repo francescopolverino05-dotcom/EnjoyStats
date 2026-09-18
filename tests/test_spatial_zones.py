@@ -87,7 +87,9 @@ def test_sector_pass_rates_and_final_third_entries() -> None:
     populated = [row for row in report.sectors if row.attempts]
     assert populated
     assert abs(sum(row.play_share for row in populated) - 1.0) < 1e-6
-    centre_entries = next(row for row in report.final_third_entries if row.zone is FinalThirdEntryZone.CENTRE)
+    centre_entries = next(
+        row for row in report.final_third_entries if row.zone is FinalThirdEntryZone.CENTRE
+    )
     left_entries = next(
         row for row in report.final_third_entries if row.zone is FinalThirdEntryZone.LEFT_CHANNEL
     )

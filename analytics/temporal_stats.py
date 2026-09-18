@@ -76,7 +76,9 @@ def _clock_array(events: Sequence[MatchEvent]) -> np.ndarray:
 
     if not events:
         return np.empty(0, dtype=np.float64)
-    return np.fromiter((clock_minutes(event) for event in events), dtype=np.float64, count=len(events))
+    return np.fromiter(
+        (clock_minutes(event) for event in events), dtype=np.float64, count=len(events)
+    )
 
 
 def _bin_edges(bin_minutes: int, max_minute: int) -> np.ndarray:
@@ -152,7 +154,9 @@ def passes_per_5_minute_period(
     selected = _select_passes(events, team_id=team_id, player_id=player_id)
     clocks = _clock_array(selected)
     observed_max = int(np.ceil(float(clocks.max()))) if clocks.size else max_minute
-    return _histogram_bins(clocks, bin_minutes=PASS_BIN_MINUTES, max_minute=max(max_minute, observed_max))
+    return _histogram_bins(
+        clocks, bin_minutes=PASS_BIN_MINUTES, max_minute=max(max_minute, observed_max)
+    )
 
 
 def possession_pct_per_15_minute_segment(
@@ -177,17 +181,27 @@ def possession_pct_per_15_minute_segment(
         in ``[0, 100]``.
     """
 
-    ordered = sorted(events, key=lambda item: (item.period, clock_minutes(item), str(item.event_id)))
+    ordered = sorted(
+        events, key=lambda item: (item.period, clock_minutes(item), str(item.event_id))
+    )
     edges = _bin_edges(POSSESSION_BIN_MINUTES, max_minute)
     team_ms = np.zeros(len(edges) - 1, dtype=np.float64)
     total_ms = np.zeros(len(edges) - 1, dtype=np.float64)
     if len(ordered) < 2:
         for event in ordered:
             if event.team_id == team_id:
-                index = int(np.clip(np.digitize(clock_minutes(event), edges, right=False) - 1, 0, len(team_ms) - 1))
+                index = int(
+                    np.clip(
+                        np.digitize(clock_minutes(event), edges, right=False) - 1,
+                        0,
+                        len(team_ms) - 1,
+                    )
+                )
                 team_ms[index] += 1.0
                 total_ms[index] += 1.0
-        percents = np.divide(team_ms, total_ms, out=np.zeros_like(team_ms), where=total_ms > 0) * 100.0
+        percents = (
+            np.divide(team_ms, total_ms, out=np.zeros_like(team_ms), where=total_ms > 0) * 100.0
+        )
         return [
             TemporalBin(
                 start_minute=int(edges[index]),
@@ -198,8 +212,12 @@ def possession_pct_per_15_minute_segment(
             for index in range(len(percents))
         ]
 
-    starts = np.fromiter((clock_minutes(event) for event in ordered[:-1]), dtype=np.float64, count=len(ordered) - 1)
-    ends = np.fromiter((clock_minutes(event) for event in ordered[1:]), dtype=np.float64, count=len(ordered) - 1)
+    starts = np.fromiter(
+        (clock_minutes(event) for event in ordered[:-1]), dtype=np.float64, count=len(ordered) - 1
+    )
+    ends = np.fromiter(
+        (clock_minutes(event) for event in ordered[1:]), dtype=np.float64, count=len(ordered) - 1
+    )
     durations = np.maximum(ends - starts, 0.0)
     owners = np.fromiter(
         (1.0 if event.team_id == team_id else 0.0 for event in ordered[:-1]),
@@ -239,7 +257,9 @@ def detect_pass_strings(
         Length histogram plus headline totals.
     """
 
-    ordered = sorted(events, key=lambda item: (item.period, clock_minutes(item), str(item.event_id)))
+    ordered = sorted(
+        events, key=lambda item: (item.period, clock_minutes(item), str(item.event_id))
+    )
     frequencies: dict[int, int] = {}
     current_team: UUID | None = None
     current_length = 0

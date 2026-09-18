@@ -40,7 +40,9 @@ LOGGER = logging.getLogger(__name__)
 
 SCHEMA_PATH: Final[Path] = Path(__file__).with_name("postgres_tables.sql")
 
-UPSERT_PLAYER_PROFILE_SQL: Final[str] = """
+UPSERT_PLAYER_PROFILE_SQL: Final[
+    str
+] = """
 INSERT INTO player_match_stats (
     player_id,
     match_id,
@@ -102,13 +104,17 @@ ON CONFLICT (player_id, match_id) DO UPDATE SET
 RETURNING stats_id
 """
 
-ENSURE_MATCH_SQL: Final[str] = """
+ENSURE_MATCH_SQL: Final[
+    str
+] = """
 INSERT INTO matches (match_id, status, updated_at)
 VALUES ($1, 'live', NOW())
 ON CONFLICT (match_id) DO NOTHING
 """
 
-FETCH_PLAYER_PROFILE_SQL: Final[str] = """
+FETCH_PLAYER_PROFILE_SQL: Final[
+    str
+] = """
 SELECT
     player_id,
     match_id,
@@ -139,7 +145,9 @@ FROM player_match_stats
 WHERE player_id = $1 AND match_id = $2
 """
 
-UPSERT_MATCH_EVENT_SQL: Final[str] = """
+UPSERT_MATCH_EVENT_SQL: Final[
+    str
+] = """
 INSERT INTO match_events (
     event_id, match_id, team_id, player_id, period, minute, second,
     event_type, x, y, end_x, end_y, successful, is_goal, is_assist,
@@ -175,7 +183,9 @@ ON CONFLICT (event_id) DO UPDATE SET
     recorded_at = EXCLUDED.recorded_at
 """
 
-UPSERT_VIDEO_CLIP_INDEX_SQL: Final[str] = """
+UPSERT_VIDEO_CLIP_INDEX_SQL: Final[
+    str
+] = """
 INSERT INTO video_clip_index (
     event_id, match_id, team_id, player_id, event_type, highlight_kind,
     video_timestamp_ms, clip_url, duration_ms
@@ -193,7 +203,9 @@ ON CONFLICT (event_id) DO UPDATE SET
     duration_ms = EXCLUDED.duration_ms
 """
 
-FETCH_MATCH_EVENTS_SQL: Final[str] = """
+FETCH_MATCH_EVENTS_SQL: Final[
+    str
+] = """
 SELECT
     event_id, match_id, team_id, player_id, period, minute, second,
     event_type, x, y, end_x, end_y, successful, is_goal, is_assist,
@@ -499,9 +511,7 @@ class DatabaseAggregator:
                         *arguments,
                     )
             if not isinstance(stats_id, UUID):
-                raise PlayerProfilePersistenceError(
-                    "Upsert did not return a stats_id UUID."
-                )
+                raise PlayerProfilePersistenceError("Upsert did not return a stats_id UUID.")
             return stats_id
         except PlayerProfilePersistenceError:
             raise
@@ -520,9 +530,7 @@ class DatabaseAggregator:
                 getattr(profile, "player_id", None),
                 match_id,
             )
-            raise PlayerProfilePersistenceError(
-                "Unable to upsert player_match_stats row."
-            ) from exc
+            raise PlayerProfilePersistenceError("Unable to upsert player_match_stats row.") from exc
 
     async def fetch_player_profile(
         self,
@@ -539,9 +547,7 @@ class DatabaseAggregator:
         try:
             pool = self._require_pool()
             async with pool.acquire() as connection:
-                row = await connection.fetchrow(
-                    FETCH_PLAYER_PROFILE_SQL, player_id, match_id
-                )
+                row = await connection.fetchrow(FETCH_PLAYER_PROFILE_SQL, player_id, match_id)
         except StorageError:
             raise
         except (OSError, asyncpg.PostgresError, TypeError, ValueError) as exc:
@@ -550,9 +556,7 @@ class DatabaseAggregator:
                 player_id,
                 match_id,
             )
-            raise PlayerProfilePersistenceError(
-                "Unable to load player_match_stats row."
-            ) from exc
+            raise PlayerProfilePersistenceError("Unable to load player_match_stats row.") from exc
         if row is None:
             return None
         try:
@@ -613,9 +617,7 @@ class DatabaseAggregator:
             raise
         except (OSError, TypeError, asyncpg.PostgresError) as exc:
             LOGGER.exception("Failed to upsert match events match_id=%s", match_id)
-            raise PlayerProfilePersistenceError(
-                "Unable to upsert match_events rows."
-            ) from exc
+            raise PlayerProfilePersistenceError("Unable to upsert match_events rows.") from exc
 
     async def fetch_match_events(
         self,
@@ -641,9 +643,7 @@ class DatabaseAggregator:
             raise
         except (OSError, asyncpg.PostgresError, TypeError, ValueError) as exc:
             LOGGER.exception("Failed to fetch match events match_id=%s", match_id)
-            raise PlayerProfilePersistenceError(
-                "Unable to load match_events rows."
-            ) from exc
+            raise PlayerProfilePersistenceError("Unable to load match_events rows.") from exc
         return [_row_to_match_event(row) for row in rows]
 
 

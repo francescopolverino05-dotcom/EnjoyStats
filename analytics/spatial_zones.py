@@ -255,9 +255,13 @@ def sector_pass_rates(
             dtype=np.int64,
             count=len(selected),
         )
-        length_bins = np.clip((xs / NORMALIZED_MAX * GRID_LENGTH_BINS).astype(np.int64), 0, GRID_LENGTH_BINS - 1)
+        length_bins = np.clip(
+            (xs / NORMALIZED_MAX * GRID_LENGTH_BINS).astype(np.int64), 0, GRID_LENGTH_BINS - 1
+        )
         length_bins = np.where(xs >= NORMALIZED_MAX, GRID_LENGTH_BINS - 1, length_bins)
-        width_bins = np.clip((ys / NORMALIZED_MAX * GRID_WIDTH_BINS).astype(np.int64), 0, GRID_WIDTH_BINS - 1)
+        width_bins = np.clip(
+            (ys / NORMALIZED_MAX * GRID_WIDTH_BINS).astype(np.int64), 0, GRID_WIDTH_BINS - 1
+        )
         width_bins = np.where(ys >= NORMALIZED_MAX, GRID_WIDTH_BINS - 1, width_bins)
         flat = width_bins * GRID_LENGTH_BINS + length_bins
         attempts = np.bincount(flat, minlength=SECTOR_COUNT)
@@ -312,7 +316,9 @@ def spatial_breakdown(
     sectors = sector_pass_rates(scoped, team_id=team_id, player_id=player_id)
     quadrant_attempts = {item: 0 for item in PassQuadrant}
     quadrant_completions = {item: 0 for item in PassQuadrant}
-    entry_attempts = {item: 0 for item in FinalThirdEntryZone if item is not FinalThirdEntryZone.NONE}
+    entry_attempts = {
+        item: 0 for item in FinalThirdEntryZone if item is not FinalThirdEntryZone.NONE
+    }
     entry_completions = {item: 0 for item in entry_attempts}
     lost: list[CoordinateTag] = []
     recovered: list[CoordinateTag] = []

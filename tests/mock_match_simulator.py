@@ -100,7 +100,9 @@ def build_attacking_sequence() -> list[SecondScript]:
             SecondScript(
                 second=index,
                 description=description,
-                event=_pass_event(second=index, start_x=start_x, start_y=start_y, end_x=end_x, end_y=end_y),
+                event=_pass_event(
+                    second=index, start_x=start_x, start_y=start_y, end_x=end_x, end_y=end_y
+                ),
             )
         )
 
@@ -250,9 +252,7 @@ def ensure_api_running(
     except ValueError as exc:
         raise SimulatorError("FastAPI OpenAPI document was not valid JSON.") from exc
     if "Football Analytics" not in str(title):
-        raise SimulatorError(
-            f"Unexpected OpenAPI title {title!r}; is this the AutoData API?"
-        )
+        raise SimulatorError(f"Unexpected OpenAPI title {title!r}; is this the AutoData API?")
 
 
 def _raise_for_api_error(response: httpx.Response, *, action: str) -> None:

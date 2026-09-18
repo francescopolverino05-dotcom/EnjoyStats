@@ -108,9 +108,7 @@ def test_health_ok_when_aggregator_is_injected(client: TestClient) -> None:
 def test_get_player_profile(client: TestClient, store: InMemoryProfileStore) -> None:
     profile = _sample_profile()
     store.rows[(profile.player_id, profile.match_id)] = profile
-    response = client.get(
-        f"/api/v1/matches/{profile.match_id}/players/{profile.player_id}"
-    )
+    response = client.get(f"/api/v1/matches/{profile.match_id}/players/{profile.player_id}")
     assert response.status_code == 200
     body = response.json()
     assert body["player_id"] == str(profile.player_id)

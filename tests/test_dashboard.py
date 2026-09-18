@@ -19,7 +19,12 @@ from app.dummy_data import (
     fallback_profile,
 )
 from app.metrics import PassDirections, directions_from_distribution
-from data_models.player_stats import AttemptSplit, DistributionStats, PassDirectionStats, PassLocationStats
+from data_models.player_stats import (
+    AttemptSplit,
+    DistributionStats,
+    PassDirectionStats,
+    PassLocationStats,
+)
 
 
 def test_catalog_covers_demo_and_showcase_players() -> None:

@@ -59,9 +59,7 @@ class AttemptSplit(StrictModel):
         """Reject splits where successes are greater than attempts."""
 
         if self.success > self.total:
-            raise ValueError(
-                f"success ({self.success}) cannot exceed total ({self.total})."
-            )
+            raise ValueError(f"success ({self.success}) cannot exceed total ({self.total}).")
         return self
 
     @computed_field
@@ -236,9 +234,7 @@ class OffensiveStats(StrictModel):
             missed = not on_target and not blocked
         outcome_count = int(on_target) + int(blocked) + int(missed)
         if outcome_count != 1:
-            raise ValueError(
-                "A shot must be exactly one of on_target, blocked, or missed."
-            )
+            raise ValueError("A shot must be exactly one of on_target, blocked, or missed.")
         return self.model_copy(
             update={
                 "goals": self.goals + int(is_goal),
@@ -352,7 +348,9 @@ class InterceptionStats(StrictModel):
     """
 
     total: int = Field(default=0, ge=0, description="All interceptions.")
-    defensive_third: int = Field(default=0, ge=0, description="Interceptions in the defensive third.")
+    defensive_third: int = Field(
+        default=0, ge=0, description="Interceptions in the defensive third."
+    )
     middle_third: int = Field(default=0, ge=0, description="Interceptions in the middle third.")
     final_third: int = Field(default=0, ge=0, description="Interceptions in the final third.")
 
@@ -643,9 +641,7 @@ class DistributionStats(StrictModel):
 
         locations = self.pass_locations
         band_total = locations.short.total + locations.medium.total + locations.long.total
-        band_success = (
-            locations.short.success + locations.medium.success + locations.long.success
-        )
+        band_success = locations.short.success + locations.medium.success + locations.long.success
         if band_total or band_success:
             if band_total != self.passes.total:
                 raise ValueError(
@@ -745,15 +741,11 @@ class DistributionStats(StrictModel):
             ),
         }
         if start_third is not None:
-            updates["pass_thirds"] = self.pass_thirds.record(
-                start_third, succeeded=succeeded
-            )
+            updates["pass_thirds"] = self.pass_thirds.record(start_third, succeeded=succeeded)
         if into_final_third:
             updates["into_final_third"] = self.into_final_third.add(succeeded=succeeded)
         if direction is not None:
-            updates["pass_directions"] = self.pass_directions.record(
-                direction, succeeded=succeeded
-            )
+            updates["pass_directions"] = self.pass_directions.record(direction, succeeded=succeeded)
         return self.model_copy(update=updates)
 
 

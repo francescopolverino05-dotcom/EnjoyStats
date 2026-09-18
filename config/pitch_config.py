@@ -33,9 +33,7 @@ FIFA_PITCH_WIDTH_M: Final[float] = 68.0
 GOAL_WIDTH_M: Final[float] = 7.32
 PENALTY_AREA_DEPTH_M: Final[float] = 16.5
 PENALTY_AREA_LATERAL_MARGIN_M: Final[float] = 16.5
-PENALTY_AREA_WIDTH_M: Final[float] = (
-    GOAL_WIDTH_M + (2.0 * PENALTY_AREA_LATERAL_MARGIN_M)
-)  # 40.32 m
+PENALTY_AREA_WIDTH_M: Final[float] = GOAL_WIDTH_M + (2.0 * PENALTY_AREA_LATERAL_MARGIN_M)  # 40.32 m
 
 GOAL_AREA_DEPTH_M: Final[float] = 5.5
 GOAL_AREA_WIDTH_M: Final[float] = GOAL_WIDTH_M + (2.0 * GOAL_AREA_DEPTH_M)  # 18.32 m
@@ -328,9 +326,7 @@ def normalized_to_meters(
         the attacking-left-to-right frame.
     """
 
-    oriented_x, oriented_y = _orient_point(
-        x, y, attacking_left_to_right=attacking_left_to_right
-    )
+    oriented_x, oriented_y = _orient_point(x, y, attacking_left_to_right=attacking_left_to_right)
     x_m = (oriented_x / NORMALIZED_MAX) * pitch.length_m
     y_m = (oriented_y / NORMALIZED_MAX) * pitch.width_m
     return x_m, y_m
@@ -430,22 +426,14 @@ def is_inside_penalty_area(
         ``True`` if the oriented point is inside the requested area(s).
     """
 
-    oriented_x, oriented_y = _orient_point(
-        x, y, attacking_left_to_right=attacking_left_to_right
-    )
+    oriented_x, oriented_y = _orient_point(x, y, attacking_left_to_right=attacking_left_to_right)
     if box is PenaltyBox.DEFENSIVE:
-        return penalty_area_bounds(pitch, box=PenaltyBox.DEFENSIVE).contains(
-            oriented_x, oriented_y
-        )
+        return penalty_area_bounds(pitch, box=PenaltyBox.DEFENSIVE).contains(oriented_x, oriented_y)
     if box is PenaltyBox.ATTACKING:
-        return penalty_area_bounds(pitch, box=PenaltyBox.ATTACKING).contains(
-            oriented_x, oriented_y
-        )
+        return penalty_area_bounds(pitch, box=PenaltyBox.ATTACKING).contains(oriented_x, oriented_y)
     return penalty_area_bounds(pitch, box=PenaltyBox.DEFENSIVE).contains(
         oriented_x, oriented_y
-    ) or penalty_area_bounds(pitch, box=PenaltyBox.ATTACKING).contains(
-        oriented_x, oriented_y
-    )
+    ) or penalty_area_bounds(pitch, box=PenaltyBox.ATTACKING).contains(oriented_x, oriented_y)
 
 
 def penalty_box_for_point(
@@ -505,9 +493,7 @@ def classify_normalized_point(
         A frozen :class:`PitchLocation` describing the oriented point.
     """
 
-    oriented_x, oriented_y = _orient_point(
-        x, y, attacking_left_to_right=attacking_left_to_right
-    )
+    oriented_x, oriented_y = _orient_point(x, y, attacking_left_to_right=attacking_left_to_right)
     x_m, y_m = normalized_to_meters(
         oriented_x,
         oriented_y,

@@ -53,4 +53,5 @@ __all__ = [
     "TaggedMatchEvent",
     "TimeFrame",
     "VideoSyncAnchor",
+    "build_playlist_panel",
 ]

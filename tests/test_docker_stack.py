@@ -12,7 +12,10 @@ def test_compose_stack_wires_db_api_and_dashboard() -> None:
     assert "container_name: enjoystats-db" in compose
     assert "container_name: enjoystats-api" in compose
     assert "container_name: enjoystats-dashboard" in compose
-    assert "./storage/postgres_tables.sql:/docker-entrypoint-initdb.d/01-postgres_tables.sql" in compose
+    assert (
+        "./storage/postgres_tables.sql:/docker-entrypoint-initdb.d/01-postgres_tables.sql"
+        in compose
+    )
     assert "condition: service_healthy" in compose
     assert '"8000:8000"' in compose
     assert '"8501:8501"' in compose

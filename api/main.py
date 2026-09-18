@@ -34,9 +34,7 @@ LOGGER = logging.getLogger("enjoystats.api")
 
 API_TITLE: Final[str] = "Football Analytics AutoData API"
 API_VERSION: Final[str] = "0.1.0"
-DEFAULT_DATABASE_URL: Final[str] = (
-    "postgresql://enjoystats:enjoystats@localhost:5432/enjoystats"
-)
+DEFAULT_DATABASE_URL: Final[str] = "postgresql://enjoystats:enjoystats@localhost:5432/enjoystats"
 
 
 class APISettings(BaseSettings):
@@ -364,9 +362,7 @@ def _register_routes(application: FastAPI) -> None:
         if profile.match_id != match_id:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "JSON match_id does not match the match_id in the URL path."
-                ),
+                detail=("JSON match_id does not match the match_id in the URL path."),
             )
         await store.upsert_player_profile(match_id, profile)
         persisted = await store.fetch_player_profile(profile.player_id, match_id)

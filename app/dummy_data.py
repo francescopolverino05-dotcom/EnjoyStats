@@ -54,7 +54,9 @@ class PitchAction:
     shot_outcome: str | None = None
 
 
-def _pass(x: float, y: float, end_x: float, end_y: float, *, successful: bool = True) -> PitchAction:
+def _pass(
+    x: float, y: float, end_x: float, end_y: float, *, successful: bool = True
+) -> PitchAction:
     return PitchAction(
         event_type="pass",
         x=x,
@@ -338,9 +340,7 @@ def fallback_profile(match_id: UUID, player_id: UUID) -> PlayerMatchProfile:
             ground_duels=AttemptSplit(success=4, total=6),
             blocks=BlockStats(shots=1, crosses=0, passes=2),
             fouls=FoulStats(committed=1, won=2),
-            interceptions=InterceptionStats(
-                total=3, defensive_third=1, middle_third=2
-            ),
+            interceptions=InterceptionStats(total=3, defensive_third=1, middle_third=2),
             ball_recoveries=BallRecoveryStats(
                 defensive_third=2,
                 middle_third=3,
