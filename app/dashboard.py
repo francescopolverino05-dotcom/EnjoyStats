@@ -8,8 +8,10 @@ Launch from the repository root::
 from __future__ import annotations
 
 import asyncio
+import importlib
 import math
 import sys
+import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from uuid import UUID
@@ -30,15 +32,21 @@ from matplotlib.patches import Ellipse, Rectangle
 
 from app.client import DEFAULT_BASE_URL, ProfileLoad, fetch_player_profile
 from app.dummy_data import PitchAction, catalog
+from app.metrics import PassDirections
+
+import app.ingest as _ingest_mod
+
+importlib.reload(_ingest_mod)
 from app.ingest import (
+    collect_from_film_path,
     collect_sample_match,
     collect_uploaded_bytes,
     load_from_rundown,
     persist_rundown,
     profile_label,
+    save_uploaded_film,
 )
 from analytics.game_ingest import MatchRundown, rundown_from_mapping, rundown_to_json
-from app.metrics import PassDirections
 from config.pitch_config import (
     CENTRE_CIRCLE_RADIUS_M,
     FIFA_PITCH,
@@ -687,12 +695,64 @@ def render_dashboard(load: ProfileLoad) -> None:
     render_tactical_pitch(load.actions)
 
 
+def _format_elapsed(seconds: float) -> str:
+    """Format a loading timer as ``MM:SS`` or ``H:MM:SS``."""
+
+    total = max(0, int(seconds))
+    minutes, secs = divmod(total, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def _format_bytes(size: int) -> str:
+    if size >= 1024**3:
+        return f"{size / (1024 ** 3):.2f} GB"
+    if size >= 1024**2:
+        return f"{size / (1024 ** 2):.1f} MB"
+    if size >= 1024:
+        return f"{size / 1024:.0f} KB"
+    return f"{size} B"
+
+
+def _eta_label(elapsed: float, fraction: float) -> str:
+    if fraction < 0.04:
+        return "estimating remaining time…"
+    remaining = elapsed * (1.0 - fraction) / max(fraction, 1e-6)
+    return f"~{_format_elapsed(remaining)} remaining"
+
+
+def render_upload_loader() -> tuple[Callable[[str, float], None], Callable[[], None]]:
+    """Main-panel loading bar with elapsed time for a film upload."""
+
+    started = time.monotonic()
+    st.subheader("Uploading match film")
+    st.caption("Saving the file, then watching it to collect stats. Keep this tab open.")
+    bar = st.progress(0, text="Starting upload…")
+    meta = st.empty()
+    meta.caption("Elapsed 00:00  ·  estimating remaining time…")
+
+    def update(label: str, fraction: float) -> None:
+        elapsed = time.monotonic() - started
+        clamped = min(1.0, max(0.0, fraction))
+        bar.progress(clamped, text=label)
+        meta.caption(f"Elapsed {_format_elapsed(elapsed)}  ·  {_eta_label(elapsed, clamped)}")
+
+    def finish() -> None:
+        elapsed = time.monotonic() - started
+        bar.progress(1.0, text="Collection complete")
+        meta.caption(f"Finished in {_format_elapsed(elapsed)}")
+
+    return update, finish
+
+
 def render_match_summary(rundown: MatchRundown) -> None:
     """Headline match totals collected from the uploaded event feed."""
 
     summary = rundown.summary
     st.subheader("Match rundown")
-    st.caption("Automatically collected from the tagged game feed.")
+    st.caption("Automatically collected from the match film.")
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Events", summary.event_count)
     c2.metric("Players", summary.player_count)
@@ -700,29 +760,43 @@ def render_match_summary(rundown: MatchRundown) -> None:
     c4.metric("Shots", summary.shots)
     c5.metric("Passes", summary.passes)
     st.caption(
-        f"Match `{summary.match_id}`  ·  {summary.duration_minutes:.1f} minutes of tagged play"
+        f"Match `{summary.match_id}`  ·  {summary.duration_minutes:.1f} minutes of collected play"
     )
 
 
 def render_sidebar() -> tuple[str, UUID, UUID, MatchRundown | None]:
-    """Upload a game or pick a catalog match, then choose a player rundown."""
+    """Upload a match film (or a catalog match) and open a player rundown."""
 
     rundown_key = "collected_rundown"
     persist_key = "ingest_persist_message"
+    upload_dir = ROOT / ".local-run" / "uploads"
 
     st.sidebar.header("Upload a game")
     st.sidebar.caption(
-        "Drop a tagged AutoData JSON export. EnjoyStats collects player stats "
-        "automatically and opens the full four-pillar rundown."
+        "Drop a full match film (up to 3 GB). EnjoyStats watches the video, "
+        "auto-collects events, and opens the four-pillar rundown. "
+        "No tag JSON and no separate auto-tag repo."
     )
-    uploaded = st.sidebar.file_uploader(
-        "Tagged match JSON",
-        type=["json"],
-        help="A JSON array of events, or an object with match_id, players, and events.",
+    film = st.sidebar.file_uploader(
+        "Match film",
+        type=["mp4", "mov", "mkv", "avi", "m4v", "webm"],
+        help="Broadcast or tactical camera. Local files up to 3 GB.",
     )
-    collect_upload = st.sidebar.button("Collect uploaded game", type="primary")
+    film_path = st.sidebar.text_input(
+        "Or local path (best for ~3 GB files)",
+        value="",
+        help="Absolute path on this machine. Avoids copying a 3 GB upload into RAM.",
+    ).strip()
+    collect_film = st.sidebar.button("Collect stats from film", type="primary")
     collect_sample = st.sidebar.button("Collect sample match")
     clear_collected = st.sidebar.button("Clear collected match")
+    with st.sidebar.expander("Advanced: tagged JSON"):
+        uploaded_json = st.file_uploader(
+            "AutoData JSON (optional)",
+            type=["json"],
+            help="Only if you already have event tags.",
+        )
+        collect_json = st.button("Collect tagged JSON")
     base_url = st.sidebar.text_input("FastAPI base URL", value=DEFAULT_BASE_URL).strip()
     if not base_url:
         base_url = DEFAULT_BASE_URL
@@ -740,12 +814,46 @@ def render_sidebar() -> tuple[str, UUID, UUID, MatchRundown | None]:
             st.session_state[persist_key] = message
         except ValueError as exc:
             error = str(exc)
-    elif collect_upload:
-        if uploaded is None:
-            error = "Choose a JSON game file first."
+    elif collect_film:
+        source_path = film_path
+        try:
+            if not source_path and film is None:
+                error = "Choose a match film or paste a local path first."
+            else:
+                update, finish = render_upload_loader()
+                if film is not None and not source_path:
+                    suffix = Path(getattr(film, "name", "match.mp4")).suffix or ".mp4"
+                    dest = upload_dir / f"upload{suffix.lower()}"
+
+                    def _on_save(written: int, expected: int) -> None:
+                        denom = expected if expected > 0 else max(written, 1)
+                        update(
+                            f"Saving upload {_format_bytes(written)}"
+                            + (f" / {_format_bytes(expected)}" if expected > 0 else ""),
+                            0.35 * (written / denom),
+                        )
+
+                    update("Saving upload to disk…", 0.02)
+                    save_uploaded_film(film, dest, on_progress=_on_save)
+                    source_path = str(dest)
+                update("Starting collection…", 0.36)
+
+                def _on_collect(label: str, fraction: float) -> None:
+                    update(label, 0.36 + 0.64 * fraction)
+
+                rundown = collect_from_film_path(source_path, on_progress=_on_collect)
+                finish()
+                st.session_state[rundown_key] = rundown_to_json(rundown)
+                _persisted, message = asyncio.run(persist_rundown(base_url, rundown))
+                st.session_state[persist_key] = message
+        except ValueError as exc:
+            error = str(exc)
+    elif collect_json:
+        if uploaded_json is None:
+            error = "Choose a JSON tag file first, or upload a film instead."
         else:
             try:
-                rundown = collect_uploaded_bytes(uploaded.getvalue())
+                rundown = collect_uploaded_bytes(uploaded_json.getvalue())
                 st.session_state[rundown_key] = rundown_to_json(rundown)
                 _persisted, message = asyncio.run(persist_rundown(base_url, rundown))
                 st.session_state[persist_key] = message

@@ -375,6 +375,7 @@ python -m streamlit run "$ROOT/app/dashboard.py" \
     --server.address=127.0.0.1 \
     --server.port="$UI_PORT" \
     --server.headless=true \
+    --server.maxUploadSize=3072 \
     --browser.gatherUsageStats=false \
     >"$UI_LOG" 2>&1 &
 UI_PID=$!

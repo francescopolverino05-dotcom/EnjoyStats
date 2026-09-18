@@ -36,4 +36,6 @@ def test_dockerfiles_are_multistage_slim_python() -> None:
     assert "python:3.11-slim AS runtime" in dashboard
     assert 'CMD ["python", "-m", "api.main"]' in api
     assert "streamlit" in dashboard
+    assert "opencv-python-headless" in dashboard
+    assert "maxUploadSize=3072" in dashboard
     assert "http://api:8000" in dashboard
