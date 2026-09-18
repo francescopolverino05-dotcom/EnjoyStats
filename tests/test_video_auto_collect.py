@@ -69,3 +69,43 @@ def test_save_uploaded_film_chunks(tmp_path: Path) -> None:
 
     saved = save_uploaded_film(_Chunks(), dest)
     assert saved.read_bytes() == b"abcdef"
+
+
+def test_progress_callbacks_fire_during_save_and_collect(tmp_path: Path) -> None:
+    dest = tmp_path / "upload.mp4"
+    writes: list[tuple[int, int]] = []
+
+    class _Sized:
+        size = 6
+
+        def __init__(self) -> None:
+            self._data = b"abcdef"
+            self._offset = 0
+
+        def seek(self, offset: int) -> None:
+            self._offset = offset
+
+        def read(self, size: int) -> bytes:
+            chunk = self._data[self._offset : self._offset + size]
+            self._offset += len(chunk)
+            return chunk
+
+    save_uploaded_film(_Sized(), dest, on_progress=lambda done, total: writes.append((done, total)))
+    assert writes
+    assert writes[-1] == (6, 6)
+
+    clip = write_synthetic_match_clip(tmp_path / "clip.avi", frames=16, fps=8)
+    stages: list[str] = []
+    fractions: list[float] = []
+
+    def _on_progress(label: str, fraction: float) -> None:
+        stages.append(label)
+        fractions.append(fraction)
+
+    rundown = collect_from_video(
+        clip, sample_hz=8.0, max_sample_frames=16, on_progress=_on_progress
+    )
+    assert rundown.summary.event_count >= 1
+    assert any("Opening" in stage or "Watching" in stage for stage in stages)
+    assert fractions[0] >= 0.0
+    assert fractions[-1] == 1.0

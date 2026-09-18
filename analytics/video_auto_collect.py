@@ -19,6 +19,7 @@ full match on a laptop CPU without a tag JSON.
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import UUID, uuid5
@@ -35,6 +36,13 @@ DEFAULT_SAMPLE_HZ: float = 1.0
 DEFAULT_MAX_SIDE: int = 640
 DEFAULT_MAX_SAMPLE_FRAMES: int = 8_000
 VIDEO_SUFFIXES: tuple[str, ...] = (".mp4", ".mov", ".mkv", ".avi", ".m4v", ".webm")
+ProgressFn = Callable[[str, float], None]
+
+
+def _emit(on_progress: ProgressFn | None, label: str, fraction: float) -> None:
+    if on_progress is None:
+        return
+    on_progress(label, min(1.0, max(0.0, fraction)))
 
 
 class VideoCollectError(ValueError):
@@ -447,10 +455,13 @@ def sample_and_track(
     sample_hz: float = DEFAULT_SAMPLE_HZ,
     max_side: int = DEFAULT_MAX_SIDE,
     max_sample_frames: int = DEFAULT_MAX_SAMPLE_FRAMES,
+    on_progress: ProgressFn | None = None,
 ) -> list[Track]:
     """Decode a 1 Hz (default) subset of frames and build centroid tracks."""
 
     step = max(1, int(round(info.fps / max(sample_hz, 0.1))))
+    planned = info.frame_count // step if info.frame_count > 0 else max_sample_frames
+    planned = max(1, min(planned, max_sample_frames))
     capture = cv2.VideoCapture(str(info.path))
     if not capture.isOpened():
         raise VideoCollectError(f"OpenCV could not open the match film: {info.path}")
@@ -471,6 +482,12 @@ def sample_and_track(
             next_id = _match_tracks(tracks, detections, frame_index, next_id=next_id)
             sampled += 1
             frame_index += 1
+            if sampled == 1 or sampled % 5 == 0 or sampled >= planned:
+                _emit(
+                    on_progress,
+                    f"Watching the film · frame {sampled}/{planned}",
+                    0.08 + 0.82 * (sampled / planned),
+                )
     finally:
         capture.release()
     return tracks
@@ -482,6 +499,7 @@ def collect_from_video(
     sample_hz: float = DEFAULT_SAMPLE_HZ,
     max_side: int = DEFAULT_MAX_SIDE,
     max_sample_frames: int = DEFAULT_MAX_SAMPLE_FRAMES,
+    on_progress: ProgressFn | None = None,
 ) -> MatchRundown:
     """Watch a match film and return the collected four-pillar rundown.
 
@@ -490,6 +508,7 @@ def collect_from_video(
         sample_hz: Decoded frames per second of match time.
         max_side: Longest resized edge in pixels.
         max_sample_frames: Hard cap so a multi-hour file cannot run forever.
+        on_progress: Optional ``(label, fraction)`` callback for a loading bar.
 
     Returns:
         :class:`MatchRundown` ready for the dashboard.
@@ -498,13 +517,23 @@ def collect_from_video(
         VideoCollectError: If the film is missing, too large, or unreadable.
     """
 
+    _emit(on_progress, "Opening match film…", 0.02)
     info = probe_video(path)
+    minutes = info.duration_seconds / 60.0
+    size_gb = info.size_bytes / (1024**3)
+    _emit(
+        on_progress,
+        f"Opened {info.path.name} · {minutes:.1f} min · {size_gb:.2f} GB",
+        0.06,
+    )
     tracks = sample_and_track(
         info,
         sample_hz=sample_hz,
         max_side=max_side,
         max_sample_frames=max_sample_frames,
+        on_progress=on_progress,
     )
+    _emit(on_progress, "Collecting player stats…", 0.93)
     match_id = uuid5(AUTO_NAMESPACE, f"video:{info.path.name}:{info.size_bytes}")
     team_id = uuid5(AUTO_NAMESPACE, f"team:{match_id}")
     clip_url = info.path.as_uri()
@@ -515,7 +544,9 @@ def collect_from_video(
         team_id=team_id,
         clip_url=clip_url,
     )
-    return collect_game(GamePayload(match_id=match_id, players=roster, events=events))
+    rundown = collect_game(GamePayload(match_id=match_id, players=roster, events=events))
+    _emit(on_progress, "Rundown ready", 1.0)
+    return rundown
 
 
 def write_synthetic_match_clip(path: Path, *, frames: int = 24, fps: int = 8) -> Path:

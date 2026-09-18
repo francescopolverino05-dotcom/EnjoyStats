@@ -11,6 +11,7 @@ import asyncio
 import importlib
 import math
 import sys
+import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
 from uuid import UUID
@@ -694,6 +695,58 @@ def render_dashboard(load: ProfileLoad) -> None:
     render_tactical_pitch(load.actions)
 
 
+def _format_elapsed(seconds: float) -> str:
+    """Format a loading timer as ``MM:SS`` or ``H:MM:SS``."""
+
+    total = max(0, int(seconds))
+    minutes, secs = divmod(total, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    return f"{minutes:02d}:{secs:02d}"
+
+
+def _format_bytes(size: int) -> str:
+    if size >= 1024**3:
+        return f"{size / (1024 ** 3):.2f} GB"
+    if size >= 1024**2:
+        return f"{size / (1024 ** 2):.1f} MB"
+    if size >= 1024:
+        return f"{size / 1024:.0f} KB"
+    return f"{size} B"
+
+
+def _eta_label(elapsed: float, fraction: float) -> str:
+    if fraction < 0.04:
+        return "estimating remaining time…"
+    remaining = elapsed * (1.0 - fraction) / max(fraction, 1e-6)
+    return f"~{_format_elapsed(remaining)} remaining"
+
+
+def render_upload_loader() -> tuple[Callable[[str, float], None], Callable[[], None]]:
+    """Main-panel loading bar with elapsed time for a film upload."""
+
+    started = time.monotonic()
+    st.subheader("Uploading match film")
+    st.caption("Saving the file, then watching it to collect stats. Keep this tab open.")
+    bar = st.progress(0, text="Starting upload…")
+    meta = st.empty()
+    meta.caption("Elapsed 00:00  ·  estimating remaining time…")
+
+    def update(label: str, fraction: float) -> None:
+        elapsed = time.monotonic() - started
+        clamped = min(1.0, max(0.0, fraction))
+        bar.progress(clamped, text=label)
+        meta.caption(f"Elapsed {_format_elapsed(elapsed)}  ·  {_eta_label(elapsed, clamped)}")
+
+    def finish() -> None:
+        elapsed = time.monotonic() - started
+        bar.progress(1.0, text="Collection complete")
+        meta.caption(f"Finished in {_format_elapsed(elapsed)}")
+
+    return update, finish
+
+
 def render_match_summary(rundown: MatchRundown) -> None:
     """Headline match totals collected from the uploaded event feed."""
 
@@ -764,19 +817,32 @@ def render_sidebar() -> tuple[str, UUID, UUID, MatchRundown | None]:
     elif collect_film:
         source_path = film_path
         try:
-            if film is not None and not source_path:
-                suffix = Path(getattr(film, "name", "match.mp4")).suffix or ".mp4"
-                dest = upload_dir / f"upload{suffix.lower()}"
-                save_uploaded_film(film, dest)
-                source_path = str(dest)
-            if not source_path:
+            if not source_path and film is None:
                 error = "Choose a match film or paste a local path first."
             else:
-                with st.spinner(
-                    "Watching the film and collecting stats. "
-                    "A full match can take several minutes on CPU."
-                ):
-                    rundown = collect_from_film_path(source_path)
+                update, finish = render_upload_loader()
+                if film is not None and not source_path:
+                    suffix = Path(getattr(film, "name", "match.mp4")).suffix or ".mp4"
+                    dest = upload_dir / f"upload{suffix.lower()}"
+
+                    def _on_save(written: int, expected: int) -> None:
+                        denom = expected if expected > 0 else max(written, 1)
+                        update(
+                            f"Saving upload {_format_bytes(written)}"
+                            + (f" / {_format_bytes(expected)}" if expected > 0 else ""),
+                            0.35 * (written / denom),
+                        )
+
+                    update("Saving upload to disk…", 0.02)
+                    save_uploaded_film(film, dest, on_progress=_on_save)
+                    source_path = str(dest)
+                update("Starting collection…", 0.36)
+
+                def _on_collect(label: str, fraction: float) -> None:
+                    update(label, 0.36 + 0.64 * fraction)
+
+                rundown = collect_from_film_path(source_path, on_progress=_on_collect)
+                finish()
                 st.session_state[rundown_key] = rundown_to_json(rundown)
                 _persisted, message = asyncio.run(persist_rundown(base_url, rundown))
                 st.session_state[persist_key] = message
