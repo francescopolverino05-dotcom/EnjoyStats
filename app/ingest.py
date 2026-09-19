@@ -17,6 +17,7 @@ from analytics.game_ingest import (
     parse_game_payload,
 )
 from analytics.sample_game import sample_game_payload
+from analytics.match_tags import collect_from_tag_xml
 from analytics.video_auto_collect import (
     MAX_VIDEO_BYTES,
     VIDEO_SUFFIXES,
@@ -165,8 +166,15 @@ def collect_from_film_path(
         resolved = resolved.resolve()
     except OSError as exc:
         raise ValueError(f"Match film path is not readable ({exc}).") from exc
+    if resolved.suffix.lower() == ".xml":
+        if not resolved.is_file():
+            raise ValueError(f"Tag sheet not found: {resolved}")
+        try:
+            return collect_from_tag_xml(resolved.read_text(encoding="utf-8"))
+        except ValueError as exc:
+            raise ValueError(f"Tag XML could not be collected ({exc}).") from exc
     if resolved.suffix.lower() not in VIDEO_SUFFIXES:
-        raise ValueError("Choose a match film (mp4, mov, mkv, avi, m4v, webm), not a tag JSON.")
+        raise ValueError("Choose a match film (mp4, mov, mkv, avi, m4v, webm) or a tag XML.")
     if not resolved.is_file():
         raise ValueError(f"Match film not found: {resolved}")
     try:

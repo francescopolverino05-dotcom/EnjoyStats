@@ -51,6 +51,7 @@ from app.ingest import (
 from analytics.video_auto_collect import film_inbox_dir, film_upload_dir, normalize_film_path
 from api.film_upload import upload_page_html
 from analytics.game_ingest import MatchRundown, rundown_from_mapping, rundown_to_json
+from analytics.match_tags import attacks_from_events, rundown_to_xml
 from config.pitch_config import (
     CENTRE_CIRCLE_RADIUS_M,
     FIFA_PITCH,
@@ -764,7 +765,51 @@ def render_match_summary(rundown: MatchRundown) -> None:
     c4.metric("Shots", summary.shots)
     c5.metric("Passes", summary.passes)
     st.caption(
-        f"Match `{summary.match_id}`  ·  {summary.duration_minutes:.1f} minutes of collected play"
+        f"Match `{summary.match_id}`  ·  {summary.duration_minutes:.1f} minutes of collected play. "
+        "Every number below is counted from the match tags (passes, shots, "
+        "recoveries) — the same sheet Spiideo-style XML export uses."
+    )
+    render_match_tags(rundown)
+
+
+def render_match_tags(rundown: MatchRundown) -> None:
+    """Show the tag sheet the rundown was counted from, plus XML download."""
+
+    st.subheader("Match tags")
+    st.caption(
+        "Each row is one tagged action. Player pillars are the sums of these "
+        "tags. Download the XML to inspect or re-import the same sheet."
+    )
+    attacks = attacks_from_events(rundown.events)
+    a1, a2 = st.columns(2)
+    a1.metric("Attack sequences", len(attacks))
+    a2.metric(
+        "Attacks ending in a shot/goal",
+        sum(1 for attack in attacks if attack["end_type"] in {"shot", "goal"}),
+    )
+    names = {profile.player_id: profile_label(profile) for profile in rundown.players}
+    rows = []
+    for event in rundown.events[:250]:
+        actor = names.get(event.player_id, "—") if event.player_id else "—"
+        rows.append(
+            {
+                "Clock": f"{event.period}' {event.minute:02d}:{event.second:02d}",
+                "Tag": event.event_type.value,
+                "Player": actor,
+                "X": round(event.x, 1),
+                "Y": round(event.y, 1),
+                "End X": None if event.end_x is None else round(event.end_x, 1),
+                "Goal": event.is_goal,
+            }
+        )
+    st.dataframe(rows, hide_index=True, width="stretch")
+    if len(rundown.events) > 250:
+        st.caption(f"Showing the first 250 of {len(rundown.events)} tags.")
+    st.download_button(
+        "Download match tags (XML)",
+        data=rundown_to_xml(rundown),
+        file_name="match_tags.xml",
+        mime="application/xml",
     )
 
 

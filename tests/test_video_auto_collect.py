@@ -89,7 +89,7 @@ def test_synthetic_film_collects_stats_without_tag_json(tmp_path: Path) -> None:
     assert rundown.summary.event_count >= 1
     assert rundown.summary.passes + rundown.summary.shots >= 1
     names = {profile.player_name for profile in rundown.players}
-    assert any(name.startswith("Player ") for name in names)
+    assert any("Home" in name or "Away" in name or name.startswith("Player ") for name in names)
 
 
 def test_collect_from_film_path_wrapper(tmp_path: Path) -> None:

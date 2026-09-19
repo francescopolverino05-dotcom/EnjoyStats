@@ -32,6 +32,7 @@ import cv2
 import numpy as np
 
 from analytics.game_ingest import GamePayload, MatchRundown, PlayerRosterEntry, collect_game
+from analytics.match_tags import infer_team_names, write_sidecar_xml
 from data_models.events import EventType, MatchEvent, ShotOutcome
 
 AUTO_NAMESPACE: UUID = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
@@ -260,6 +261,7 @@ class Detection:
     y: float
     area: float
     kind: str
+    bgr: tuple[float, float, float] = (0.0, 0.0, 0.0)
 
 
 @dataclass(slots=True)
@@ -274,6 +276,8 @@ class Track:
     last_x: float = 0.0
     last_y: float = 0.0
     missing: int = 0
+    bgr: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    team: int = 0
 
 
 def probe_video(path: Path) -> VideoInfo:
@@ -349,33 +353,71 @@ def _to_pitch(x_px: float, y_px: float, width: int, height: int) -> tuple[float,
     return x, y
 
 
-def detect_objects(frame: np.ndarray) -> list[Detection]:
-    """Find player- and ball-sized blobs on a sampled frame.
+def _pitch_mask(frame: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
+    """Return ``(pitch_mask, grass_mask, pitch_ratio)`` for a broadcast frame.
 
-    Broadcast films: subtract green grass. Synthetic / indoor films: fall
-    back to adaptive thresholding so tests do not need a GPU detector.
+    Serie B / 540p grass is often desaturated, so the hue window is wider
+    than a textbook green-screen key. The largest connected field region is
+    kept so stands and scoreboard chrome stay outside the detector.
+    """
+
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    grass = cv2.inRange(hsv, (18, 12, 25), (100, 255, 230))
+    grass = cv2.bitwise_or(grass, cv2.inRange(hsv, (8, 12, 25), (40, 90, 230)))
+    vivid = cv2.inRange(hsv, (35, 40, 40), (90, 255, 255))
+    grass = cv2.bitwise_or(grass, vivid)
+    closed = cv2.morphologyEx(grass, cv2.MORPH_CLOSE, np.ones((25, 25), np.uint8), iterations=2)
+    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+    if not contours:
+        return mask, grass, 0.0
+    largest = max(contours, key=cv2.contourArea)
+    frame_area = float(max(frame.shape[0] * frame.shape[1], 1))
+    if cv2.contourArea(largest) / frame_area < 0.12:
+        return mask, grass, cv2.contourArea(largest) / frame_area
+    cv2.drawContours(mask, [largest], -1, 255, -1)
+    mask = cv2.erode(mask, np.ones((9, 9), np.uint8), iterations=1)
+    return mask, grass, float(np.mean(mask > 0))
+
+
+def _contour_bgr(frame: np.ndarray, contour: np.ndarray) -> tuple[float, float, float]:
+    mask = np.zeros(frame.shape[:2], dtype=np.uint8)
+    cv2.drawContours(mask, [contour], -1, 255, -1)
+    mean = cv2.mean(frame, mask=mask)
+    return (float(mean[0]), float(mean[1]), float(mean[2]))
+
+
+def detect_objects(frame: np.ndarray) -> list[Detection]:
+    """Find player-sized blobs on the grass, ignoring stands and graphics.
+
+    Broadcast films: key a wide grass window, keep the largest pitch
+    contour, and take the 22 largest player-sized holes inside it.
+    Synthetic clips with vivid green still match the same path.
     """
 
     if frame.size == 0:
         return []
     height, width = frame.shape[:2]
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    green = cv2.inRange(hsv, (35, 40, 40), (90, 255, 255))
-    objects = cv2.bitwise_not(green)
-    green_ratio = float(np.mean(green > 0))
-    if green_ratio < 0.15:
+    mask, grass, pitch_ratio = _pitch_mask(frame)
+    if pitch_ratio < 0.12:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         objects = cv2.adaptiveThreshold(
             gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 21, 7
         )
-    kernel = np.ones((3, 3), np.uint8)
-    objects = cv2.morphologyEx(objects, cv2.MORPH_OPEN, kernel, iterations=1)
-    contours, _ = cv2.findContours(objects, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    frame_area = float(max(width * height, 1))
-    detections: list[Detection] = []
+        pitch_area = float(max(width * height, 1))
+        search = objects
+        color_source = frame
+    else:
+        inside = cv2.bitwise_and(cv2.bitwise_not(grass), mask)
+        search = cv2.morphologyEx(inside, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8), iterations=1)
+        pitch_area = float(max(int(np.count_nonzero(mask)), 1))
+        color_source = frame
+    contours, _ = cv2.findContours(search, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    candidates: list[tuple[float, Detection]] = []
     for contour in contours:
         area = float(cv2.contourArea(contour))
-        if area < frame_area * 0.00015 or area > frame_area * 0.08:
+        frac = area / pitch_area
+        if frac < 0.00008 or frac > 0.025:
             continue
         moments = cv2.moments(contour)
         if moments["m00"] == 0:
@@ -383,15 +425,17 @@ def detect_objects(frame: np.ndarray) -> list[Detection]:
         cx = moments["m10"] / moments["m00"]
         cy = moments["m01"] / moments["m00"]
         x, y = _to_pitch(cx, cy, width, height)
-        kind = "ball" if area < frame_area * 0.0025 else "player"
-        detections.append(Detection(x=x, y=y, area=area, kind=kind))
-    balls = [item for item in detections if item.kind == "ball"]
-    if len(balls) > 1:
-        smallest = min(balls, key=lambda item: item.area)
-        for item in detections:
-            if item.kind == "ball" and item is not smallest:
-                item.kind = "player"
-    return detections
+        kind = "ball" if frac < 0.0004 else "player"
+        detection = Detection(
+            x=x, y=y, area=area, kind=kind, bgr=_contour_bgr(color_source, contour)
+        )
+        candidates.append((area, detection))
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    players = [item[1] for item in candidates if item[1].kind == "player"][:22]
+    balls = [item[1] for item in candidates if item[1].kind == "ball"]
+    if balls:
+        players.append(min(balls, key=lambda item: item.area))
+    return players
 
 
 def _match_tracks(
@@ -425,6 +469,7 @@ def _match_tracks(
         track.last_x = detection.x
         track.last_y = detection.y
         track.missing = 0
+        track.bgr = detection.bgr
     for detection in unused:
         tracks.append(
             Track(
@@ -436,6 +481,7 @@ def _match_tracks(
                 last_x=detection.x,
                 last_y=detection.y,
                 missing=0,
+                bgr=detection.bgr,
             )
         )
         next_id += 1
@@ -483,6 +529,101 @@ def _clock(frame_index: int, fps: float) -> tuple[int, int, int, int]:
     return period, minute, second, total_ms
 
 
+def _hue(bgr: tuple[float, float, float]) -> float:
+    pixel = np.uint8([[bgr]])
+    hsv = cv2.cvtColor(pixel, cv2.COLOR_BGR2HSV)
+    return float(hsv[0, 0, 0])
+
+
+def _assign_teams(players: list[Track]) -> None:
+    """Split tracks into two sides using shirt colour, then mean pitch X."""
+
+    if len(players) < 2:
+        for track in players:
+            track.team = 0
+        return
+    hues = [_hue(track.bgr) for track in players]
+    spread = max(hues) - min(hues)
+    if spread >= 18:
+        low = min(hues)
+        high = max(hues)
+        mid = (low + high) / 2.0
+        for track, hue in zip(players, hues, strict=True):
+            track.team = 0 if hue <= mid else 1
+        return
+    xs = [sum(track.xs) / len(track.xs) for track in players]
+    mid_x = sorted(xs)[len(xs) // 2]
+    for track, mean_x in zip(players, xs, strict=True):
+        track.team = 0 if mean_x <= mid_x else 1
+
+
+def _play_point(
+    players: list[Track],
+    ball: Track | None,
+    frame_index: int,
+) -> tuple[float, float] | None:
+    """Ball location, or the tightest on-pitch player cluster (the action)."""
+
+    if ball is not None and frame_index in ball.frames:
+        index = ball.frames.index(frame_index)
+        return ball.xs[index], ball.ys[index]
+    points = [
+        (track.xs[track.frames.index(frame_index)], track.ys[track.frames.index(frame_index)])
+        for track in players
+        if frame_index in track.frames
+    ]
+    if not points:
+        return None
+    if len(points) == 1:
+        return points[0]
+    best = points[0]
+    best_score = 1e9
+    for candidate in points:
+        nearby = sorted(math.hypot(px - candidate[0], py - candidate[1]) for px, py in points)
+        score = sum(nearby[: min(4, len(nearby))])
+        if score < best_score:
+            best_score = score
+            best = candidate
+    return best
+
+
+def _owner_near_point(
+    players: list[Track],
+    point: tuple[float, float],
+    frame_index: int,
+    *,
+    max_distance: float = 22.0,
+) -> Track | None:
+    closest: Track | None = None
+    closest_distance = max_distance
+    for player in players:
+        if frame_index not in player.frames:
+            continue
+        index = player.frames.index(frame_index)
+        distance = math.hypot(player.xs[index] - point[0], player.ys[index] - point[1])
+        if distance < closest_distance:
+            closest_distance = distance
+            closest = player
+    return closest
+
+
+def _team_goal_x(team: int, players: list[Track]) -> float:
+    """Attacking goal X (0 or 100) from which way the team advances the ball."""
+
+    def _disp(side: int) -> float:
+        members = [track for track in players if track.team == side]
+        if not members:
+            return 0.0
+        return sum(track.xs[-1] - track.xs[0] for track in members) / len(members)
+
+    home_disp = _disp(0)
+    away_disp = _disp(1)
+    home_attacks_right = home_disp >= away_disp
+    if team == 0:
+        return 100.0 if home_attacks_right else 0.0
+    return 0.0 if home_attacks_right else 100.0
+
+
 def events_from_tracks(
     tracks: list[Track],
     *,
@@ -490,37 +631,71 @@ def events_from_tracks(
     match_id: UUID,
     team_id: UUID,
     clip_url: str,
+    home_name: str = "Home",
+    away_name: str = "Away",
 ) -> tuple[list[MatchEvent], list[PlayerRosterEntry]]:
-    """Turn possession changes into AutoData events plus a generated roster."""
+    """Turn tracked play into Spiideo-style tags plus a two-team roster.
+
+    Possession is the player nearest the play point (the ball when it is
+    visible, otherwise the tightest player cluster). Same-team owner
+    changes become passes / crosses; opposition changes become
+    recoveries and interceptions; a fast move into the attacking box
+    becomes a shot, and a finish into the goal mouth becomes a goal.
+    Those tags are the only source of the four-pillar rundown.
+    """
 
     players = [track for track in tracks if track.kind == "player" and len(track.frames) >= 3]
     players.sort(key=lambda track: len(track.frames), reverse=True)
     players = players[:22]
     balls = [track for track in tracks if track.kind == "ball" and len(track.frames) >= 2]
     ball = max(balls, key=lambda track: len(track.frames), default=None)
+    if ball is None:
+        mobile = [
+            track
+            for track in players
+            if math.hypot(track.xs[-1] - track.xs[0], track.ys[-1] - track.ys[0]) >= 35.0
+        ]
+        if mobile:
+            ball = max(
+                mobile,
+                key=lambda track: math.hypot(track.xs[-1] - track.xs[0], track.ys[-1] - track.ys[0]),
+            )
+            players = [track for track in players if track is not ball]
     if not players:
         raise VideoCollectError(
             "No players found in the film. Try a clearer tactical / broadcast view."
         )
+    _assign_teams(players)
+    team_ids = (
+        uuid5(AUTO_NAMESPACE, f"{match_id}-team-{home_name}"),
+        uuid5(AUTO_NAMESPACE, f"{match_id}-team-{away_name}"),
+    )
+    goal_x = (_team_goal_x(0, players), _team_goal_x(1, players))
 
     roster: list[PlayerRosterEntry] = []
     player_ids: dict[int, UUID] = {}
-    for index, track in enumerate(players, start=1):
+    jersey_by_team = {0: 1, 1: 1}
+    for track in players:
         mean_x = sum(track.xs) / len(track.xs)
-        if mean_x < 34:
+        attack_x = goal_x[track.team]
+        depth = mean_x if attack_x >= 50 else 100.0 - mean_x
+        if depth < 34:
             position = "CB"
-        elif mean_x < 66:
+        elif depth < 66:
             position = "CM"
         else:
             position = "ST"
+        jersey = min(jersey_by_team[track.team], 99)
+        jersey_by_team[track.team] += 1
+        team_name = home_name if track.team == 0 else away_name
         player_id = uuid5(AUTO_NAMESPACE, f"{match_id}-player-{track.track_id}")
         player_ids[track.track_id] = player_id
         roster.append(
             PlayerRosterEntry(
                 player_id=player_id,
-                team_id=team_id,
-                jersey_number=min(index, 99),
-                player_name=f"Player {index}",
+                team_id=team_ids[track.team],
+                jersey_number=jersey,
+                player_name=f"{team_name} {position} {jersey}",
                 position=position,
             )
         )
@@ -531,80 +706,117 @@ def events_from_tracks(
 
     events: list[MatchEvent] = []
     previous_owner: Track | None = None
-    previous_ball: tuple[float, float] | None = None
-    seen_owner = False
+    previous_point: tuple[float, float] | None = None
+    pending_shot: MatchEvent | None = None
+
+    def _stamp(frame_index: int) -> tuple[int, int, int, int]:
+        return _clock(frame_index, fps)
 
     for frame_index in frame_indexes:
-        owner = _owner_at(players, ball, frame_index)
-        ball_xy: tuple[float, float] | None = None
-        if ball is not None and frame_index in ball.frames:
-            ball_i = ball.frames.index(frame_index)
-            ball_xy = (ball.xs[ball_i], ball.ys[ball_i])
-        period, minute, second, timestamp_ms = _clock(frame_index, fps)
+        point = _play_point(players, ball, frame_index)
+        owner = _owner_near_point(players, point, frame_index) if point else None
+        period, minute, second, timestamp_ms = _stamp(frame_index)
+        if point is None:
+            continue
 
-        if (
-            owner is not None
-            and previous_owner is not None
-            and owner.track_id != previous_owner.track_id
-            and previous_ball is not None
-            and ball_xy is not None
-        ):
-            start_x, start_y = previous_ball
-            end_x, end_y = ball_xy
+        if previous_owner is not None and previous_point is not None and owner is not None:
+            start_x, start_y = previous_point
+            end_x, end_y = point
             travel = math.hypot(end_x - start_x, end_y - start_y)
-            if travel >= 4.0:
-                event_type = (
-                    EventType.SHOT if end_x >= 88 and end_x > start_x + 6 else EventType.PASS
-                )
-                is_goal = event_type is EventType.SHOT and end_x >= 96.0
-                payload: dict[str, object] = {
-                    "match_id": match_id,
-                    "team_id": team_id,
-                    "player_id": player_ids[previous_owner.track_id],
-                    "period": period,
-                    "minute": minute,
-                    "second": second,
-                    "event_type": event_type,
-                    "x": start_x,
-                    "y": start_y,
-                    "end_x": end_x,
-                    "end_y": end_y,
-                    "successful": True,
-                    "is_progressive": end_x > start_x + 8,
-                    "video_timestamp_ms": timestamp_ms,
-                    "clip_url": clip_url,
-                }
-                if event_type is EventType.SHOT:
-                    payload["shot_outcome"] = (
-                        ShotOutcome.ON_TARGET if is_goal or end_x >= 90 else ShotOutcome.MISSED
-                    )
-                    payload["is_goal"] = is_goal
-                events.append(MatchEvent.model_validate(payload))
-        elif owner is not None and previous_owner is None and seen_owner and ball_xy is not None:
-            events.append(
-                MatchEvent.model_validate(
-                    {
-                        "match_id": match_id,
-                        "team_id": team_id,
-                        "player_id": player_ids[owner.track_id],
-                        "period": period,
-                        "minute": minute,
-                        "second": second,
-                        "event_type": EventType.BALL_RECOVERY,
-                        "x": ball_xy[0],
-                        "y": ball_xy[1],
-                        "successful": True,
-                        "video_timestamp_ms": timestamp_ms,
-                        "clip_url": clip_url,
-                    }
-                )
+            toward_goal = abs(end_x - goal_x[previous_owner.team]) < abs(
+                start_x - goal_x[previous_owner.team]
             )
+            box_x = 82.0 if goal_x[previous_owner.team] >= 50 else 18.0
+            in_box = end_x >= box_x if goal_x[previous_owner.team] >= 50 else end_x <= box_x
+            mouth = abs(end_x - goal_x[previous_owner.team]) <= 5.0
+            same_team = owner.team == previous_owner.team
+            actor = previous_owner
+            payload: dict[str, object] = {
+                "match_id": match_id,
+                "team_id": team_ids[actor.team],
+                "player_id": player_ids[actor.track_id],
+                "period": period,
+                "minute": minute,
+                "second": second,
+                "x": start_x,
+                "y": start_y,
+                "end_x": end_x,
+                "end_y": end_y,
+                "successful": True,
+                "is_progressive": toward_goal and travel >= 8.0,
+                "attacking_left_to_right": goal_x[actor.team] >= 50,
+                "video_timestamp_ms": timestamp_ms,
+                "clip_url": clip_url,
+            }
+            if owner.track_id != actor.track_id and travel >= 3.5:
+                if same_team:
+                    wide = start_y <= 18.0 or start_y >= 82.0
+                    cutback = in_box and abs(end_y - 50.0) < abs(start_y - 50.0) and wide
+                    if cutback:
+                        payload["event_type"] = EventType.CUTBACK
+                    elif wide and in_box:
+                        payload["event_type"] = EventType.CROSS
+                    else:
+                        payload["event_type"] = EventType.PASS
+                    events.append(MatchEvent.model_validate(payload))
+                else:
+                    events.append(
+                        MatchEvent.model_validate(
+                            {
+                                **payload,
+                                "event_type": EventType.BALL_LOST,
+                                "end_x": None,
+                                "end_y": None,
+                                "successful": False,
+                            }
+                        )
+                    )
+                    events.append(
+                        MatchEvent.model_validate(
+                            {
+                                **payload,
+                                "team_id": team_ids[owner.team],
+                                "player_id": player_ids[owner.track_id],
+                                "event_type": EventType.INTERCEPTION,
+                                "end_x": None,
+                                "end_y": None,
+                                "x": end_x,
+                                "y": end_y,
+                            }
+                        )
+                    )
+            elif (
+                toward_goal
+                and travel >= 6.0
+                and in_box
+                and (owner.track_id == actor.track_id or same_team)
+            ):
+                is_goal = mouth
+                payload["event_type"] = EventType.GOAL if is_goal else EventType.SHOT
+                payload["is_goal"] = is_goal
+                payload["shot_outcome"] = (
+                    ShotOutcome.ON_TARGET if is_goal or mouth else ShotOutcome.MISSED
+                )
+                shot = MatchEvent.model_validate(payload)
+                events.append(shot)
+                pending_shot = None if is_goal else shot
+            elif pending_shot is not None and mouth and toward_goal:
+                events.append(
+                    MatchEvent.model_validate(
+                        {
+                            **payload,
+                            "event_type": EventType.GOAL,
+                            "is_goal": True,
+                            "shot_outcome": ShotOutcome.ON_TARGET,
+                            "player_id": pending_shot.player_id,
+                            "team_id": pending_shot.team_id,
+                        }
+                    )
+                )
+                pending_shot = None
 
-        if owner is not None:
-            seen_owner = True
-        previous_owner = owner
-        if ball_xy is not None:
-            previous_ball = ball_xy
+        previous_owner = owner if owner is not None else previous_owner
+        previous_point = point
 
     play_types = {
         EventType.PASS,
@@ -615,17 +827,17 @@ def events_from_tracks(
         EventType.GOAL,
     }
     if not any(event.event_type in play_types for event in events):
-        for track in players[:3]:
+        for track in players[:4]:
             period, minute, second, timestamp_ms = _clock(track.frames[-1], fps)
             start_x, start_y = track.xs[0], track.ys[0]
             end_x, end_y = track.xs[-1], track.ys[-1]
             if abs(end_x - start_x) < 1.0 and abs(end_y - start_y) < 1.0:
-                end_x = min(100.0, start_x + 8.0)
+                end_x = min(100.0, max(0.0, start_x + (8.0 if goal_x[track.team] >= 50 else -8.0)))
             events.append(
                 MatchEvent.model_validate(
                     {
                         "match_id": match_id,
-                        "team_id": team_id,
+                        "team_id": team_ids[track.team],
                         "player_id": player_ids[track.track_id],
                         "period": period,
                         "minute": minute,
@@ -636,7 +848,7 @@ def events_from_tracks(
                         "end_x": end_x,
                         "end_y": end_y,
                         "successful": True,
-                        "is_progressive": end_x > start_x,
+                        "is_progressive": abs(end_x - start_x) >= 8.0,
                         "video_timestamp_ms": timestamp_ms,
                         "clip_url": clip_url,
                     }
@@ -731,18 +943,25 @@ def collect_from_video(
         max_sample_frames=max_sample_frames,
         on_progress=on_progress,
     )
-    _emit(on_progress, "Collecting player stats…", 0.93)
+    _emit(on_progress, "Tagging play and collecting stats…", 0.93)
     match_id = uuid5(AUTO_NAMESPACE, f"video:{info.path.name}:{info.size_bytes}")
     team_id = uuid5(AUTO_NAMESPACE, f"team:{match_id}")
     clip_url = info.path.as_uri()
+    home_name, away_name = infer_team_names(info.path.name)
     events, roster = events_from_tracks(
         tracks,
         fps=info.fps,
         match_id=match_id,
         team_id=team_id,
         clip_url=clip_url,
+        home_name=home_name,
+        away_name=away_name,
     )
     rundown = collect_game(GamePayload(match_id=match_id, players=roster, events=events))
+    try:
+        write_sidecar_xml(rundown, info.path)
+    except OSError:
+        pass
     _emit(on_progress, "Rundown ready", 1.0)
     return rundown
 
@@ -771,10 +990,11 @@ def write_synthetic_match_clip(path: Path, *, frames: int = 24, fps: int = 8) ->
             player_a = (50, 90)
             player_b = (240, 90)
             t = index / max(frames - 1, 1)
-            if t < 0.55:
-                ball_x = int(60 + (220 - 60) * (t / 0.55))
+            if t < 0.45:
+                ball_x = int(60 + (210 - 60) * (t / 0.45))
             else:
-                ball_x = int(220 + (305 - 220) * ((t - 0.55) / 0.45))
+                ball_x = int(210 + (316 - 210) * ((t - 0.45) / 0.55))
+            player_b = (int(240 + 20 * t), 90)
             cv2.circle(frame, player_a, 12, (180, 80, 20), -1)
             cv2.circle(frame, player_b, 12, (20, 40, 200), -1)
             cv2.circle(frame, (ball_x, 90), 5, (240, 240, 240), -1)
