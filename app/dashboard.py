@@ -49,6 +49,7 @@ from app.ingest import (
     save_uploaded_film,
 )
 from analytics.video_auto_collect import film_inbox_dir, film_upload_dir, normalize_film_path
+from api.film_upload import upload_page_html
 from analytics.game_ingest import MatchRundown, rundown_from_mapping, rundown_to_json
 from config.pitch_config import (
     CENTRE_CIRCLE_RADIUS_M,
@@ -730,9 +731,9 @@ def render_upload_loader() -> tuple[Callable[[str, float], None], Callable[[], N
     """Main-panel loading bar with elapsed time for a film upload."""
 
     started = time.monotonic()
-    st.subheader("Uploading match film")
-    st.caption("Saving the file, then watching it to collect stats. Keep this tab open.")
-    bar = st.progress(0, text="Starting upload…")
+    st.subheader("Collecting match stats")
+    st.caption("Watching the film on disk and building the rundown. Keep this tab open.")
+    bar = st.progress(0, text="Preparing the match film…")
     meta = st.empty()
     meta.caption("Elapsed 00:00  ·  estimating remaining time…")
 
@@ -827,11 +828,13 @@ def render_sidebar() -> tuple[str, UUID, UUID, MatchRundown | None]:
         value="",
         help="Absolute path on this machine. Quoted Finder/Explorer paths are OK.",
     ).strip()
-    film = st.sidebar.file_uploader(
-        "Short clip only (browser picker)",
-        type=["mp4", "mov", "mkv", "avi", "m4v", "webm"],
-        help="Unreliable above a few hundred MB. Prefer inbox or local path.",
-    )
+    with st.sidebar.expander("Short clip only (Streamlit picker)"):
+        st.caption("Do not use this for a full match. It disconnects on large PUTs.")
+        film = st.file_uploader(
+            "Short clip",
+            type=["mp4", "mov", "mkv", "avi", "m4v", "webm"],
+            help="Only for small clips. Prefer the inbox uploader on the main page.",
+        )
     collect_film = st.sidebar.button("Collect stats from film", type="primary")
     collect_sample = st.sidebar.button("Collect sample match")
     clear_collected = st.sidebar.button("Clear collected match")
@@ -863,9 +866,21 @@ def render_sidebar() -> tuple[str, UUID, UUID, MatchRundown | None]:
             error = f"Sample collection failed ({exc})."
     elif collect_film:
         try:
+            pending_upload = None
+            if film_path.strip().strip("'\"").strip():
+                source_path = str(normalize_film_path(film_path))
+            elif inbox_path is not None:
+                source_path = str(inbox_path)
+            elif film is not None:
+                pending_upload = film
+                source_path = ""
+            else:
+                raise ValueError(UPLOAD_DISCONNECT_HINT)
             update, finish = render_upload_loader()
-            source_path = _resolve_film_source(film_path, inbox_path, film, upload_dir, update)
-            update("Starting collection…", 0.36)
+            update("Preparing the match film…", 0.04)
+            if pending_upload is not None:
+                source_path = _resolve_film_source("", None, pending_upload, upload_dir, update)
+            update("Watching the film…", 0.36)
 
             def _on_collect(label: str, fraction: float) -> None:
                 update(label, 0.36 + 0.64 * fraction)
@@ -929,14 +944,15 @@ def render_film_uploader_panel(base_url: str) -> None:
     inbox = film_inbox_dir()
     st.subheader("Upload a game")
     st.caption(
-        "A full match should land on disk first, then get collected. "
-        f"Drop files into `{inbox}`, paste a local path, or stream through "
-        "the FastAPI form below (this skips Streamlit’s disconnecting picker)."
+        "Choose a film here. Progress should move off Preparing within a few "
+        "seconds as 4 MB chunks land in "
+        f"`{inbox}`. Then pick that file under Films on this machine and "
+        "click Collect stats from film."
     )
-    st.markdown(f"Direct uploader: [{upload_url}]({upload_url})")
+    st.link_button("Open uploader in a new tab", upload_url)
     import streamlit.components.v1 as components
 
-    components.iframe(upload_url, height=420, scrolling=True)
+    components.html(upload_page_html(base_url.rstrip("/")), height=380, scrolling=False)
 
 
 def main(*, fetch: FetchFn = _run_fetch) -> None:

@@ -135,6 +135,32 @@ def test_film_stream_upload_writes_inbox(tmp_path: Path, monkeypatch) -> None:
     assert saved.read_bytes() == payload
 
 
+def test_film_chunk_upload_assembles_inbox_file(tmp_path: Path, monkeypatch) -> None:
+    inbox = tmp_path / "inbox"
+    monkeypatch.setenv("ENJOYSTATS_FILM_INBOX", str(inbox))
+    application = create_app(aggregator=InMemoryProfileStore())
+    payload = b"abcdefghij"
+    with TestClient(application) as client:
+        page = client.get("/upload-film")
+        assert "film/chunk" in page.text
+        first = client.post(
+            "/api/v1/matches/film/chunk?filename=half.mp4&offset=0&total=10&final=false",
+            content=payload[:4],
+            headers={"Content-Type": "application/octet-stream"},
+        )
+        assert first.status_code == 200, first.text
+        assert first.json()["complete"] is False
+        last = client.post(
+            "/api/v1/matches/film/chunk?filename=half.mp4&offset=4&total=10&final=true",
+            content=payload[4:],
+            headers={"Content-Type": "application/octet-stream"},
+        )
+    assert last.status_code == 200, last.text
+    body = last.json()
+    assert body["complete"] is True
+    assert Path(body["path"]).read_bytes() == payload
+
+
 def test_film_stream_upload_rejects_multipart(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("ENJOYSTATS_FILM_INBOX", str(tmp_path / "inbox"))
     application = create_app(aggregator=InMemoryProfileStore())
