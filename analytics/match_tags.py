@@ -448,7 +448,8 @@ def _parse_analysis_xml(root: Element) -> GamePayload:
     home_team = uuid5(match_id, "team:home")
     away_team = uuid5(match_id, "team:away")
 
-    actions = list(root.find("actions") or [])
+    actions_el = root.find("actions")
+    actions = list(actions_el) if actions_el is not None else []
     second_half_start_s = 45 * 60
     keeper_keys: set[tuple[int | None, str]] = set()
     parsed_rows: list[tuple[Element, int | None, str, str, int]] = []
