@@ -1,13 +1,17 @@
-"""Spiideo-style match tag sheets that the stat rundown is counted from.
+"""Match tag sheets that the stat rundown is counted from.
 
 A tag is one on-ball action (pass, shot, recovery, …) with a clock and a
 pitch location. EnjoyStats folds the same list through
 :func:`~analytics.game_ingest.collect_game`, so the numbers on the dashboard
 are the tag sheet — not a second, disconnected tally.
 
-The XML export is a compact Spiideo-like event list: teams, players, tags,
-and attack sequences. Drop the ``.tags.xml`` sidecar next to a film, or
-upload the XML itself, to re-collect from official / corrected tags.
+Two XML shapes are accepted:
+
+* EnjoyStats / Spiideo ``MatchTags`` (teams, players, tags, attacks).
+* Wyscout / Nacsport ``<analysis>`` exports (Italian ``actionName`` labels).
+
+Drop a ``.tags.xml`` sidecar next to a film, or upload the XML itself, to
+collect from official or corrected tags.
 """
 
 from __future__ import annotations
@@ -23,15 +27,78 @@ from data_models.events import EventType, MatchEvent, ShotOutcome
 
 TAG_NAMESPACE: UUID = UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
 SIDECAR_SUFFIX = ".tags.xml"
-_TEAM_SPLIT = re.compile(r"_-_|_vs_|_v_|vs\.?", re.IGNORECASE)
+_TEAM_SPLIT = re.compile(r"\s+v(?:s\.?)?\s+|_-_|_vs_|_v_|vs\.?", re.IGNORECASE)
 _AWAY_TRIM = re.compile(
-    r"(_v\d+|__\d+-\d+_?|_\d+-\d+_?|__?\d+p_?|_540p|_720p|_1080p|_2160p|_excerpt).*$",
+    r"("
+    r"\s*\(\d+\s*-\s*\d+\)"
+    r"|_v\d+"
+    r"|__\d+-\d+_?"
+    r"|_\d+-\d+_?"
+    r"|__?\d+p_?"
+    r"|_540p|_720p|_1080p|_2160p|_excerpt"
+    r").*$",
     re.IGNORECASE,
 )
+_ACTION_NAME = re.compile(
+    r"^(?:\((?P<jersey>\d+)\)\s*)?(?P<player>.*?)\s*/\s*(?P<kind>.+)$"
+)
+_HALF_KICKOFF = {
+    "inizio primo tempo": 1,
+    "inizio secondo tempo": 2,
+    "fine primo tempo": 1,
+    "fine secondo tempo": 2,
+}
+_SKIP_KINDS = {
+    "inizio primo tempo",
+    "inizio secondo tempo",
+    "fine primo tempo",
+    "fine secondo tempo",
+    "parate",
+    "goal_kick",
+    "spazzate",
+    "palle vaganti",
+    "aggressività",
+    "aggressivita",
+    "accelerazioni",
+    "riflessi",
+    "uscita",
+    "movimento incontro alla palla",
+}
+_KEEPER_KINDS = {"parate", "goal subiti", "riflessi", "uscita"}
+_KIND_TO_EVENT: dict[str, EventType] = {
+    "passaggi": EventType.PASS,
+    "passaggi filtranti": EventType.PASS,
+    "distribuzione palla": EventType.PASS,
+    "lanci lunghi": EventType.PASS,
+    "cross": EventType.CROSS,
+    "tiri": EventType.SHOT,
+    "tiro - testa": EventType.SHOT,
+    "tiro fuori dallo specchio": EventType.SHOT,
+    "occasione da goal": EventType.SHOT,
+    "goal subiti": EventType.GOAL_CONCEDED,
+    "intercetti palla": EventType.INTERCEPTION,
+    "recupero": EventType.BALL_RECOVERY,
+    "palle perse": EventType.BALL_LOST,
+    "duelli aerei": EventType.AERIAL_DUEL,
+    "duelli offensivi": EventType.GROUND_DUEL,
+    "duelli difensivi": EventType.GROUND_DUEL,
+    "1 contro 1 difesa": EventType.GROUND_DUEL,
+    "1 contro 1 e dribbling": EventType.GROUND_DUEL,
+    "falli": EventType.FOUL_COMMITTED,
+    "falli subiti": EventType.FOUL_WON,
+    "rimesse laterali": EventType.THROW_IN,
+    "calcio di punizione": EventType.FREE_KICK,
+    "calcio d'angolo": EventType.CORNER,
+    "fuorigioco": EventType.OFFSIDE,
+    "coinvolgimento nell'azione del goal": EventType.ASSIST,
+}
 
 
 def infer_team_names(filename: str) -> tuple[str, str]:
-    """Read home / away names from a film filename like ``Ascoli_-_Spezia``.
+    """Read home / away names from a film or tag-sheet title.
+
+    Accepts broadcast stems (``Ascoli_-_Spezia``) and Wyscout titles
+    (``Arsenal v Palace (1-1)``).
 
     Returns:
         ``(home, away)``. Generic names when the stem has no separator.
@@ -175,11 +242,16 @@ def write_sidecar_xml(rundown: MatchRundown, video_path: Path) -> Path:
 
 
 def parse_tag_xml(raw: str) -> GamePayload:
-    """Parse a MatchTags XML document into a collectable game payload."""
+    """Parse a MatchTags or Wyscout/Nacsport analysis XML into a game payload."""
 
-    root = fromstring(raw)
+    try:
+        root = fromstring(raw)
+    except Exception as exc:  # noqa: BLE001 — ElementTree raises ParseError
+        raise ValueError(f"Tag XML is not well-formed ({exc}).") from exc
+    if root.tag == "analysis":
+        return _parse_analysis_xml(root)
     if root.tag != "MatchTags":
-        raise ValueError("Tag XML must have a MatchTags root element.")
+        raise ValueError("Tag XML must have a MatchTags or analysis root element.")
     match_raw = root.attrib.get("match_id", "").strip()
     match_id = UUID(match_raw) if match_raw else uuid5(TAG_NAMESPACE, raw[:80])
 
@@ -254,9 +326,252 @@ def _event_from_tag_element(tag: Element, *, match_id: UUID) -> MatchEvent:
 
 
 def collect_from_tag_xml(raw: str) -> MatchRundown:
-    """Collect four-pillar stats from a Spiideo-style tag XML document."""
+    """Collect four-pillar stats from a MatchTags or Wyscout analysis XML."""
 
     return collect_game(parse_tag_xml(raw))
+
+
+def _unescape_label(raw: str) -> str:
+    """Turn Nacsport ``O''Neill`` escaping into a display name."""
+
+    return raw.replace("''", "'").replace("  ", " ").strip()
+
+
+def _clock_seconds(raw: str) -> int:
+    """Parse ``HH:MM:SS`` or ``MM:SS`` into seconds from video start."""
+
+    parts = [piece for piece in raw.strip().split(":") if piece != ""]
+    if not parts:
+        return 0
+    try:
+        numbers = [int(piece) for piece in parts]
+    except ValueError:
+        return 0
+    if len(numbers) == 1:
+        return max(0, numbers[0])
+    if len(numbers) == 2:
+        minutes, seconds = numbers
+        return max(0, minutes * 60 + seconds)
+    hours, minutes, seconds = numbers[-3], numbers[-2], numbers[-1]
+    return max(0, hours * 3600 + minutes * 60 + seconds)
+
+
+def _period_clock(total_seconds: int, *, second_half_start_s: int) -> tuple[int, int, int]:
+    """Map a video clock onto regulation period / minute / second."""
+
+    period = 2 if total_seconds >= second_half_start_s else 1
+    if period == 2:
+        remaining = max(0, total_seconds - 45 * 60)
+    else:
+        remaining = total_seconds
+    minute = min(150, remaining // 60)
+    second = remaining % 60
+    return period, minute, second
+
+
+def _split_action_name(action_name: str) -> tuple[int | None, str, str]:
+    """Read ``(4) M. Salmon / Passaggi`` into jersey, player, kind."""
+
+    match = _ACTION_NAME.match(action_name.strip())
+    if match is None:
+        return None, "", _unescape_label(action_name)
+    jersey_raw = match.group("jersey")
+    jersey = int(jersey_raw) if jersey_raw and jersey_raw.isdigit() else None
+    if jersey is not None and not 1 <= jersey <= 99:
+        jersey = None
+    player = _unescape_label(match.group("player") or "")
+    kind = _unescape_label(match.group("kind") or "")
+    return jersey, player, kind
+
+
+def _normalize_kind(kind: str) -> str:
+    return " ".join(kind.strip().lower().replace("’", "'").split())
+
+
+def _event_type_for_kind(kind: str) -> EventType | None:
+    normalized = _normalize_kind(kind)
+    if normalized in _SKIP_KINDS or normalized in _HALF_KICKOFF:
+        return None
+    if normalized.startswith("goal di") or normalized == "goal":
+        return EventType.GOAL
+    return _KIND_TO_EVENT.get(normalized)
+
+
+def _analysis_coords(
+    event_type: EventType,
+    *,
+    kind: str,
+) -> tuple[float, float, float | None, float | None]:
+    """Default 0–100 points when the Nacsport field mapper is empty."""
+
+    normalized = _normalize_kind(kind)
+    if event_type is EventType.GOAL:
+        return 88.0, 50.0, None, None
+    if event_type is EventType.GOAL_CONCEDED:
+        return 8.0, 50.0, None, None
+    if event_type is EventType.SHOT:
+        return 82.0, 50.0, None, None
+    if event_type is EventType.CROSS:
+        return 75.0, 22.0, 92.0, 18.0
+    if event_type is EventType.ASSIST:
+        return 70.0, 50.0, 88.0, 50.0
+    if event_type is EventType.CORNER:
+        return 99.0, 5.0, 90.0, 50.0
+    if "lanci" in normalized:
+        return 38.0, 50.0, 72.0, 50.0
+    if "filtranti" in normalized:
+        return 55.0, 50.0, 82.0, 48.0
+    if event_type in {
+        EventType.PASS,
+        EventType.THROW_IN,
+        EventType.FREE_KICK,
+    }:
+        return 50.0, 50.0, 58.0, 50.0
+    return 50.0, 50.0, None, None
+
+
+def _parse_analysis_xml(root: Element) -> GamePayload:
+    """Turn a Wyscout / Nacsport ``<analysis>`` export into tagged events.
+
+    These sheets are usually one-team (the analysed side). ``Goal subiti`` is
+    a goal conceded by that side, so a synthetic opposition ``GOAL`` is added
+    and the match headline stays 1–1 when the official tags say so.
+    """
+
+    analysis_id = root.attrib.get("id", "").strip()
+    try:
+        match_id = UUID(analysis_id) if analysis_id else uuid4()
+    except ValueError:
+        match_id = uuid5(TAG_NAMESPACE, analysis_id or "analysis")
+    title = root.attrib.get("title", "") or Path(root.attrib.get("videoFilepath", "")).name
+    home_name, away_name = infer_team_names(title)
+    home_team = uuid5(match_id, "team:home")
+    away_team = uuid5(match_id, "team:away")
+
+    actions = list(root.find("actions") or [])
+    second_half_start_s = 45 * 60
+    keeper_keys: set[tuple[int | None, str]] = set()
+    parsed_rows: list[tuple[Element, int | None, str, str, int]] = []
+    for action in actions:
+        action_name = action.attrib.get("actionName", "")
+        jersey, player, kind = _split_action_name(action_name)
+        clock_s = _clock_seconds(action.attrib.get("startTime", "00:00:00"))
+        parsed_rows.append((action, jersey, player, kind, clock_s))
+        normalized = _normalize_kind(kind)
+        if normalized == "inizio secondo tempo":
+            second_half_start_s = clock_s
+        if normalized in _KEEPER_KINDS and player:
+            keeper_keys.add((jersey, player.casefold()))
+
+    roster: dict[UUID, PlayerRosterEntry] = {}
+    events: list[MatchEvent] = []
+    opposition_scorer_id: UUID | None = None
+
+    for action, jersey, player, kind, clock_s in parsed_rows:
+        event_type = _event_type_for_kind(kind)
+        if event_type is None:
+            continue
+        if (
+            event_type is EventType.SHOT
+            and _normalize_kind(kind) == "tiro fuori dallo specchio"
+            and (jersey, player.casefold()) in keeper_keys
+        ):
+            continue
+        if not player:
+            continue
+        player_id = uuid5(match_id, f"player:{jersey or 0}:{player.casefold()}")
+        period, minute, second = _period_clock(clock_s, second_half_start_s=second_half_start_s)
+        start_x, start_y, end_x, end_y = _analysis_coords(event_type, kind=kind)
+        action_id = action.attrib.get("id", "").strip()
+        try:
+            event_id = UUID(action_id) if action_id else uuid4()
+        except ValueError:
+            event_id = uuid5(match_id, action_id or kind)
+        is_goal = event_type is EventType.GOAL
+        successful = event_type not in {
+            EventType.BALL_LOST,
+            EventType.OFFSIDE,
+            EventType.GOAL_CONCEDED,
+        }
+        if event_type is EventType.SHOT and _normalize_kind(kind) == "tiro fuori dallo specchio":
+            successful = False
+        if event_type is EventType.GROUND_DUEL and _normalize_kind(kind) in {
+            "duelli difensivi",
+            "1 contro 1 difesa",
+        }:
+            successful = True
+        payload: dict[str, object] = {
+            "event_id": event_id,
+            "match_id": match_id,
+            "team_id": home_team,
+            "player_id": player_id,
+            "period": period,
+            "minute": minute,
+            "second": second,
+            "event_type": event_type,
+            "x": start_x,
+            "y": start_y,
+            "successful": successful,
+            "is_goal": is_goal,
+            "is_progressive": "filtranti" in _normalize_kind(kind) or "lanci" in _normalize_kind(kind),
+            "video_timestamp_ms": clock_s * 1000,
+        }
+        if end_x is not None and end_y is not None:
+            payload["end_x"] = end_x
+            payload["end_y"] = end_y
+        if event_type in {EventType.SHOT, EventType.GOAL}:
+            if is_goal:
+                payload["shot_outcome"] = ShotOutcome.ON_TARGET
+                payload["is_goal"] = True
+            elif _normalize_kind(kind) == "tiro fuori dallo specchio":
+                payload["shot_outcome"] = ShotOutcome.MISSED
+            else:
+                payload["shot_outcome"] = ShotOutcome.ON_TARGET
+        events.append(MatchEvent.model_validate(payload))
+        position = "GK" if (jersey, player.casefold()) in keeper_keys else ""
+        roster.setdefault(
+            player_id,
+            PlayerRosterEntry(
+                player_id=player_id,
+                team_id=home_team,
+                jersey_number=jersey,
+                player_name=player,
+                position=position,
+            ),
+        )
+
+        if event_type is EventType.GOAL_CONCEDED:
+            if opposition_scorer_id is None:
+                opposition_scorer_id = uuid5(match_id, "player:opposition-scorer")
+                roster[opposition_scorer_id] = PlayerRosterEntry(
+                    player_id=opposition_scorer_id,
+                    team_id=away_team,
+                    player_name=f"{away_name} Scorer",
+                )
+            events.append(
+                MatchEvent.model_validate(
+                    {
+                        "event_id": uuid5(event_id, "opposition-goal"),
+                        "match_id": match_id,
+                        "team_id": away_team,
+                        "player_id": opposition_scorer_id,
+                        "period": period,
+                        "minute": minute,
+                        "second": second,
+                        "event_type": EventType.GOAL,
+                        "x": 88.0,
+                        "y": 50.0,
+                        "successful": True,
+                        "is_goal": True,
+                        "shot_outcome": ShotOutcome.ON_TARGET,
+                        "video_timestamp_ms": clock_s * 1000,
+                    }
+                )
+            )
+
+    if not events:
+        raise ValueError("Analysis XML has no mapped on-ball actions to collect.")
+    return GamePayload(match_id=match_id, players=list(roster.values()), events=events)
 
 
 def load_sidecar_xml(video_path: Path) -> MatchRundown | None:

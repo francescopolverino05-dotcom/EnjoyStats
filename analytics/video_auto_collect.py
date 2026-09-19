@@ -41,6 +41,7 @@ DEFAULT_SAMPLE_HZ: float = 1.0
 DEFAULT_MAX_SIDE: int = 640
 DEFAULT_MAX_SAMPLE_FRAMES: int = 8_000
 VIDEO_SUFFIXES: tuple[str, ...] = (".mp4", ".mov", ".mkv", ".avi", ".m4v", ".webm")
+TAG_SUFFIXES: tuple[str, ...] = (".xml",)
 FILM_CHUNK_BYTES: int = 8 * 1024 * 1024
 REMUX_COPY_TIMEOUT_S: int = 600
 REMUX_ENCODE_TIMEOUT_S: int = 3600
@@ -103,11 +104,12 @@ def film_upload_dir() -> Path:
 
 
 def list_ready_films(*directories: Path) -> list[Path]:
-    """Newest-first video files sitting in the inbox / uploads folders."""
+    """Newest-first films and tag XML sitting in the inbox / uploads folders."""
 
     found: list[Path] = []
     seen: set[Path] = set()
     search = directories or (film_inbox_dir(), film_upload_dir())
+    accepted = VIDEO_SUFFIXES + TAG_SUFFIXES
     for directory in search:
         if not directory.is_dir():
             continue
@@ -118,7 +120,7 @@ def list_ready_films(*directories: Path) -> list[Path]:
                 continue
             if resolved in seen or not resolved.is_file():
                 continue
-            if resolved.suffix.lower() not in VIDEO_SUFFIXES:
+            if resolved.suffix.lower() not in accepted:
                 continue
             if resolved.stat().st_size <= 0:
                 continue

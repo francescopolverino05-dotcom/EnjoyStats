@@ -21,6 +21,12 @@ def test_infer_team_names_from_broadcast_filename() -> None:
     home, away = infer_team_names("Avellino_-_Napoli__3-1_.mp4")
     assert home == "Avellino"
     assert away == "Napoli"
+    home, away = infer_team_names("Arsenal v Palace (1-1).xml")
+    assert home == "Arsenal"
+    assert away == "Palace"
+    home, away = infer_team_names("Arsenal_v_Palace__1-1__c4e3.xml")
+    assert home == "Arsenal"
+    assert away == "Palace"
 
 
 def test_sample_game_xml_roundtrip_keeps_goals_and_passes() -> None:
@@ -105,3 +111,63 @@ def test_synthetic_clip_tags_shots_or_passes(tmp_path) -> None:
     assert any("Home" in name or "Away" in name or "Player" in name for name in names)
     xml = rundown_to_xml(rundown)
     assert "type=" in xml
+
+
+_WYSCOUT_MINI = """<?xml version="1.0" encoding="utf-8"?>
+<analysis id="9f3a2dfe-78c8-48bf-8e94-7483348ffb45" title="Arsenal v Palace (1-1)">
+  <actions>
+    <action id="11111111-1111-1111-1111-111111111111" actionName=" / Inizio secondo tempo" startTime="00:46:27"/>
+    <action id="22222222-2222-2222-2222-222222222222" actionName="(4) M. Salmon / Passaggi" startTime="00:10:00"/>
+    <action id="33333333-3333-3333-3333-333333333333" actionName="(8) C. O''Neill / Falli" startTime="00:12:00"/>
+    <action id="44444444-4444-4444-4444-444444444444" actionName="(1) J. Porter / Parate" startTime="00:45:35"/>
+    <action id="55555555-5555-5555-5555-555555555555" actionName="(1) J. Porter / Tiro fuori dallo specchio" startTime="00:33:39"/>
+    <action id="66666666-6666-6666-6666-666666666666" actionName="(7) A. Stevens / Tiri" startTime="00:09:55"/>
+    <action id="77777777-7777-7777-7777-777777777777" actionName="(1) J. Porter / Goal subiti" startTime="00:50:27"/>
+    <action id="88888888-8888-8888-8888-888888888888" actionName="(11) A. Harriman-Annous / Goal di destro" startTime="01:04:53"/>
+    <action id="99999999-9999-9999-9999-999999999999" actionName="(2) T. Julienne / Coinvolgimento nell'azione del goal" startTime="01:04:54"/>
+  </actions>
+</analysis>
+"""
+
+
+def test_wyscout_analysis_xml_maps_italian_tags_to_one_one() -> None:
+    from data_models.events import EventType
+
+    from app.ingest import collect_uploaded_bytes
+
+    rundown = collect_uploaded_bytes(_WYSCOUT_MINI.encode("utf-8"))
+    assert rundown.summary.goals == 2
+    assert rundown.summary.shots >= 2
+    assert rundown.summary.passes >= 1
+    names = {profile.player_name: profile for profile in rundown.players}
+    assert "C. O'Neill" in names
+    assert names["A. Harriman-Annous"].offensive.goals == 1
+    assert names["J. Porter"].defensive.goals_against == 1
+    assert names["J. Porter"].offensive.total_shots == 0
+    assert names["T. Julienne"].offensive.assists == 1
+    assert any(name.endswith("Scorer") and "Palace" in name for name in names)
+    conceded = next(event for event in rundown.events if event.event_type is EventType.GOAL_CONCEDED)
+    assert conceded.period == 2
+    assert conceded.minute == 5
+    scored = next(
+        event
+        for event in rundown.events
+        if event.is_goal and event.event_type is EventType.GOAL and event.minute == 19
+    )
+    assert scored.period == 2
+    assert scored.second == 53
+
+
+def test_official_arsenal_palace_wyscout_xml_is_one_one() -> None:
+    from pathlib import Path
+
+    fixture = Path(__file__).resolve().parent / "fixtures" / "arsenal_v_palace_1-1.xml"
+    rundown = collect_from_film_path(fixture)
+    assert rundown.summary.goals == 2
+    assert rundown.summary.passes >= 300
+    assert rundown.summary.shots >= 10
+    names = {profile.player_name: profile for profile in rundown.players}
+    assert names["A. Harriman-Annous"].offensive.goals == 1
+    assert names["J. Porter"].defensive.goals_against == 1
+    assert "C. O'Neill" in names
+    assert rundown.summary.player_count >= 15

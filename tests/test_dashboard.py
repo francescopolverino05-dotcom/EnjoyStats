@@ -122,7 +122,7 @@ def test_dashboard_renders_fallback_without_network() -> None:
     sidebar_headers = [str(element.value) for element in at.sidebar.header]
     assert any("Upload a game" in header for header in sidebar_headers)
     select_labels = [str(element.label) for element in at.sidebar.selectbox]
-    assert any("Films on this machine" in label for label in select_labels)
+    assert any("Films and tag sheets on this machine" in label for label in select_labels)
     subheaders = [str(element.value) for element in at.subheader]
     assert any("Upload a game" in header for header in subheaders)
     assert "Offensive" in subheaders

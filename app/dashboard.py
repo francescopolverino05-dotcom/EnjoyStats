@@ -757,7 +757,7 @@ def render_match_summary(rundown: MatchRundown) -> None:
 
     summary = rundown.summary
     st.subheader("Match rundown")
-    st.caption("Automatically collected from the match film.")
+    st.caption("Automatically collected from the match film or official tag XML.")
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Events", summary.event_count)
     c2.metric("Players", summary.player_count)
@@ -767,7 +767,7 @@ def render_match_summary(rundown: MatchRundown) -> None:
     st.caption(
         f"Match `{summary.match_id}`  ·  {summary.duration_minutes:.1f} minutes of collected play. "
         "Every number below is counted from the match tags (passes, shots, "
-        "recoveries) — the same sheet Spiideo-style XML export uses."
+        "recoveries) — the same sheet Spiideo / Wyscout XML export uses."
     )
     render_match_tags(rundown)
 
@@ -866,7 +866,10 @@ def render_sidebar() -> tuple[str, UUID, UUID, MatchRundown | None]:
     for path in on_disk:
         label = f"{path.name}  ·  {_format_bytes(path.stat().st_size)}"
         disk_labels[label] = path
-    inbox_choice = st.sidebar.selectbox("Films on this machine", options=list(disk_labels.keys()))
+    inbox_choice = st.sidebar.selectbox(
+        "Films and tag sheets on this machine",
+        options=list(disk_labels.keys()),
+    )
     inbox_path = disk_labels[inbox_choice]
     film_path = st.sidebar.text_input(
         "Or local path (best for ~3 GB files)",
@@ -883,13 +886,13 @@ def render_sidebar() -> tuple[str, UUID, UUID, MatchRundown | None]:
     collect_film = st.sidebar.button("Collect stats from film", type="primary")
     collect_sample = st.sidebar.button("Collect sample match")
     clear_collected = st.sidebar.button("Clear collected match")
-    with st.sidebar.expander("Advanced: tagged JSON"):
+    with st.sidebar.expander("Advanced: tagged JSON or XML"):
         uploaded_json = st.file_uploader(
-            "AutoData JSON (optional)",
-            type=["json"],
-            help="Only if you already have event tags.",
+            "AutoData JSON or Wyscout / Nacsport XML",
+            type=["json", "xml"],
+            help="Official event tags. Wyscout analysis XML is collected as the rundown.",
         )
-        collect_json = st.button("Collect tagged JSON")
+        collect_json = st.button("Collect tagged file")
     base_url = st.sidebar.text_input("FastAPI base URL", value=DEFAULT_BASE_URL).strip()
     if not base_url:
         base_url = DEFAULT_BASE_URL
@@ -943,7 +946,7 @@ def render_sidebar() -> tuple[str, UUID, UUID, MatchRundown | None]:
             error = f"{exc}. {UPLOAD_DISCONNECT_HINT}"
     elif collect_json:
         if uploaded_json is None:
-            error = "Choose a JSON tag file first, or upload a film instead."
+            error = "Choose a JSON or XML tag file first, or upload a film instead."
         else:
             try:
                 rundown = collect_uploaded_bytes(uploaded_json.getvalue())

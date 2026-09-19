@@ -109,11 +109,21 @@ def collect_sample_match() -> MatchRundown:
 
 
 def collect_uploaded_bytes(raw_bytes: bytes) -> MatchRundown:
-    """Parse an uploaded JSON game file and collect player stats."""
+    """Parse an uploaded JSON or tag XML file and collect player stats."""
 
     try:
-        decoded: Any = json.loads(raw_bytes.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        text = raw_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"Game file is not valid UTF-8 ({exc}).") from exc
+    stripped = text.lstrip()
+    if stripped.startswith("<"):
+        try:
+            return collect_from_tag_xml(stripped)
+        except ValueError as exc:
+            raise ValueError(f"Tag XML could not be collected ({exc}).") from exc
+    try:
+        decoded: Any = json.loads(text)
+    except json.JSONDecodeError as exc:
         raise ValueError(f"Game file is not valid JSON ({exc}).") from exc
     return collect_game(parse_game_payload(decoded))
 
@@ -170,7 +180,7 @@ def collect_from_film_path(
         if not resolved.is_file():
             raise ValueError(f"Tag sheet not found: {resolved}")
         try:
-            return collect_from_tag_xml(resolved.read_text(encoding="utf-8"))
+            return collect_from_tag_xml(resolved.read_text(encoding="utf-8-sig"))
         except ValueError as exc:
             raise ValueError(f"Tag XML could not be collected ({exc}).") from exc
     if resolved.suffix.lower() not in VIDEO_SUFFIXES:
