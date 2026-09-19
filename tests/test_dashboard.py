@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from unittest.mock import AsyncMock, patch
 from uuid import uuid4
 
@@ -121,7 +122,7 @@ def test_dashboard_renders_fallback_without_network() -> None:
     sidebar_headers = [str(element.value) for element in at.sidebar.header]
     assert any("Upload a game" in header for header in sidebar_headers)
     select_labels = [str(element.label) for element in at.sidebar.selectbox]
-    assert any("Films on this machine" in label for label in select_labels)
+    assert any("Films and tag sheets on this machine" in label for label in select_labels)
     subheaders = [str(element.value) for element in at.subheader]
     assert any("Upload a game" in header for header in subheaders)
     assert "Offensive" in subheaders
@@ -129,6 +130,23 @@ def test_dashboard_renders_fallback_without_network() -> None:
     assert "Distribution" in subheaders
     assert "Possession" in subheaders
     assert "Tactical pitch" in subheaders
+
+
+def test_collected_rundown_shows_match_tags(tmp_path) -> None:
+    from streamlit.testing.v1 import AppTest
+
+    from analytics.game_ingest import rundown_to_json
+    from analytics.sample_game import sample_game_payload
+    from analytics.game_ingest import collect_game
+
+    script = Path(__file__).resolve().parents[1] / "app" / "dashboard.py"
+    at = AppTest.from_file(str(script), default_timeout=20)
+    at.session_state["collected_rundown"] = rundown_to_json(collect_game(sample_game_payload()))
+    at.run()
+    assert not at.exception
+    subheaders = [str(element.value) for element in at.subheader]
+    assert "Match rundown" in subheaders
+    assert "Match tags" in subheaders
 
 
 def test_unknown_fallback_actions_include_a_missing_coordinate() -> None:

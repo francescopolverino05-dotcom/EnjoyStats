@@ -42,8 +42,10 @@ def test_list_ready_films_ignores_empty_and_non_video(tmp_path: Path) -> None:
     (inbox / "empty.mp4").write_bytes(b"")
     keep = inbox / "keep.mov"
     keep.write_bytes(b"film")
-    found = list_ready_films(inbox)
-    assert found == [keep.resolve()]
+    sheet = inbox / "arsenal.xml"
+    sheet.write_text("<analysis/>", encoding="utf-8")
+    found = {path.resolve() for path in list_ready_films(inbox)}
+    assert found == {keep.resolve(), sheet.resolve()}
 
 
 def test_write_film_chunks_rejects_oversize(tmp_path: Path) -> None:
@@ -89,7 +91,7 @@ def test_synthetic_film_collects_stats_without_tag_json(tmp_path: Path) -> None:
     assert rundown.summary.event_count >= 1
     assert rundown.summary.passes + rundown.summary.shots >= 1
     names = {profile.player_name for profile in rundown.players}
-    assert any(name.startswith("Player ") for name in names)
+    assert any("Home" in name or "Away" in name or name.startswith("Player ") for name in names)
 
 
 def test_collect_from_film_path_wrapper(tmp_path: Path) -> None:

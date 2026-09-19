@@ -17,6 +17,7 @@ from analytics.game_ingest import (
     parse_game_payload,
 )
 from analytics.sample_game import sample_game_payload
+from analytics.match_tags import collect_from_tag_xml
 from analytics.video_auto_collect import (
     MAX_VIDEO_BYTES,
     VIDEO_SUFFIXES,
@@ -108,11 +109,21 @@ def collect_sample_match() -> MatchRundown:
 
 
 def collect_uploaded_bytes(raw_bytes: bytes) -> MatchRundown:
-    """Parse an uploaded JSON game file and collect player stats."""
+    """Parse an uploaded JSON or tag XML file and collect player stats."""
 
     try:
-        decoded: Any = json.loads(raw_bytes.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        text = raw_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"Game file is not valid UTF-8 ({exc}).") from exc
+    stripped = text.lstrip()
+    if stripped.startswith("<"):
+        try:
+            return collect_from_tag_xml(stripped)
+        except ValueError as exc:
+            raise ValueError(f"Tag XML could not be collected ({exc}).") from exc
+    try:
+        decoded: Any = json.loads(text)
+    except json.JSONDecodeError as exc:
         raise ValueError(f"Game file is not valid JSON ({exc}).") from exc
     return collect_game(parse_game_payload(decoded))
 
@@ -165,8 +176,15 @@ def collect_from_film_path(
         resolved = resolved.resolve()
     except OSError as exc:
         raise ValueError(f"Match film path is not readable ({exc}).") from exc
+    if resolved.suffix.lower() == ".xml":
+        if not resolved.is_file():
+            raise ValueError(f"Tag sheet not found: {resolved}")
+        try:
+            return collect_from_tag_xml(resolved.read_text(encoding="utf-8-sig"))
+        except ValueError as exc:
+            raise ValueError(f"Tag XML could not be collected ({exc}).") from exc
     if resolved.suffix.lower() not in VIDEO_SUFFIXES:
-        raise ValueError("Choose a match film (mp4, mov, mkv, avi, m4v, webm), not a tag JSON.")
+        raise ValueError("Choose a match film (mp4, mov, mkv, avi, m4v, webm) or a tag XML.")
     if not resolved.is_file():
         raise ValueError(f"Match film not found: {resolved}")
     try:
