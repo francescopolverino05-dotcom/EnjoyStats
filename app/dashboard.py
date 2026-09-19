@@ -38,14 +38,17 @@ import app.ingest as _ingest_mod
 
 importlib.reload(_ingest_mod)
 from app.ingest import (
+    UPLOAD_DISCONNECT_HINT,
     collect_from_film_path,
     collect_sample_match,
     collect_uploaded_bytes,
     load_from_rundown,
     persist_rundown,
     profile_label,
+    ready_films,
     save_uploaded_film,
 )
+from analytics.video_auto_collect import film_inbox_dir, film_upload_dir, normalize_film_path
 from analytics.game_ingest import MatchRundown, rundown_from_mapping, rundown_to_json
 from config.pitch_config import (
     CENTRE_CIRCLE_RADIUS_M,
@@ -764,29 +767,71 @@ def render_match_summary(rundown: MatchRundown) -> None:
     )
 
 
+def _resolve_film_source(
+    film_path: str,
+    inbox_path: Path | None,
+    film: object | None,
+    upload_dir: Path,
+    update: Callable[[str, float], None],
+) -> str:
+    """Pick the on-disk film: pasted path, inbox file, or saved browser pick."""
+
+    if film_path.strip().strip("'\"").strip():
+        return str(normalize_film_path(film_path))
+    if inbox_path is not None:
+        return str(inbox_path)
+    if film is None:
+        raise ValueError(UPLOAD_DISCONNECT_HINT)
+    suffix = Path(getattr(film, "name", "match.mp4")).suffix or ".mp4"
+    dest = upload_dir / f"upload{suffix.lower()}"
+
+    def _on_save(written: int, expected: int) -> None:
+        denom = expected if expected > 0 else max(written, 1)
+        update(
+            f"Saving upload {_format_bytes(written)}"
+            + (f" / {_format_bytes(expected)}" if expected > 0 else ""),
+            0.35 * (written / denom),
+        )
+
+    update("Saving upload to disk…", 0.02)
+    save_uploaded_film(film, dest, on_progress=_on_save)
+    return str(dest)
+
+
 def render_sidebar() -> tuple[str, UUID, UUID, MatchRundown | None]:
     """Upload a match film (or a catalog match) and open a player rundown."""
 
     rundown_key = "collected_rundown"
     persist_key = "ingest_persist_message"
-    upload_dir = ROOT / ".local-run" / "uploads"
+    upload_dir = film_upload_dir()
+    inbox_dir = film_inbox_dir()
+    inbox_dir.mkdir(parents=True, exist_ok=True)
+    upload_dir.mkdir(parents=True, exist_ok=True)
 
     st.sidebar.header("Upload a game")
     st.sidebar.caption(
-        "Drop a full match film (up to 3 GB). EnjoyStats watches the video, "
-        "auto-collects events, and opens the four-pillar rundown. "
-        "No tag JSON and no separate auto-tag repo."
+        "Full match films (up to 3 GB) should be dropped into "
+        f"`{inbox_dir}` or pasted as a local path. The sidebar file picker "
+        "disconnects on large PUTs — use it only for short clips."
     )
-    film = st.sidebar.file_uploader(
-        "Match film",
-        type=["mp4", "mov", "mkv", "avi", "m4v", "webm"],
-        help="Broadcast or tactical camera. Local files up to 3 GB.",
-    )
+    on_disk = ready_films()
+    none_label = "(none — paste a path or drop a file in .local-run/inbox)"
+    disk_labels = {none_label: None}
+    for path in on_disk:
+        label = f"{path.name}  ·  {_format_bytes(path.stat().st_size)}"
+        disk_labels[label] = path
+    inbox_choice = st.sidebar.selectbox("Films on this machine", options=list(disk_labels.keys()))
+    inbox_path = disk_labels[inbox_choice]
     film_path = st.sidebar.text_input(
         "Or local path (best for ~3 GB files)",
         value="",
-        help="Absolute path on this machine. Avoids copying a 3 GB upload into RAM.",
+        help="Absolute path on this machine. Quoted Finder/Explorer paths are OK.",
     ).strip()
+    film = st.sidebar.file_uploader(
+        "Short clip only (browser picker)",
+        type=["mp4", "mov", "mkv", "avi", "m4v", "webm"],
+        help="Unreliable above a few hundred MB. Prefer inbox or local path.",
+    )
     collect_film = st.sidebar.button("Collect stats from film", type="primary")
     collect_sample = st.sidebar.button("Collect sample match")
     clear_collected = st.sidebar.button("Clear collected match")
@@ -814,40 +859,28 @@ def render_sidebar() -> tuple[str, UUID, UUID, MatchRundown | None]:
             st.session_state[persist_key] = message
         except ValueError as exc:
             error = str(exc)
+        except Exception as exc:  # noqa: BLE001 — surface unexpected collect failures
+            error = f"Sample collection failed ({exc})."
     elif collect_film:
-        source_path = film_path
         try:
-            if not source_path and film is None:
-                error = "Choose a match film or paste a local path first."
-            else:
-                update, finish = render_upload_loader()
-                if film is not None and not source_path:
-                    suffix = Path(getattr(film, "name", "match.mp4")).suffix or ".mp4"
-                    dest = upload_dir / f"upload{suffix.lower()}"
+            update, finish = render_upload_loader()
+            source_path = _resolve_film_source(film_path, inbox_path, film, upload_dir, update)
+            update("Starting collection…", 0.36)
 
-                    def _on_save(written: int, expected: int) -> None:
-                        denom = expected if expected > 0 else max(written, 1)
-                        update(
-                            f"Saving upload {_format_bytes(written)}"
-                            + (f" / {_format_bytes(expected)}" if expected > 0 else ""),
-                            0.35 * (written / denom),
-                        )
+            def _on_collect(label: str, fraction: float) -> None:
+                update(label, 0.36 + 0.64 * fraction)
 
-                    update("Saving upload to disk…", 0.02)
-                    save_uploaded_film(film, dest, on_progress=_on_save)
-                    source_path = str(dest)
-                update("Starting collection…", 0.36)
-
-                def _on_collect(label: str, fraction: float) -> None:
-                    update(label, 0.36 + 0.64 * fraction)
-
-                rundown = collect_from_film_path(source_path, on_progress=_on_collect)
-                finish()
-                st.session_state[rundown_key] = rundown_to_json(rundown)
-                _persisted, message = asyncio.run(persist_rundown(base_url, rundown))
-                st.session_state[persist_key] = message
+            rundown = collect_from_film_path(source_path, on_progress=_on_collect)
+            finish()
+            st.session_state[rundown_key] = rundown_to_json(rundown)
+            _persisted, message = asyncio.run(persist_rundown(base_url, rundown))
+            st.session_state[persist_key] = message
         except ValueError as exc:
             error = str(exc)
+        except OSError as exc:
+            error = f"Could not read the match film ({exc})."
+        except Exception as exc:  # noqa: BLE001 — file_uploader failures are not ValueError
+            error = f"{exc}. {UPLOAD_DISCONNECT_HINT}"
     elif collect_json:
         if uploaded_json is None:
             error = "Choose a JSON tag file first, or upload a film instead."
@@ -889,6 +922,23 @@ def render_sidebar() -> tuple[str, UUID, UUID, MatchRundown | None]:
     return base_url, match_id, player_id, None
 
 
+def render_film_uploader_panel(base_url: str) -> None:
+    """Main-panel streaming uploader that writes films to the FastAPI inbox."""
+
+    upload_url = f"{base_url.rstrip('/')}/upload-film"
+    inbox = film_inbox_dir()
+    st.subheader("Upload a game")
+    st.caption(
+        "A full match should land on disk first, then get collected. "
+        f"Drop files into `{inbox}`, paste a local path, or stream through "
+        "the FastAPI form below (this skips Streamlit’s disconnecting picker)."
+    )
+    st.markdown(f"Direct uploader: [{upload_url}]({upload_url})")
+    import streamlit.components.v1 as components
+
+    components.iframe(upload_url, height=420, scrolling=True)
+
+
 def main(*, fetch: FetchFn = _run_fetch) -> None:
     """Streamlit entry point. ``fetch`` is injectable for tests."""
 
@@ -903,6 +953,7 @@ def main(*, fetch: FetchFn = _run_fetch) -> None:
         render_match_summary(rundown)
         load = load_from_rundown(rundown, player_id)
     else:
+        render_film_uploader_panel(base_url)
         load = fetch(base_url, match_id, player_id)
     render_dashboard(load)
 

@@ -38,4 +38,5 @@ def test_dockerfiles_are_multistage_slim_python() -> None:
     assert "streamlit" in dashboard
     assert "opencv-python-headless" in dashboard
     assert "maxUploadSize=3072" in dashboard
+    assert "maxMessageSize=3072" in dashboard
     assert "http://api:8000" in dashboard

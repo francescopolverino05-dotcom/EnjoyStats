@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -109,6 +110,40 @@ def test_ingest_api_rejects_mismatched_match_id() -> None:
         response = client.post(f"/api/v1/matches/{uuid4()}/ingest", json=body)
     assert response.status_code == 400
     assert "match_id" in response.json()["message"]
+
+
+def test_film_stream_upload_writes_inbox(tmp_path: Path, monkeypatch) -> None:
+    inbox = tmp_path / "inbox"
+    monkeypatch.setenv("ENJOYSTATS_FILM_INBOX", str(inbox))
+    store = InMemoryProfileStore()
+    application = create_app(aggregator=store)
+    payload = b"fake-match-bytes"
+    with TestClient(application) as client:
+        page = client.get("/upload-film")
+        assert page.status_code == 200
+        assert "Save film to inbox" in page.text
+        response = client.post(
+            "/api/v1/matches/film?filename=derby.mp4",
+            content=payload,
+            headers={"Content-Type": "application/octet-stream", "X-Filename": "derby.mp4"},
+        )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["filename"] == "derby.mp4"
+    assert body["size_bytes"] == len(payload)
+    saved = Path(body["path"])
+    assert saved.read_bytes() == payload
+
+
+def test_film_stream_upload_rejects_multipart(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("ENJOYSTATS_FILM_INBOX", str(tmp_path / "inbox"))
+    application = create_app(aggregator=InMemoryProfileStore())
+    with TestClient(application) as client:
+        response = client.post(
+            "/api/v1/matches/film",
+            files={"film": ("match.mp4", b"abc", "video/mp4")},
+        )
+    assert response.status_code == 415
 
 
 def test_bundled_sample_game_file_collects() -> None:

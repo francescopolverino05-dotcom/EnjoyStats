@@ -19,9 +19,13 @@ full match on a laptop CPU without a tag JSON.
 from __future__ import annotations
 
 import math
-from collections.abc import Callable
+import os
+import shutil
+import subprocess
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import unquote, urlparse
 from uuid import UUID, uuid5
 
 import cv2
@@ -36,7 +40,14 @@ DEFAULT_SAMPLE_HZ: float = 1.0
 DEFAULT_MAX_SIDE: int = 640
 DEFAULT_MAX_SAMPLE_FRAMES: int = 8_000
 VIDEO_SUFFIXES: tuple[str, ...] = (".mp4", ".mov", ".mkv", ".avi", ".m4v", ".webm")
+FILM_CHUNK_BYTES: int = 8 * 1024 * 1024
+REMUX_COPY_TIMEOUT_S: int = 600
+REMUX_ENCODE_TIMEOUT_S: int = 3600
 ProgressFn = Callable[[str, float], None]
+
+
+class VideoCollectError(ValueError):
+    """Raised when a match film cannot be opened, is too large, or yields no play."""
 
 
 def _emit(on_progress: ProgressFn | None, label: str, fraction: float) -> None:
@@ -45,8 +56,187 @@ def _emit(on_progress: ProgressFn | None, label: str, fraction: float) -> None:
     on_progress(label, min(1.0, max(0.0, fraction)))
 
 
-class VideoCollectError(ValueError):
-    """Raised when a match film cannot be opened, is too large, or yields no play."""
+def normalize_film_path(raw: str | Path) -> Path:
+    """Strip quotes / ``file://`` URIs and expand ``~`` from a pasted path."""
+
+    text = str(raw).strip().strip("\u200b")
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {"'", '"'}:
+        text = text[1:-1].strip()
+    text = text.strip().strip("\u200b")
+    if text.startswith("file://"):
+        parsed = urlparse(text)
+        text = unquote(parsed.path)
+        if parsed.netloc and parsed.netloc not in {"localhost", "127.0.0.1"}:
+            text = f"//{parsed.netloc}{text}"
+    return Path(text).expanduser()
+
+
+def safe_film_name(name: str) -> str:
+    """Return a single-path-segment film filename with a video suffix."""
+
+    base = Path(name.replace("\\", "/")).name.strip() or "match.mp4"
+    cleaned = "".join(char if char.isalnum() or char in ".-_" else "_" for char in base)
+    cleaned = cleaned.strip("._") or "match"
+    suffix = Path(cleaned).suffix.lower()
+    if suffix not in VIDEO_SUFFIXES:
+        cleaned = f"{cleaned}.mp4"
+    return cleaned
+
+
+def film_inbox_dir() -> Path:
+    """Directory that operators drop match films into (no HTTP transfer)."""
+
+    override = os.environ.get("ENJOYSTATS_FILM_INBOX", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return Path(__file__).resolve().parents[1] / ".local-run" / "inbox"
+
+
+def film_upload_dir() -> Path:
+    """Directory used for streamed browser uploads and Streamlit saves."""
+
+    override = os.environ.get("ENJOYSTATS_FILM_UPLOADS", "").strip()
+    if override:
+        return Path(override).expanduser()
+    return Path(__file__).resolve().parents[1] / ".local-run" / "uploads"
+
+
+def list_ready_films(*directories: Path) -> list[Path]:
+    """Newest-first video files sitting in the inbox / uploads folders."""
+
+    found: list[Path] = []
+    seen: set[Path] = set()
+    search = directories or (film_inbox_dir(), film_upload_dir())
+    for directory in search:
+        if not directory.is_dir():
+            continue
+        for candidate in directory.iterdir():
+            try:
+                resolved = candidate.resolve()
+            except OSError:
+                continue
+            if resolved in seen or not resolved.is_file():
+                continue
+            if resolved.suffix.lower() not in VIDEO_SUFFIXES:
+                continue
+            if resolved.stat().st_size <= 0:
+                continue
+            seen.add(resolved)
+            found.append(resolved)
+    found.sort(key=lambda path: path.stat().st_mtime, reverse=True)
+    return found
+
+
+def write_film_chunks(
+    destination: Path,
+    chunks: Iterable[bytes],
+    *,
+    max_bytes: int = MAX_VIDEO_BYTES,
+    on_progress: Callable[[int, int], None] | None = None,
+    expected_bytes: int = 0,
+) -> Path:
+    """Write a film from an iterator of chunks without buffering the file."""
+
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    written = 0
+    with destination.open("wb") as out:
+        for chunk in chunks:
+            if not chunk:
+                continue
+            written += len(chunk)
+            if written > max_bytes:
+                out.close()
+                destination.unlink(missing_ok=True)
+                raise VideoCollectError("Match film exceeds the 3 GB upload limit.")
+            out.write(chunk)
+            if on_progress is not None:
+                on_progress(written, expected_bytes if expected_bytes > 0 else written)
+    if written <= 0:
+        destination.unlink(missing_ok=True)
+        raise VideoCollectError("Uploaded film is empty.")
+    if on_progress is not None:
+        on_progress(written, expected_bytes if expected_bytes > 0 else written)
+    return destination
+
+
+def remux_for_opencv(path: Path) -> Path:
+    """Rewrap (or re-encode) a film into a container OpenCV can open.
+
+    Many broadcast MP4s use codecs VideoCapture rejects. Stream-copy into a
+    new MP4 first; if that still fails, transcode to MPEG-4 which the
+    headless OpenCV wheel can decode without extra system codecs.
+    """
+
+    resolved = path.expanduser().resolve()
+    destination = resolved.with_name(f"{resolved.stem}.opencv.mp4")
+    if destination.is_file() and destination.stat().st_size > 0:
+        probe = cv2.VideoCapture(str(destination))
+        opened = probe.isOpened()
+        probe.release()
+        if opened:
+            return destination
+        destination.unlink(missing_ok=True)
+
+    ffmpeg = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        raise VideoCollectError(
+            f"OpenCV could not open the match film: {resolved}. "
+            "Install ffmpeg to remux unsupported codecs, or export the "
+            "clip as mp4/avi."
+        )
+
+    copy_cmd = [
+        ffmpeg,
+        "-y",
+        "-i",
+        str(resolved),
+        "-c",
+        "copy",
+        "-movflags",
+        "+faststart",
+        str(destination),
+    ]
+    copied = subprocess.run(
+        copy_cmd,
+        check=False,
+        capture_output=True,
+        timeout=REMUX_COPY_TIMEOUT_S,
+    )
+    if copied.returncode == 0 and destination.is_file() and destination.stat().st_size > 0:
+        probe = cv2.VideoCapture(str(destination))
+        opened = probe.isOpened()
+        probe.release()
+        if opened:
+            return destination
+    destination.unlink(missing_ok=True)
+
+    encode_cmd = [
+        ffmpeg,
+        "-y",
+        "-i",
+        str(resolved),
+        "-c:v",
+        "mpeg4",
+        "-q:v",
+        "6",
+        "-an",
+        str(destination),
+    ]
+    encoded = subprocess.run(
+        encode_cmd,
+        check=False,
+        capture_output=True,
+        timeout=REMUX_ENCODE_TIMEOUT_S,
+    )
+    if encoded.returncode != 0 or not destination.is_file() or destination.stat().st_size <= 0:
+        destination.unlink(missing_ok=True)
+        detail = (encoded.stderr or copied.stderr or b"").decode("utf-8", errors="replace")
+        snippet = " ".join(detail.strip().splitlines()[-2:])[:240]
+        raise VideoCollectError(
+            f"OpenCV could not open the match film: {resolved}."
+            + (f" ffmpeg: {snippet}" if snippet else "")
+        )
+    return destination
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,7 +279,7 @@ class Track:
 def probe_video(path: Path) -> VideoInfo:
     """Read container headers without decoding the full film."""
 
-    resolved = path.expanduser().resolve()
+    resolved = normalize_film_path(path).resolve()
     if not resolved.is_file():
         raise VideoCollectError(f"Match film not found: {resolved}")
     suffix = resolved.suffix.lower()
@@ -105,7 +295,14 @@ def probe_video(path: Path) -> VideoInfo:
             f"Match film is {size_bytes / (1024 ** 3):.2f} GB; the limit is 3 GB."
         )
     capture = cv2.VideoCapture(str(resolved))
-    if not capture.isOpened():
+    opened = capture.isOpened()
+    if not opened:
+        capture.release()
+        resolved = remux_for_opencv(resolved)
+        capture = cv2.VideoCapture(str(resolved))
+        opened = capture.isOpened()
+    if not opened:
+        capture.release()
         raise VideoCollectError(f"OpenCV could not open the match film: {resolved}")
     try:
         fps = float(capture.get(cv2.CAP_PROP_FPS) or 0.0)
@@ -117,6 +314,7 @@ def probe_video(path: Path) -> VideoInfo:
     if fps <= 0.0:
         fps = 25.0
     duration = frame_count / fps if frame_count > 0 else 0.0
+    size_bytes = resolved.stat().st_size
     return VideoInfo(
         path=resolved,
         size_bytes=size_bytes,

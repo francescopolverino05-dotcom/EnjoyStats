@@ -335,7 +335,7 @@ export PYTHONPATH="${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 export PYTHONUNBUFFERED="1"
 export MPLBACKEND="${MPLBACKEND:-Agg}"
 
-mkdir -p "$LOG_DIR"
+mkdir -p "$LOG_DIR" "$LOG_DIR/inbox" "$LOG_DIR/uploads"
 
 # ---------------------------------------------------------------------------
 # 3. Sequential service launch
@@ -376,6 +376,7 @@ python -m streamlit run "$ROOT/app/dashboard.py" \
     --server.port="$UI_PORT" \
     --server.headless=true \
     --server.maxUploadSize=3072 \
+    --server.maxMessageSize=3072 \
     --browser.gatherUsageStats=false \
     >"$UI_LOG" 2>&1 &
 UI_PID=$!
@@ -402,7 +403,9 @@ printf "  ============================================================\n"
 printf "   %sEnjoyStats — local stack is ready%s\n" "$C_BOLD" "$C_RESET$C_CYAN"
 printf "  ============================================================\n"
 printf "    API Docs : %shttp://localhost:8000/docs%s\n" "$C_BOLD$C_GREEN" "$C_RESET$C_CYAN"
+printf "    Film up  : %shttp://localhost:8000/upload-film%s\n" "$C_BOLD$C_GREEN" "$C_RESET$C_CYAN"
 printf "    UI       : %shttp://localhost:8501%s\n" "$C_BOLD$C_GREEN" "$C_RESET$C_CYAN"
+printf "    Inbox    : %s${LOG_DIR}/inbox%s\n" "$C_BOLD$C_GREEN" "$C_RESET$C_CYAN"
 printf "  ============================================================\n"
 printf "    Press CTRL+C to stop Uvicorn, Streamlit, and PostgreSQL\n"
 printf "  ============================================================\n"

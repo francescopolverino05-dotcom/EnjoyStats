@@ -1,3 +1,7 @@
 [server]
 maxUploadSize = 3072
+maxMessageSize = 3072
 headless = true
+enableXsrfProtection = false
+enableCORS = false
+enableWebsocketCompression = false

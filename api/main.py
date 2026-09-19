@@ -181,9 +181,11 @@ def create_app(
     )
     _register_exception_handlers(application)
     _register_routes(application)
+    from api.film_upload import film_router
     from api.routes import advanced_router
 
     application.include_router(advanced_router)
+    application.include_router(film_router)
     return application
 
 
