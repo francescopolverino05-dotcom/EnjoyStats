@@ -19,6 +19,7 @@ import asyncpg
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -181,9 +182,17 @@ def create_app(
     )
     _register_exception_handlers(application)
     _register_routes(application)
+    from api.film_upload import film_router
     from api.routes import advanced_router
 
     application.include_router(advanced_router)
+    application.include_router(film_router)
+    application.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"],
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
     return application
 
 

@@ -21,7 +21,13 @@ from analytics.video_auto_collect import (
     MAX_VIDEO_BYTES,
     VIDEO_SUFFIXES,
     ProgressFn,
+    VideoCollectError,
     collect_from_video,
+    film_inbox_dir,
+    film_upload_dir,
+    list_ready_films,
+    normalize_film_path,
+    write_film_chunks,
 )
 from app.client import DEFAULT_BASE_URL, REQUEST_TIMEOUT_S, ProfileLoad, probe_api
 from app.dummy_data import PitchAction
@@ -30,6 +36,22 @@ from data_models.events import EventType, MatchEvent
 from data_models.player_stats import PlayerMatchProfile
 
 INGEST_TIMEOUT_S = 30.0
+UPLOAD_DISCONNECT_HINT = (
+    "The browser uploader disconnected before the film arrived "
+    "(Streamlit ClientDisconnect on large PUTs). "
+    "Drop the file into .local-run/inbox, paste its local path, "
+    "or use the FastAPI uploader at /upload-film."
+)
+
+
+def ready_films() -> list[Path]:
+    """Create inbox/uploads folders and list films already on disk."""
+
+    inbox = film_inbox_dir()
+    uploads = film_upload_dir()
+    inbox.mkdir(parents=True, exist_ok=True)
+    uploads.mkdir(parents=True, exist_ok=True)
+    return list_ready_films(inbox, uploads)
 
 
 def actions_from_events(
@@ -104,7 +126,6 @@ def save_uploaded_film(
     """Write an uploaded film to disk in 8 MiB chunks (up to 3 GB)."""
 
     destination.parent.mkdir(parents=True, exist_ok=True)
-    written = 0
     total = int(getattr(uploaded, "size", 0) or 0)
     read = getattr(uploaded, "read", None)
     seek = getattr(uploaded, "seek", None)
@@ -112,25 +133,24 @@ def save_uploaded_film(
         seek(0)
     if not callable(read):
         raise ValueError("Upload is not a readable film file.")
-    with destination.open("wb") as out:
+
+    def _chunks() -> Any:
         while True:
             chunk = read(8 * 1024 * 1024)
             if not chunk:
                 break
-            written += len(chunk)
-            if written > MAX_VIDEO_BYTES:
-                out.close()
-                destination.unlink(missing_ok=True)
-                raise ValueError("Match film exceeds the 3 GB upload limit.")
-            out.write(chunk)
-            if on_progress is not None:
-                on_progress(written, total if total > 0 else written)
-    if written <= 0:
-        destination.unlink(missing_ok=True)
-        raise ValueError("Uploaded film is empty.")
-    if on_progress is not None:
-        on_progress(written, total if total > 0 else written)
-    return destination
+            yield chunk
+
+    try:
+        return write_film_chunks(
+            destination,
+            _chunks(),
+            max_bytes=MAX_VIDEO_BYTES,
+            on_progress=on_progress,
+            expected_bytes=total,
+        )
+    except VideoCollectError as exc:
+        raise ValueError(str(exc)) from exc
 
 
 def collect_from_film_path(
@@ -140,10 +160,19 @@ def collect_from_film_path(
 ) -> MatchRundown:
     """Auto-tag a match film on disk and collect the four-pillar rundown."""
 
-    resolved = Path(path).expanduser()
+    resolved = normalize_film_path(path)
+    try:
+        resolved = resolved.resolve()
+    except OSError as exc:
+        raise ValueError(f"Match film path is not readable ({exc}).") from exc
     if resolved.suffix.lower() not in VIDEO_SUFFIXES:
         raise ValueError("Choose a match film (mp4, mov, mkv, avi, m4v, webm), not a tag JSON.")
-    return collect_from_video(resolved, on_progress=on_progress)
+    if not resolved.is_file():
+        raise ValueError(f"Match film not found: {resolved}")
+    try:
+        return collect_from_video(resolved, on_progress=on_progress)
+    except VideoCollectError as exc:
+        raise ValueError(str(exc)) from exc
 
 
 async def persist_rundown(
