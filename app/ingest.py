@@ -165,10 +165,10 @@ def collect_from_film_path(
         resolved = resolved.resolve()
     except OSError as exc:
         raise ValueError(f"Match film path is not readable ({exc}).") from exc
-    if not resolved.is_file():
-        raise ValueError(f"Match film not found: {resolved}")
     if resolved.suffix.lower() not in VIDEO_SUFFIXES:
         raise ValueError("Choose a match film (mp4, mov, mkv, avi, m4v, webm), not a tag JSON.")
+    if not resolved.is_file():
+        raise ValueError(f"Match film not found: {resolved}")
     try:
         return collect_from_video(resolved, on_progress=on_progress)
     except VideoCollectError as exc:
