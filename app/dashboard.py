@@ -34,8 +34,10 @@ from app.client import DEFAULT_BASE_URL, ProfileLoad, fetch_player_profile
 from app.dummy_data import PitchAction, catalog
 from app.metrics import PassDirections
 
+import analytics.match_tags as _match_tags_mod
 import app.ingest as _ingest_mod
 
+importlib.reload(_match_tags_mod)
 importlib.reload(_ingest_mod)
 from app.ingest import (
     UPLOAD_DISCONNECT_HINT,
