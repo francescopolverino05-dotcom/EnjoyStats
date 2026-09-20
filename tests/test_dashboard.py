@@ -147,6 +147,7 @@ def test_collected_rundown_shows_match_tags(tmp_path) -> None:
     subheaders = [str(element.value) for element in at.subheader]
     assert "Match rundown" in subheaders
     assert "Match tags" in subheaders
+    assert "Team statistics" in subheaders
 
 
 def test_unknown_fallback_actions_include_a_missing_coordinate() -> None:

@@ -17,7 +17,7 @@ from analytics.game_ingest import (
     parse_game_payload,
 )
 from analytics.sample_game import sample_game_payload
-from analytics.match_tags import collect_from_tag_xml
+from analytics.match_tags import collect_from_tag_xml, find_official_tag_xml
 from analytics.video_auto_collect import (
     MAX_VIDEO_BYTES,
     VIDEO_SUFFIXES,
@@ -164,6 +164,23 @@ def save_uploaded_film(
         raise ValueError(str(exc)) from exc
 
 
+def film_has_official_tags(path: str | Path) -> bool:
+    """Return whether collect can skip the hours-long film watch.
+
+    Official Wyscout / Nacsport XML (the file itself, or a sibling analysis
+    sheet) is the Impact-style source of truth and finishes in seconds.
+    """
+
+    resolved = normalize_film_path(path)
+    try:
+        resolved = resolved.resolve()
+    except OSError:
+        return False
+    if resolved.suffix.lower() == ".xml":
+        return resolved.is_file()
+    return find_official_tag_xml(resolved, film_inbox_dir(), film_upload_dir()) is not None
+
+
 def collect_from_film_path(
     path: str | Path,
     *,
@@ -187,6 +204,12 @@ def collect_from_film_path(
         raise ValueError("Choose a match film (mp4, mov, mkv, avi, m4v, webm) or a tag XML.")
     if not resolved.is_file():
         raise ValueError(f"Match film not found: {resolved}")
+    official = find_official_tag_xml(resolved, film_inbox_dir(), film_upload_dir())
+    if official is not None:
+        try:
+            return collect_from_tag_xml(official.read_text(encoding="utf-8-sig"))
+        except ValueError as exc:
+            raise ValueError(f"Tag XML could not be collected ({exc}).") from exc
     try:
         return collect_from_video(resolved, on_progress=on_progress)
     except VideoCollectError as exc:

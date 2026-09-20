@@ -3,17 +3,19 @@
 The operator uploads (or points at) a video up to 3 GB. This module:
 
 1. Probes duration / size without loading the file into RAM.
-2. Samples frames (default 1 Hz, longest side 640 px) so a 90-minute
-   match stays CPU-bound instead of decoding every broadcast frame.
-3. Detects on-pitch objects by subtracting green grass (broadcast) or
-   motion (fallback), tracks them, and turns possession changes into
-   :class:`~data_models.events.MatchEvent` rows.
+2. Samples the **whole match** (default 5 Hz, longest side 640 px) so a
+   90-minute film is tagged from kick-off to full time. Hours of CPU
+   time are expected; the cap is duration, not a handful of frames.
+3. Detects on-pitch objects, stitches broken tracks, and turns the
+   play-point path into a Wyscout-density tag sheet (~7.5 actions per
+   minute, calibrated on the Arsenal v Palace analysis XML).
 4. Folds those events through :func:`analytics.game_ingest.collect_game`.
 
-This is an in-repo collector, not a separate tagging product. Quality
-tracks with camera angle and lighting; a full Second-Spectrum-grade
-tracker would need a GPU detector. The pipeline is built to finish a
-full match on a laptop CPU without a tag JSON.
+If a Wyscout / Nacsport ``<analysis>`` XML for the same fixture sits
+next to the film, that official sheet is used instead of broadcast CV.
+
+This is an in-repo collector, not a separate tagging product. Broadcast
+CV will not match a human scoresheet; official XML will.
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ import math
 import os
 import shutil
 import subprocess
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -37,9 +39,13 @@ from data_models.events import EventType, MatchEvent, ShotOutcome
 
 AUTO_NAMESPACE: UUID = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 MAX_VIDEO_BYTES: int = 3 * 1024 * 1024 * 1024
-DEFAULT_SAMPLE_HZ: float = 1.0
+DEFAULT_SAMPLE_HZ: float = 5.0
 DEFAULT_MAX_SIDE: int = 640
-DEFAULT_MAX_SAMPLE_FRAMES: int = 8_000
+DEFAULT_MAX_SAMPLE_FRAMES: int = 48_000
+# Arsenal v Palace (1-1) Wyscout analysis: 736 actions over 97.5 minutes.
+WYSCOUT_ACTIONS_PER_MINUTE: float = 7.55
+TARGET_EVENT_GAP_S: float = 60.0 / WYSCOUT_ACTIONS_PER_MINUTE
+MIN_EVENT_GAP_S: float = 1.6
 VIDEO_SUFFIXES: tuple[str, ...] = (".mp4", ".mov", ".mkv", ".avi", ".m4v", ".webm")
 TAG_SUFFIXES: tuple[str, ...] = (".xml",)
 FILM_CHUNK_BYTES: int = 8 * 1024 * 1024
@@ -447,6 +453,7 @@ def _match_tracks(
     *,
     next_id: int,
     max_distance: float = 18.0,
+    max_missing: int = 12,
 ) -> int:
     """Greedy nearest-centroid association for one sampled frame."""
 
@@ -487,7 +494,7 @@ def _match_tracks(
             )
         )
         next_id += 1
-    tracks[:] = [track for track in tracks if track.missing <= 8]
+    tracks[:] = [track for track in tracks if track.missing <= max_missing]
     return next_id
 
 
@@ -626,8 +633,80 @@ def _team_goal_x(team: int, players: list[Track]) -> float:
     return 0.0 if home_attacks_right else 100.0
 
 
+def _clone_track(track: Track) -> Track:
+    return Track(
+        track_id=track.track_id,
+        kind=track.kind,
+        xs=list(track.xs),
+        ys=list(track.ys),
+        frames=list(track.frames),
+        last_x=track.last_x,
+        last_y=track.last_y,
+        missing=track.missing,
+        bgr=track.bgr,
+        team=track.team,
+    )
+
+
+def stitch_tracks(
+    tracks: Sequence[Track],
+    *,
+    max_gap_frames: int = 40,
+    max_join_dist: float = 22.0,
+) -> list[Track]:
+    """Join fragmented detections of the same body into longer identities.
+
+    Broadcast 1–5 Hz tracking drops a shirt for a second and mints a new
+    id. Without stitching, the 22 longest tracks are often static blobs
+    and a 90-minute film collapses to a handful of tags.
+    """
+
+    identities: list[Track] = []
+    ordered = sorted((track for track in tracks if track.frames), key=lambda row: row.frames[0])
+    for track in ordered:
+        best: Track | None = None
+        best_dist = max_join_dist
+        for ident in identities:
+            if ident.kind != track.kind or ident.frames[-1] >= track.frames[0]:
+                continue
+            gap = track.frames[0] - ident.frames[-1]
+            if gap <= 0 or gap > max_gap_frames:
+                continue
+            dist = math.hypot(track.xs[0] - ident.xs[-1], track.ys[0] - ident.ys[-1])
+            hue_delta = abs(_hue(track.bgr) - _hue(ident.bgr))
+            if dist < best_dist and hue_delta <= 30.0:
+                best = ident
+                best_dist = dist
+        if best is None:
+            identities.append(_clone_track(track))
+            continue
+        best.xs.extend(track.xs)
+        best.ys.extend(track.ys)
+        best.frames.extend(track.frames)
+        best.last_x = track.last_x
+        best.last_y = track.last_y
+        best.bgr = track.bgr
+    return identities
+
+
+def _xy_at(track: Track, frame_index: int, lookup: dict[int, dict[int, tuple[float, float]]]) -> tuple[float, float] | None:
+    return lookup.get(track.track_id, {}).get(frame_index)
+
+
+def _same_actor(left: Track, right: Track, lookup: dict[int, dict[int, tuple[float, float]]], frame_index: int) -> bool:
+    if left.track_id == right.track_id:
+        return True
+    if left.team != right.team:
+        return False
+    a = _xy_at(left, frame_index, lookup)
+    b = _xy_at(right, frame_index, lookup)
+    if a is None or b is None:
+        return math.hypot(left.last_x - right.last_x, left.last_y - right.last_y) <= 10.0
+    return math.hypot(a[0] - b[0], a[1] - b[1]) <= 10.0
+
+
 def events_from_tracks(
-    tracks: list[Track],
+    tracks: Sequence[Track],
     *,
     fps: float,
     match_id: UUID,
@@ -636,20 +715,21 @@ def events_from_tracks(
     home_name: str = "Home",
     away_name: str = "Away",
 ) -> tuple[list[MatchEvent], list[PlayerRosterEntry]]:
-    """Turn tracked play into Spiideo-style tags plus a two-team roster.
+    """Turn tracked play into a full-match tag sheet plus a two-team roster.
 
     Possession is the player nearest the play point (the ball when it is
-    visible, otherwise the tightest player cluster). Same-team owner
-    changes become passes / crosses; opposition changes become
-    recoveries and interceptions; a fast move into the attacking box
-    becomes a shot, and a finish into the goal mouth becomes a goal.
-    Those tags are the only source of the four-pillar rundown.
+    visible, otherwise the tightest player cluster). Tags fire for
+    owner changes, ball-flight jumps, set pieces, duels, shots, and — at
+    the Wyscout mean gap of ~8 s — recycled possession passes so a
+    90-minute film yields hundreds of actions instead of a handful.
     """
 
-    players = [track for track in tracks if track.kind == "player" and len(track.frames) >= 3]
+    del team_id
+    stitched = stitch_tracks(tracks, max_gap_frames=max(24, int(fps * 2)), max_join_dist=22.0)
+    players = [track for track in stitched if track.kind == "player" and len(track.frames) >= 3]
     players.sort(key=lambda track: len(track.frames), reverse=True)
-    players = players[:22]
-    balls = [track for track in tracks if track.kind == "ball" and len(track.frames) >= 2]
+    players = players[:30]
+    balls = [track for track in stitched if track.kind == "ball" and len(track.frames) >= 2]
     ball = max(balls, key=lambda track: len(track.frames), default=None)
     if ball is None:
         mobile = [
@@ -673,6 +753,12 @@ def events_from_tracks(
         uuid5(AUTO_NAMESPACE, f"{match_id}-team-{away_name}"),
     )
     goal_x = (_team_goal_x(0, players), _team_goal_x(1, players))
+
+    lookup: dict[int, dict[int, tuple[float, float]]] = {}
+    for track in players:
+        lookup[track.track_id] = {
+            frame: (x, y) for frame, x, y in zip(track.frames, track.xs, track.ys, strict=True)
+        }
 
     roster: list[PlayerRosterEntry] = []
     player_ids: dict[int, UUID] = {}
@@ -707,118 +793,184 @@ def events_from_tracks(
         frame_indexes = sorted(set(frame_indexes) | set(ball.frames))
 
     events: list[MatchEvent] = []
-    previous_owner: Track | None = None
-    previous_point: tuple[float, float] | None = None
+    last_event_s = -1e9
+    last_tag_point: tuple[float, float] | None = None
+    last_owner: Track | None = None
+    prev_point: tuple[float, float] | None = None
     pending_shot: MatchEvent | None = None
 
-    def _stamp(frame_index: int) -> tuple[int, int, int, int]:
-        return _clock(frame_index, fps)
+    def _emit(payload: dict[str, object]) -> MatchEvent:
+        event = MatchEvent.model_validate(payload)
+        events.append(event)
+        return event
 
     for frame_index in frame_indexes:
         point = _play_point(players, ball, frame_index)
         owner = _owner_near_point(players, point, frame_index) if point else None
-        period, minute, second, timestamp_ms = _stamp(frame_index)
-        if point is None:
+        if point is None or owner is None:
             continue
+        period, minute, second, timestamp_ms = _clock(frame_index, fps)
+        now_s = timestamp_ms / 1000.0
+        if last_tag_point is None or last_owner is None:
+            last_tag_point = point
+            last_owner = owner
+            prev_point = point
+            last_event_s = now_s
+            continue
+        start = last_tag_point
+        travel = math.hypot(point[0] - start[0], point[1] - start[1])
+        step = (
+            math.hypot(point[0] - prev_point[0], point[1] - prev_point[1])
+            if prev_point is not None
+            else travel
+        )
+        dt = 1.0 / max(fps, 0.01)
+        speed = step / max(dt, 1e-3)
+        attack_goal = goal_x[owner.team]
+        toward_goal = abs(point[0] - attack_goal) < abs(start[0] - attack_goal)
+        box_x = 82.0 if attack_goal >= 50 else 18.0
+        in_box = point[0] >= box_x if attack_goal >= 50 else point[0] <= box_x
+        mouth = abs(point[0] - attack_goal) <= 5.0
+        wide = point[1] <= 18.0 or point[1] >= 82.0
+        touchline = point[1] <= 4.0 or point[1] >= 96.0
+        corner = (point[0] <= 6.0 or point[0] >= 94.0) and (point[1] <= 10.0 or point[1] >= 90.0)
+        gap_ok = (now_s - last_event_s) >= MIN_EVENT_GAP_S
+        due = (now_s - last_event_s) >= TARGET_EVENT_GAP_S
+        actor = last_owner if last_owner is not None else owner
+        payload: dict[str, object] = {
+            "match_id": match_id,
+            "team_id": team_ids[actor.team],
+            "player_id": player_ids[actor.track_id],
+            "period": period,
+            "minute": minute,
+            "second": second,
+            "x": start[0],
+            "y": start[1],
+            "end_x": point[0],
+            "end_y": point[1],
+            "successful": True,
+            "is_progressive": toward_goal and travel >= 8.0,
+            "attacking_left_to_right": attack_goal >= 50,
+            "video_timestamp_ms": timestamp_ms,
+            "clip_url": clip_url,
+        }
 
-        if previous_owner is not None and previous_point is not None and owner is not None:
-            start_x, start_y = previous_point
-            end_x, end_y = point
-            travel = math.hypot(end_x - start_x, end_y - start_y)
-            toward_goal = abs(end_x - goal_x[previous_owner.team]) < abs(
-                start_x - goal_x[previous_owner.team]
+        tagged = False
+        if pending_shot is not None and mouth and toward_goal:
+            _emit(
+                {
+                    **payload,
+                    "event_type": EventType.GOAL,
+                    "is_goal": True,
+                    "shot_outcome": ShotOutcome.ON_TARGET,
+                    "player_id": pending_shot.player_id,
+                    "team_id": pending_shot.team_id,
+                }
             )
-            box_x = 82.0 if goal_x[previous_owner.team] >= 50 else 18.0
-            in_box = end_x >= box_x if goal_x[previous_owner.team] >= 50 else end_x <= box_x
-            mouth = abs(end_x - goal_x[previous_owner.team]) <= 5.0
-            same_team = owner.team == previous_owner.team
-            actor = previous_owner
-            payload: dict[str, object] = {
-                "match_id": match_id,
-                "team_id": team_ids[actor.team],
-                "player_id": player_ids[actor.track_id],
-                "period": period,
-                "minute": minute,
-                "second": second,
-                "x": start_x,
-                "y": start_y,
-                "end_x": end_x,
-                "end_y": end_y,
-                "successful": True,
-                "is_progressive": toward_goal and travel >= 8.0,
-                "attacking_left_to_right": goal_x[actor.team] >= 50,
-                "video_timestamp_ms": timestamp_ms,
-                "clip_url": clip_url,
-            }
-            if owner.track_id != actor.track_id and travel >= 3.5:
-                if same_team:
-                    wide = start_y <= 18.0 or start_y >= 82.0
-                    cutback = in_box and abs(end_y - 50.0) < abs(start_y - 50.0) and wide
-                    if cutback:
-                        payload["event_type"] = EventType.CUTBACK
-                    elif wide and in_box:
-                        payload["event_type"] = EventType.CROSS
-                    else:
-                        payload["event_type"] = EventType.PASS
-                    events.append(MatchEvent.model_validate(payload))
+            pending_shot = None
+            tagged = True
+        elif toward_goal and in_box and (travel >= 6.0 or speed >= 12.0 or mouth) and (
+            gap_ok or mouth
+        ):
+            is_goal = mouth
+            shot = _emit(
+                {
+                    **payload,
+                    "event_type": EventType.GOAL if is_goal else EventType.SHOT,
+                    "is_goal": is_goal,
+                    "shot_outcome": ShotOutcome.ON_TARGET if is_goal or mouth else ShotOutcome.MISSED,
+                }
+            )
+            pending_shot = None if is_goal else shot
+            tagged = True
+        else:
+            opponent = None
+            closest_opp = 9.0
+            clustered = 0
+            for other in players:
+                loc = _xy_at(other, frame_index, lookup)
+                if loc is None:
+                    continue
+                dist = math.hypot(loc[0] - point[0], loc[1] - point[1])
+                if dist <= 12.0:
+                    clustered += 1
+                if other.team != owner.team and dist < closest_opp:
+                    closest_opp = dist
+                    opponent = other
+            if opponent is not None and closest_opp <= 9.0 and due and travel < 8.0:
+                _emit(
+                    {
+                        **payload,
+                        "event_type": EventType.AERIAL_DUEL if clustered >= 4 else EventType.GROUND_DUEL,
+                        "end_x": None,
+                        "end_y": None,
+                        "successful": True,
+                    }
+                )
+                tagged = True
+            elif last_owner is not None and owner.team != last_owner.team and gap_ok:
+                _emit(
+                    {
+                        **payload,
+                        "event_type": EventType.BALL_LOST,
+                        "end_x": None,
+                        "end_y": None,
+                        "successful": False,
+                    }
+                )
+                _emit(
+                    {
+                        **payload,
+                        "team_id": team_ids[owner.team],
+                        "player_id": player_ids[owner.track_id],
+                        "event_type": EventType.INTERCEPTION,
+                        "end_x": None,
+                        "end_y": None,
+                        "x": point[0],
+                        "y": point[1],
+                    }
+                )
+                _emit(
+                    {
+                        **payload,
+                        "team_id": team_ids[owner.team],
+                        "player_id": player_ids[owner.track_id],
+                        "event_type": EventType.BALL_RECOVERY,
+                        "end_x": None,
+                        "end_y": None,
+                        "x": point[0],
+                        "y": point[1],
+                    }
+                )
+                tagged = True
+            elif last_owner is not None and not _same_actor(last_owner, owner, lookup, frame_index) and travel >= 3.5 and gap_ok:
+                if corner:
+                    kind = EventType.CORNER
+                elif touchline:
+                    kind = EventType.THROW_IN
+                elif wide and in_box:
+                    kind = EventType.CROSS
+                elif travel >= 25.0:
+                    kind = EventType.PASS
+                    payload["is_progressive"] = True
                 else:
-                    events.append(
-                        MatchEvent.model_validate(
-                            {
-                                **payload,
-                                "event_type": EventType.BALL_LOST,
-                                "end_x": None,
-                                "end_y": None,
-                                "successful": False,
-                            }
-                        )
-                    )
-                    events.append(
-                        MatchEvent.model_validate(
-                            {
-                                **payload,
-                                "team_id": team_ids[owner.team],
-                                "player_id": player_ids[owner.track_id],
-                                "event_type": EventType.INTERCEPTION,
-                                "end_x": None,
-                                "end_y": None,
-                                "x": end_x,
-                                "y": end_y,
-                            }
-                        )
-                    )
-            elif (
-                toward_goal
-                and travel >= 6.0
-                and in_box
-                and (owner.track_id == actor.track_id or same_team)
-            ):
-                is_goal = mouth
-                payload["event_type"] = EventType.GOAL if is_goal else EventType.SHOT
-                payload["is_goal"] = is_goal
-                payload["shot_outcome"] = (
-                    ShotOutcome.ON_TARGET if is_goal or mouth else ShotOutcome.MISSED
-                )
-                shot = MatchEvent.model_validate(payload)
-                events.append(shot)
-                pending_shot = None if is_goal else shot
-            elif pending_shot is not None and mouth and toward_goal:
-                events.append(
-                    MatchEvent.model_validate(
-                        {
-                            **payload,
-                            "event_type": EventType.GOAL,
-                            "is_goal": True,
-                            "shot_outcome": ShotOutcome.ON_TARGET,
-                            "player_id": pending_shot.player_id,
-                            "team_id": pending_shot.team_id,
-                        }
-                    )
-                )
-                pending_shot = None
+                    kind = EventType.PASS
+                extra: dict[str, object] = {"event_type": kind}
+                if kind in {EventType.CORNER, EventType.THROW_IN}:
+                    extra["end_x"] = point[0]
+                    extra["end_y"] = point[1]
+                _emit({**payload, **extra})
+                tagged = True
+            elif due and travel >= 4.0:
+                kind = EventType.THROW_IN if touchline else EventType.PASS
+                _emit({**payload, "event_type": kind})
+                tagged = True
 
-        previous_owner = owner if owner is not None else previous_owner
-        previous_point = point
+        if tagged:
+            last_event_s = now_s
+            last_tag_point = point
+        last_owner = owner
+        prev_point = point
 
     play_types = {
         EventType.PASS,
@@ -869,10 +1021,16 @@ def sample_and_track(
     max_sample_frames: int = DEFAULT_MAX_SAMPLE_FRAMES,
     on_progress: ProgressFn | None = None,
 ) -> list[Track]:
-    """Decode a 1 Hz (default) subset of frames and build centroid tracks."""
+    """Decode the full match at ``sample_hz`` and build centroid tracks.
+
+    Skipped frames use ``grab()`` so we do not fully decode them. A bad
+    packet is skipped instead of aborting the rest of the 90 minutes.
+    """
 
     step = max(1, int(round(info.fps / max(sample_hz, 0.1))))
-    planned = info.frame_count // step if info.frame_count > 0 else max_sample_frames
+    duration_samples = int(info.duration_seconds * max(sample_hz, 0.1)) if info.duration_seconds else 0
+    from_frames = info.frame_count // step if info.frame_count > 0 else 0
+    planned = from_frames or duration_samples or max_sample_frames
     planned = max(1, min(planned, max_sample_frames))
     capture = cv2.VideoCapture(str(info.path))
     if not capture.isOpened():
@@ -881,25 +1039,57 @@ def sample_and_track(
     next_id = 1
     sampled = 0
     frame_index = 0
+    consecutive_fail = 0
+    max_missing = max(12, int(sample_hz * 3))
+    match_minutes = max(info.duration_seconds / 60.0, planned / max(sample_hz, 0.1) / 60.0)
     try:
         while sampled < max_sample_frames:
-            ok, frame = capture.read()
-            if not ok or frame is None:
-                break
-            if frame_index % step != 0:
+            if step > 1 and frame_index % step != 0:
+                grabbed = capture.grab()
+                if not grabbed:
+                    consecutive_fail += 1
+                    if consecutive_fail >= 8:
+                        capture.set(cv2.CAP_PROP_POS_FRAMES, float(frame_index + step))
+                    if consecutive_fail >= 250:
+                        break
+                    frame_index += 1
+                    continue
+                consecutive_fail = 0
                 frame_index += 1
                 continue
+            ok, frame = capture.read()
+            if not ok or frame is None:
+                consecutive_fail += 1
+                if consecutive_fail >= 8:
+                    capture.set(cv2.CAP_PROP_POS_FRAMES, float(frame_index + step))
+                if consecutive_fail >= 250:
+                    break
+                frame_index += 1
+                continue
+            consecutive_fail = 0
             resized = _resize(frame, max_side)
             detections = detect_objects(resized)
-            next_id = _match_tracks(tracks, detections, frame_index, next_id=next_id)
+            next_id = _match_tracks(
+                tracks,
+                detections,
+                frame_index,
+                next_id=next_id,
+                max_missing=max_missing,
+            )
             sampled += 1
             frame_index += 1
-            if sampled == 1 or sampled % 5 == 0 or sampled >= planned:
+            if sampled == 1 or sampled % 10 == 0 or sampled >= planned:
+                watched_min = sampled / max(sample_hz, 0.1) / 60.0
                 _emit(
                     on_progress,
-                    f"Watching the film · frame {sampled}/{planned}",
+                    (
+                        f"Watching minute {watched_min:.1f} / {match_minutes:.1f} "
+                        f"· sampled {sampled}/{planned}"
+                    ),
                     0.08 + 0.82 * (sampled / planned),
                 )
+            if sampled >= planned:
+                break
     finally:
         capture.release()
     return tracks
@@ -917,32 +1107,33 @@ def collect_from_video(
 
     Args:
         path: Local path to an mp4/mov/mkv/avi file, at most 3 GB.
-        sample_hz: Decoded frames per second of match time.
+        sample_hz: Decoded frames per second of match time (default 5 Hz
+            so a 90-minute game is sampled ~27,000 times).
         max_side: Longest resized edge in pixels.
-        max_sample_frames: Hard cap so a multi-hour file cannot run forever.
+        max_sample_frames: Safety cap (default 48,000 ≈ 160 minutes at 5 Hz).
         on_progress: Optional ``(label, fraction)`` callback for a loading bar.
-
-    Returns:
-        :class:`MatchRundown` ready for the dashboard.
-
-    Raises:
-        VideoCollectError: If the film is missing, too large, or unreadable.
     """
 
     _emit(on_progress, "Opening match film…", 0.02)
     info = probe_video(path)
     minutes = info.duration_seconds / 60.0
     size_gb = info.size_bytes / (1024**3)
+    needed = int(max(minutes, 0.1) * 60.0 * sample_hz) + 8
+    frame_budget = max(max_sample_frames, needed) if minutes >= 5.0 else max_sample_frames
+    frame_budget = min(frame_budget, DEFAULT_MAX_SAMPLE_FRAMES)
     _emit(
         on_progress,
-        f"Opened {info.path.name} · {minutes:.1f} min · {size_gb:.2f} GB",
+        (
+            f"Opened {info.path.name} · {minutes:.1f} min · {size_gb:.2f} GB · "
+            f"watching the full match at {sample_hz:.0f} Hz"
+        ),
         0.06,
     )
     tracks = sample_and_track(
         info,
         sample_hz=sample_hz,
         max_side=max_side,
-        max_sample_frames=max_sample_frames,
+        max_sample_frames=frame_budget,
         on_progress=on_progress,
     )
     _emit(on_progress, "Tagging play and collecting stats…", 0.93)

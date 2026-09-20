@@ -53,7 +53,6 @@ _SKIP_KINDS = {
     "inizio secondo tempo",
     "fine primo tempo",
     "fine secondo tempo",
-    "parate",
     "goal_kick",
     "spazzate",
     "palle vaganti",
@@ -91,6 +90,7 @@ _KIND_TO_EVENT: dict[str, EventType] = {
     "calcio d'angolo": EventType.CORNER,
     "fuorigioco": EventType.OFFSIDE,
     "coinvolgimento nell'azione del goal": EventType.ASSIST,
+    "parate": EventType.SAVE,
 }
 
 
@@ -119,6 +119,70 @@ def sidecar_path_for(video_path: Path) -> Path:
 
     resolved = video_path.expanduser()
     return resolved.with_name(resolved.stem + SIDECAR_SUFFIX)
+
+
+def find_official_tag_xml(video_path: Path, *directories: Path) -> Path | None:
+    """Find a Wyscout / Nacsport ``<analysis>`` sheet that belongs with a film.
+
+    Matches on team names inferred from the filename (``Arsenal_v_Palace``)
+    and on a same-folder ``.xml`` whose stem shares the fixture prefix.
+    Auto-written ``.tags.xml`` sidecars are ignored so a sparse previous
+    collect cannot mask official tags.
+    """
+
+    resolved = video_path.expanduser()
+    home, away = infer_team_names(resolved.name)
+    wanted = {home.casefold(), away.casefold()}
+    generic = wanted <= {"home", "away"}
+    folders: list[Path] = [resolved.parent, *directories]
+    seen: set[Path] = set()
+    ranked: list[tuple[int, Path]] = []
+    for folder in folders:
+        if not folder.is_dir():
+            continue
+        try:
+            listing = list(folder.iterdir())
+        except OSError:
+            continue
+        for candidate in listing:
+            suffix = candidate.suffix.lower()
+            if suffix != ".xml" or candidate.name.endswith(SIDECAR_SUFFIX):
+                continue
+            try:
+                path = candidate.resolve()
+            except OSError:
+                continue
+            if path in seen or not path.is_file() or path.stat().st_size <= 0:
+                continue
+            seen.add(path)
+            if not _looks_like_analysis_xml(path):
+                continue
+            sheet_home, sheet_away = infer_team_names(path.name)
+            names = {sheet_home.casefold(), sheet_away.casefold()}
+            score = 0
+            film_prefix = resolved.stem.split("__")[0].casefold()
+            xml_prefix = path.stem.split("__")[0].casefold()
+            if film_prefix and film_prefix == xml_prefix:
+                score += 4
+            if not generic and names == wanted:
+                score += 3
+            if resolved.stem.casefold() in path.stem.casefold() or path.stem.casefold() in resolved.stem.casefold():
+                score += 2
+            if score > 0:
+                ranked.append((score, path))
+    if not ranked:
+        return None
+    ranked.sort(key=lambda item: (-item[0], item[1].name))
+    return ranked[0][1]
+
+
+def _looks_like_analysis_xml(path: Path) -> bool:
+    try:
+        head = path.read_bytes()[:800].decode("utf-8-sig", errors="replace")
+    except OSError:
+        return False
+    lowered = head.lstrip().lower()
+    return lowered.startswith("<analysis") or "<analysis" in lowered[:400]
 
 
 def attacks_from_events(events: Sequence[MatchEvent]) -> list[dict[str, object]]:
