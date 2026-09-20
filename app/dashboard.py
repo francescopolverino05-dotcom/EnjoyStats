@@ -735,7 +735,7 @@ def render_upload_loader() -> tuple[Callable[[str, float], None], Callable[[], N
 
     started = time.monotonic()
     st.subheader("Collecting match stats")
-    st.caption("Watching the film on disk and building the rundown. Keep this tab open.")
+    st.caption("Watching every sampled frame of the film on disk. Keep this tab open — a full match can take hours.")
     bar = st.progress(0, text="Preparing the match film…")
     meta = st.empty()
     meta.caption("Elapsed 00:00  ·  estimating remaining time…")
@@ -791,7 +791,8 @@ def render_match_tags(rundown: MatchRundown) -> None:
     )
     names = {profile.player_id: profile_label(profile) for profile in rundown.players}
     rows = []
-    for event in rundown.events[:250]:
+    preview = rundown.events[:500]
+    for event in preview:
         actor = names.get(event.player_id, "—") if event.player_id else "—"
         rows.append(
             {
@@ -805,8 +806,8 @@ def render_match_tags(rundown: MatchRundown) -> None:
             }
         )
     st.dataframe(rows, hide_index=True, width="stretch")
-    if len(rundown.events) > 250:
-        st.caption(f"Showing the first 250 of {len(rundown.events)} tags.")
+    if len(rundown.events) > 500:
+        st.caption(f"Showing the first 500 of {len(rundown.events)} tags.")
     st.download_button(
         "Download match tags (XML)",
         data=rundown_to_xml(rundown),
@@ -858,9 +859,10 @@ def render_sidebar() -> tuple[str, UUID, UUID, MatchRundown | None]:
 
     st.sidebar.header("Upload a game")
     st.sidebar.caption(
-        "Full match films (up to 3 GB) should be dropped into "
-        f"`{inbox_dir}` or pasted as a local path. The sidebar file picker "
-        "disconnects on large PUTs — use it only for short clips."
+        "Drop a full match film (up to 3 GB) or a Wyscout XML into "
+        f"`{inbox_dir}`. Collection watches the whole 90 minutes at 5 Hz "
+        "(this can take hours). If an official analysis XML for the same "
+        "fixture is in the inbox, those tags are used instead of broadcast CV."
     )
     on_disk = ready_films()
     none_label = "(none — paste a path or drop a file in .local-run/inbox)"
@@ -996,8 +998,9 @@ def render_film_uploader_panel(base_url: str) -> None:
     st.caption(
         "Choose a film here. Progress should move off Preparing within a few "
         "seconds as 4 MB chunks land in "
-        f"`{inbox}`. Then pick that file under Films on this machine and "
-        "click Collect stats from film."
+        f"`{inbox}`. Then pick that file under Films and tag sheets and "
+        "click Collect stats from film. Keep the tab open — a 90-minute "
+        "watch tags the whole match, not a 9-action excerpt."
     )
     st.link_button("Open uploader in a new tab", upload_url)
     import streamlit.components.v1 as components

@@ -17,7 +17,7 @@ from analytics.game_ingest import (
     parse_game_payload,
 )
 from analytics.sample_game import sample_game_payload
-from analytics.match_tags import collect_from_tag_xml
+from analytics.match_tags import collect_from_tag_xml, find_official_tag_xml
 from analytics.video_auto_collect import (
     MAX_VIDEO_BYTES,
     VIDEO_SUFFIXES,
@@ -187,6 +187,12 @@ def collect_from_film_path(
         raise ValueError("Choose a match film (mp4, mov, mkv, avi, m4v, webm) or a tag XML.")
     if not resolved.is_file():
         raise ValueError(f"Match film not found: {resolved}")
+    official = find_official_tag_xml(resolved, film_inbox_dir(), film_upload_dir())
+    if official is not None:
+        try:
+            return collect_from_tag_xml(official.read_text(encoding="utf-8-sig"))
+        except ValueError as exc:
+            raise ValueError(f"Tag XML could not be collected ({exc}).") from exc
     try:
         return collect_from_video(resolved, on_progress=on_progress)
     except VideoCollectError as exc:

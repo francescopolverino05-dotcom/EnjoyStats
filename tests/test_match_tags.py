@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from analytics.match_tags import (
     collect_from_tag_xml,
+    find_official_tag_xml,
     infer_team_names,
     rundown_to_xml,
     write_sidecar_xml,
@@ -171,3 +172,13 @@ def test_official_arsenal_palace_wyscout_xml_is_one_one() -> None:
     assert names["J. Porter"].defensive.goals_against == 1
     assert "C. O'Neill" in names
     assert rundown.summary.player_count >= 15
+
+
+def test_find_official_tag_xml_pairs_film_with_wyscout_sheet(tmp_path) -> None:
+    film = tmp_path / "Arsenal_v_Palace__1-1_.mp4"
+    film.write_bytes(b"not-a-real-film")
+    sheet = tmp_path / "Arsenal_v_Palace__1-1.xml"
+    sheet.write_text(_WYSCOUT_MINI, encoding="utf-8")
+    (tmp_path / "Arsenal_v_Palace__1-1_.tags.xml").write_text("<MatchTags/>", encoding="utf-8")
+    found = find_official_tag_xml(film, tmp_path)
+    assert found == sheet.resolve()

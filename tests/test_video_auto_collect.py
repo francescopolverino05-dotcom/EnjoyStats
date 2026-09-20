@@ -10,13 +10,16 @@ import pytest
 from analytics.video_auto_collect import (
     MAX_VIDEO_BYTES,
     VIDEO_SUFFIXES,
+    Track,
     VideoCollectError,
     collect_from_video,
+    events_from_tracks,
     list_ready_films,
     normalize_film_path,
     probe_video,
     remux_for_opencv,
     safe_film_name,
+    stitch_tracks,
     write_film_chunks,
     write_synthetic_match_clip,
 )
@@ -172,3 +175,112 @@ def test_progress_callbacks_fire_during_save_and_collect(tmp_path: Path) -> None
     assert any("Opening" in stage or "Watching" in stage for stage in stages)
     assert fractions[0] >= 0.0
     assert fractions[-1] == 1.0
+
+
+def test_stitch_tracks_joins_fragmented_identities() -> None:
+    first = Track(
+        track_id=1,
+        kind="player",
+        xs=[30.0, 31.0, 32.0],
+        ys=[50.0, 50.0, 50.0],
+        frames=[0, 1, 2],
+        last_x=32.0,
+        last_y=50.0,
+        bgr=(20.0, 40.0, 200.0),
+    )
+    second = Track(
+        track_id=2,
+        kind="player",
+        xs=[33.0, 34.0, 35.0],
+        ys=[50.0, 50.0, 50.0],
+        frames=[6, 7, 8],
+        last_x=35.0,
+        last_y=50.0,
+        bgr=(22.0, 42.0, 198.0),
+    )
+    joined = stitch_tracks([first, second], max_gap_frames=10, max_join_dist=20.0)
+    players = [track for track in joined if track.kind == "player"]
+    assert len(players) == 1
+    assert players[0].frames == [0, 1, 2, 6, 7, 8]
+
+
+def test_static_crowd_does_not_hide_a_full_possession_chain() -> None:
+    """Long-lived stand blobs used to crowd out the 22-track cap (≈9 tags)."""
+
+    from uuid import uuid4
+
+    from data_models.events import EventType
+
+    n_frames = 480
+    tracks: list[Track] = []
+    for index in range(22):
+        x = 8.0 + index * 3.5
+        tracks.append(
+            Track(
+                track_id=index + 1,
+                kind="player",
+                xs=[x] * n_frames,
+                ys=[12.0] * n_frames,
+                frames=list(range(n_frames)),
+                last_x=x,
+                last_y=12.0,
+                bgr=(20.0, 40.0, 200.0) if index < 11 else (200.0, 80.0, 20.0),
+                team=0 if index < 11 else 1,
+            )
+        )
+    fragments: list[Track] = []
+    for start in range(0, n_frames, 5):
+        xs = [25.0 + (start + offset) * 0.12 for offset in range(5)]
+        fragments.append(
+            Track(
+                track_id=100 + start,
+                kind="player",
+                xs=xs,
+                ys=[50.0] * 5,
+                frames=list(range(start, start + 5)),
+                last_x=xs[-1],
+                last_y=50.0,
+                bgr=(18.0, 36.0, 210.0),
+                team=0,
+            )
+        )
+    ball_xs = [28.0 + frame * 0.12 for frame in range(n_frames)]
+    ball = Track(
+        track_id=999,
+        kind="ball",
+        xs=ball_xs,
+        ys=[50.0] * n_frames,
+        frames=list(range(n_frames)),
+        last_x=ball_xs[-1],
+        last_y=50.0,
+    )
+    events, roster = events_from_tracks(
+        [*tracks, *fragments, ball],
+        fps=8.0,
+        match_id=uuid4(),
+        team_id=uuid4(),
+        clip_url="file:///tmp/full.avi",
+        home_name="Arsenal",
+        away_name="Palace",
+    )
+    clocks = [event.video_timestamp_ms for event in events]
+    assert roster
+    assert len(events) >= 6
+    assert max(clocks) >= 40_000
+    assert any(
+        event.event_type in {EventType.PASS, EventType.CROSS, EventType.SHOT, EventType.GOAL}
+        for event in events
+    )
+
+
+def test_collect_film_uses_sibling_wyscout_xml(tmp_path: Path) -> None:
+    clip = write_synthetic_match_clip(tmp_path / "Arsenal_v_Palace.avi", frames=24, fps=8)
+    shutil.copy(
+        Path(__file__).resolve().parent / "fixtures" / "arsenal_v_palace_1-1.xml",
+        tmp_path / "Arsenal_v_Palace.xml",
+    )
+    rundown = collect_from_film_path(clip)
+    assert rundown.summary.goals == 2
+    assert rundown.summary.passes >= 300
+    names = {profile.player_name for profile in rundown.players}
+    assert "A. Harriman-Annous" in names
