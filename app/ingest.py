@@ -164,6 +164,23 @@ def save_uploaded_film(
         raise ValueError(str(exc)) from exc
 
 
+def film_has_official_tags(path: str | Path) -> bool:
+    """Return whether collect can skip the hours-long film watch.
+
+    Official Wyscout / Nacsport XML (the file itself, or a sibling analysis
+    sheet) is the Impact-style source of truth and finishes in seconds.
+    """
+
+    resolved = normalize_film_path(path)
+    try:
+        resolved = resolved.resolve()
+    except OSError:
+        return False
+    if resolved.suffix.lower() == ".xml":
+        return resolved.is_file()
+    return find_official_tag_xml(resolved, film_inbox_dir(), film_upload_dir()) is not None
+
+
 def collect_from_film_path(
     path: str | Path,
     *,

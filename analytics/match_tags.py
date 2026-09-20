@@ -53,7 +53,6 @@ _SKIP_KINDS = {
     "inizio secondo tempo",
     "fine primo tempo",
     "fine secondo tempo",
-    "parate",
     "goal_kick",
     "spazzate",
     "palle vaganti",
@@ -91,6 +90,7 @@ _KIND_TO_EVENT: dict[str, EventType] = {
     "calcio d'angolo": EventType.CORNER,
     "fuorigioco": EventType.OFFSIDE,
     "coinvolgimento nell'azione del goal": EventType.ASSIST,
+    "parate": EventType.SAVE,
 }
 
 

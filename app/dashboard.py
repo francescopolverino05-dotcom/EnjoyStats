@@ -44,15 +44,22 @@ from app.ingest import (
     collect_from_film_path,
     collect_sample_match,
     collect_uploaded_bytes,
+    film_has_official_tags,
     load_from_rundown,
     persist_rundown,
     profile_label,
     ready_films,
     save_uploaded_film,
 )
+from analytics.collect_job import (
+    load_job_rundown,
+    read_job_status,
+    start_collect_job,
+)
 from analytics.video_auto_collect import film_inbox_dir, film_upload_dir, normalize_film_path
 from api.film_upload import upload_page_html
 from analytics.game_ingest import MatchRundown, rundown_from_mapping, rundown_to_json
+from analytics.team_sheet import highlight_moments_from_rundown, team_sheet_rows, team_sheets_from_rundown
 from analytics.match_tags import attacks_from_events, rundown_to_xml
 from config.pitch_config import (
     CENTRE_CIRCLE_RADIUS_M,
@@ -771,7 +778,49 @@ def render_match_summary(rundown: MatchRundown) -> None:
         "Every number below is counted from the match tags (passes, shots, "
         "recoveries) — the same sheet Spiideo / Wyscout XML export uses."
     )
+    render_team_sheet(rundown)
     render_match_tags(rundown)
+    render_highlight_moments(rundown)
+
+
+def render_team_sheet(rundown: MatchRundown) -> None:
+    """Impact-style 15-stat board, one column per team."""
+
+    sheets = team_sheets_from_rundown(rundown)
+    if not sheets:
+        return
+    st.subheader("Team statistics")
+    st.caption(
+        "The 15 basic team stats Impact-style analysis publishes: counted "
+        "from this match's tags, not a second spreadsheet."
+    )
+    st.dataframe(team_sheet_rows(sheets), hide_index=True, width="stretch")
+
+
+def render_highlight_moments(rundown: MatchRundown) -> None:
+    """15-second windows around goals, shots, saves, and corners."""
+
+    moments = highlight_moments_from_rundown(rundown)
+    if not moments:
+        return
+    st.subheader("15-second moments")
+    st.caption(
+        "Each row is a 15-second clip window around a tagged highlight "
+        "(goal, shot, save, corner). Same clock as the tag sheet."
+    )
+    rows = [
+        {
+            "Clock": moment.clock,
+            "Moment": moment.kind,
+            "Player": moment.player,
+            "Team": moment.team_name,
+            "Window ms": f"{moment.start_ms}–{moment.end_ms}",
+        }
+        for moment in moments[:80]
+    ]
+    st.dataframe(rows, hide_index=True, width="stretch")
+    if len(moments) > 80:
+        st.caption(f"Showing the first 80 of {len(moments)} highlight windows.")
 
 
 def render_match_tags(rundown: MatchRundown) -> None:
@@ -852,6 +901,7 @@ def render_sidebar() -> tuple[str, UUID, UUID, MatchRundown | None]:
 
     rundown_key = "collected_rundown"
     persist_key = "ingest_persist_message"
+    job_key = "collect_job_path"
     upload_dir = film_upload_dir()
     inbox_dir = film_inbox_dir()
     inbox_dir.mkdir(parents=True, exist_ok=True)
@@ -904,6 +954,7 @@ def render_sidebar() -> tuple[str, UUID, UUID, MatchRundown | None]:
     if clear_collected:
         st.session_state.pop(rundown_key, None)
         st.session_state.pop(persist_key, None)
+        st.session_state.pop(job_key, None)
 
     error: str | None = None
     if collect_sample:
@@ -932,16 +983,29 @@ def render_sidebar() -> tuple[str, UUID, UUID, MatchRundown | None]:
             update("Preparing the match film…", 0.04)
             if pending_upload is not None:
                 source_path = _resolve_film_source("", None, pending_upload, upload_dir, update)
-            update("Watching the film…", 0.36)
+            source = Path(source_path)
+            if film_has_official_tags(source):
+                update("Collecting official tags…", 0.36)
 
-            def _on_collect(label: str, fraction: float) -> None:
-                update(label, 0.36 + 0.64 * fraction)
+                def _on_collect(label: str, fraction: float) -> None:
+                    update(label, 0.36 + 0.64 * fraction)
 
-            rundown = collect_from_film_path(source_path, on_progress=_on_collect)
-            finish()
-            st.session_state[rundown_key] = rundown_to_json(rundown)
-            _persisted, message = asyncio.run(persist_rundown(base_url, rundown))
-            st.session_state[persist_key] = message
+                rundown = collect_from_film_path(source_path, on_progress=_on_collect)
+                finish()
+                st.session_state[rundown_key] = rundown_to_json(rundown)
+                _persisted, message = asyncio.run(persist_rundown(base_url, rundown))
+                st.session_state[persist_key] = message
+            else:
+                update("Starting background collect…", 0.2)
+                status_path = start_collect_job(source)
+                st.session_state[job_key] = str(status_path)
+                finish()
+                st.session_state.pop(rundown_key, None)
+                st.session_state[persist_key] = (
+                    "Full-match collect is running in the background "
+                    "(Impact-style: walk away, refresh later). "
+                    f"Status: {status_path.name}"
+                )
         except ValueError as exc:
             error = str(exc)
         except OSError as exc:
@@ -961,6 +1025,26 @@ def render_sidebar() -> tuple[str, UUID, UUID, MatchRundown | None]:
                 error = str(exc)
     if error:
         st.sidebar.error(error)
+
+    job_path_raw = str(st.session_state.get(job_key, "") or "")
+    if job_path_raw:
+        status = read_job_status(Path(job_path_raw))
+        if status and status.get("state") == "done" and rundown_key not in st.session_state:
+            loaded = load_job_rundown(status)
+            if loaded is not None:
+                st.session_state[rundown_key] = rundown_to_json(loaded)
+                st.session_state[persist_key] = str(status.get("label") or "Background collect ready.")
+        elif status and status.get("state") in {"queued", "running"}:
+            fraction = float(status.get("fraction") or 0.0)
+            st.sidebar.info(
+                f"{status.get('label') or 'Watching the film…'}  ·  {fraction * 100:.0f}%"
+            )
+            st.sidebar.caption(
+                "Leave this tab or close it — the collect keeps running on disk. "
+                "Refresh to pull progress."
+            )
+        elif status and status.get("state") == "error":
+            st.sidebar.error(str(status.get("error") or "Background collect failed."))
 
     stored = st.session_state.get(rundown_key)
     if stored:
