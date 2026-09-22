@@ -59,7 +59,11 @@ from analytics.collect_job import (
     start_collect_job,
 )
 from analytics.film_link import register_match_link
-from analytics.team_collect import named_player_profiles, team_profiles_from_rundown
+from analytics.team_collect import (
+    is_one_sided_sheet,
+    named_player_profiles,
+    team_profiles_from_rundown,
+)
 from analytics.video_auto_collect import (
     VideoCollectError,
     film_inbox_dir,
@@ -420,9 +424,13 @@ def _inject_styles() -> None:
             min-height: 48px;
             border-radius: 12px;
           }
-          div[data-testid="stButton"] button[kind="primary"] {
+          div[data-testid="stButton"] button[kind="primary"],
+          section.main [data-testid="stBaseButton-primary"] {
             width: 100%;
             font-weight: 700;
+            background: #16a34a !important;
+            color: #fff !important;
+            border: 0 !important;
           }
           div[data-testid="stTextInput"] input,
           div[data-testid="stSelectbox"] div[data-baseweb="select"] {
@@ -1203,6 +1211,14 @@ def render_collective_rundown(rundown: MatchRundown) -> None:
     """Home / Away Spiideo pillars counted from the match tags."""
 
     render_match_summary(rundown)
+    if is_one_sided_sheet(rundown):
+        analysed = rundown.summary.home_team_name or "Home"
+        other = rundown.summary.away_team_name or "Away"
+        st.info(
+            f"This official sheet is a one-team analysis of {analysed}. "
+            f"{other} only has tags that appear on this export — usually the "
+            "goal they scored — not a full opposition Spiideo sheet."
+        )
     teams = team_profiles_from_rundown(rundown)
     if teams:
         st.subheader("Collective team stats")

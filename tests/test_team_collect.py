@@ -9,6 +9,7 @@ from analytics.match_tags import collect_from_tag_xml
 from analytics.sample_game import TEAM_ID, sample_game_payload
 from analytics.team_collect import (
     is_invented_film_identity,
+    is_one_sided_sheet,
     named_player_profiles,
     team_profiles_from_rundown,
 )
@@ -38,7 +39,9 @@ def test_arsenal_palace_xml_has_two_collective_sheets() -> None:
     teams = team_profiles_from_rundown(rundown)
     assert len(teams) == 2
     assert all(row.position == "TEAM" for row in teams)
+    assert {row.player_name for row in teams} == {"Arsenal", "Palace"}
     assert {row.offensive.goals for row in teams} == {1}
+    assert is_one_sided_sheet(rundown) is True
     assert sum(row.distribution.passes.total for row in teams) >= 400
     named = named_player_profiles(rundown)
     assert named

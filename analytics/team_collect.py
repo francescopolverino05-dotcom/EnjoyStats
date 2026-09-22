@@ -81,3 +81,19 @@ def named_player_profiles(rundown: MatchRundown) -> list[PlayerMatchProfile]:
     """Official-tag players only — hide invented ``Home CM 4`` film rows."""
 
     return [row for row in rundown.players if not is_invented_film_identity(row)]
+
+
+def is_one_sided_sheet(rundown: MatchRundown) -> bool:
+    """Return whether almost every tag belongs to a single team.
+
+    Wyscout ``<analysis>`` exports are usually one analysed side. The other
+    team only receives synthetic tags (typically the goal they scored).
+    """
+
+    counts: dict[UUID, int] = defaultdict(int)
+    for event in rundown.events:
+        counts[event.team_id] += 1
+    if len(counts) < 2:
+        return True
+    total = sum(counts.values()) or 1
+    return min(counts.values()) / total < 0.05

@@ -1150,7 +1150,15 @@ def collect_from_video(
         home_name=home_name,
         away_name=away_name,
     )
-    rundown = collect_game(GamePayload(match_id=match_id, players=roster, events=events))
+    rundown = collect_game(
+        GamePayload(
+            match_id=match_id,
+            players=roster,
+            events=events,
+            home_team_name=home_name,
+            away_team_name=away_name,
+        )
+    )
     try:
         write_sidecar_xml(rundown, info.path)
     except OSError:

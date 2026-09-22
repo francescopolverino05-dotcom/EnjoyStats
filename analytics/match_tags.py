@@ -636,7 +636,13 @@ def _parse_analysis_xml(root: Element) -> GamePayload:
 
     if not events:
         raise ValueError("Analysis XML has no mapped on-ball actions to collect.")
-    return GamePayload(match_id=match_id, players=list(roster.values()), events=events)
+    return GamePayload(
+        match_id=match_id,
+        players=list(roster.values()),
+        events=events,
+        home_team_name=home_name,
+        away_team_name=away_name,
+    )
 
 
 def load_sidecar_xml(video_path: Path) -> MatchRundown | None:

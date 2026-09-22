@@ -66,6 +66,8 @@ class HighlightMoment(StrictModel):
 
 
 def _team_name(rundown: MatchRundown, team_id: UUID, *, fallback: str) -> str:
+    if fallback and fallback not in {"Home", "Away"}:
+        return fallback
     members = [row for row in rundown.players if row.team_id == team_id]
     counts: dict[str, int] = defaultdict(int)
     for member in members:
@@ -101,7 +103,10 @@ def team_sheets_from_rundown(rundown: MatchRundown) -> list[TeamBasicStats]:
             seen.add(profile.team_id)
             team_ids.append(profile.team_id)
     team_ids.sort(key=lambda team_id: -sum(1 for row in rundown.players if row.team_id == team_id))
-    labels = ("Home", "Away")
+    labels = (
+        rundown.summary.home_team_name or "Home",
+        rundown.summary.away_team_name or "Away",
+    )
     total = max(len(events), 1)
     sheets: list[TeamBasicStats] = []
     for index, team_id in enumerate(team_ids):

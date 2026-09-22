@@ -49,6 +49,8 @@ def test_arsenal_palace_xml_fills_impact_team_board() -> None:
     by_name = {sheet.team_name: sheet for sheet in sheets}
     home = sheets[0]
     away = sheets[1]
+    assert home.team_name == "Arsenal"
+    assert away.team_name == "Palace"
     assert home.goals == 1
     assert away.goals == 1
     assert home.total_passes >= 300

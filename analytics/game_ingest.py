@@ -43,6 +43,8 @@ class GamePayload(StrictModel):
     match_id: UUID | None = None
     players: list[PlayerRosterEntry] = Field(default_factory=list)
     events: list[MatchEvent] = Field(min_length=1)
+    home_team_name: str = Field(default="Home", max_length=80)
+    away_team_name: str = Field(default="Away", max_length=80)
 
 
 class MatchSummary(StrictModel):
@@ -55,6 +57,8 @@ class MatchSummary(StrictModel):
     shots: int = Field(ge=0)
     passes: int = Field(ge=0)
     duration_minutes: float = Field(ge=0.0)
+    home_team_name: str = Field(default="Home", max_length=80)
+    away_team_name: str = Field(default="Away", max_length=80)
 
 
 class MatchRundown(StrictModel):
@@ -224,6 +228,8 @@ def collect_game(payload: GamePayload) -> MatchRundown:
         shots=sum(1 for event in ordered if event.event_type in shot_types),
         passes=sum(1 for event in ordered if event.event_type in pass_types),
         duration_minutes=round(match_minutes, 1),
+        home_team_name=payload.home_team_name or "Home",
+        away_team_name=payload.away_team_name or "Away",
     )
     return MatchRundown(
         match_id=match_id,
