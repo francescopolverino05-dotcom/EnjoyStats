@@ -36,9 +36,11 @@ from app.metrics import PassDirections
 
 import analytics.match_tags as _match_tags_mod
 import app.ingest as _ingest_mod
+import analytics.team_collect as _team_collect_mod
 
 importlib.reload(_match_tags_mod)
 importlib.reload(_ingest_mod)
+importlib.reload(_team_collect_mod)
 from app.ingest import (
     UPLOAD_DISCONNECT_HINT,
     collect_from_film_path,
@@ -1145,7 +1147,7 @@ def render_analyse_landing(base_url: str) -> None:
     )
     with st.expander("Large film uploader (any phone, tablet, or computer)", expanded=False):
         render_film_uploader_panel(base_url)
-    analyse = st.button("Analyse Stats", type="primary")
+    analyse = st.button("Analyse Stats", type="primary", use_container_width=True)
 
     if not analyse:
         return
