@@ -1,6 +1,6 @@
 """Auto-collect player stats from a match film — no manual event tags.
 
-The operator uploads (or points at) a video up to 3 GB. This module:
+The operator uploads (or points at) a video up to 5 GB. This module:
 
 1. Probes duration / size without loading the file into RAM.
 2. Samples the **whole match** (default 5 Hz, longest side 640 px) so a
@@ -38,7 +38,9 @@ from analytics.match_tags import infer_team_names, write_sidecar_xml
 from data_models.events import EventType, MatchEvent, ShotOutcome
 
 AUTO_NAMESPACE: UUID = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
-MAX_VIDEO_BYTES: int = 3 * 1024 * 1024 * 1024
+MAX_VIDEO_GIB: int = 5
+MAX_VIDEO_BYTES: int = MAX_VIDEO_GIB * 1024 * 1024 * 1024
+STREAMLIT_MAX_UPLOAD_MB: int = MAX_VIDEO_GIB * 1024
 DEFAULT_SAMPLE_HZ: float = 5.0
 DEFAULT_MAX_SIDE: int = 640
 DEFAULT_MAX_SAMPLE_FRAMES: int = 48_000
@@ -48,6 +50,18 @@ TARGET_EVENT_GAP_S: float = 60.0 / WYSCOUT_ACTIONS_PER_MINUTE
 MIN_EVENT_GAP_S: float = 1.6
 VIDEO_SUFFIXES: tuple[str, ...] = (".mp4", ".mov", ".mkv", ".avi", ".m4v", ".webm")
 TAG_SUFFIXES: tuple[str, ...] = (".xml",)
+
+
+def video_limit_label(max_bytes: int = MAX_VIDEO_BYTES) -> str:
+    """Human-readable film size cap (``5 GB``, ``4.0 MB``, or raw bytes)."""
+
+    if max_bytes >= 1024**3 and max_bytes % (1024**3) == 0:
+        return f"{max_bytes // (1024 ** 3)} GB"
+    if max_bytes >= 1024**2:
+        return f"{max_bytes / (1024 ** 2):.1f} MB"
+        return f"{max_bytes} bytes"
+
+
 FILM_CHUNK_BYTES: int = 8 * 1024 * 1024
 REMUX_COPY_TIMEOUT_S: int = 600
 REMUX_ENCODE_TIMEOUT_S: int = 3600
@@ -156,7 +170,9 @@ def write_film_chunks(
             if written > max_bytes:
                 out.close()
                 destination.unlink(missing_ok=True)
-                raise VideoCollectError("Match film exceeds the 3 GB upload limit.")
+                raise VideoCollectError(
+                    f"Match film exceeds the {video_limit_label(max_bytes)} upload limit."
+                )
             out.write(chunk)
             if on_progress is not None:
                 on_progress(written, expected_bytes if expected_bytes > 0 else written)
@@ -304,7 +320,8 @@ def probe_video(path: Path) -> VideoInfo:
         raise VideoCollectError("Match film is empty.")
     if size_bytes > MAX_VIDEO_BYTES:
         raise VideoCollectError(
-            f"Match film is {size_bytes / (1024 ** 3):.2f} GB; the limit is 3 GB."
+            f"Match film is {size_bytes / (1024 ** 3):.2f} GB; "
+            f"the limit is {video_limit_label()}."
         )
     capture = cv2.VideoCapture(str(resolved))
     opened = capture.isOpened()
@@ -1106,7 +1123,7 @@ def collect_from_video(
     """Watch a match film and return the collected four-pillar rundown.
 
     Args:
-        path: Local path to an mp4/mov/mkv/avi file, at most 3 GB.
+        path: Local path to an mp4/mov/mkv/avi file, at most 5 GB.
         sample_hz: Decoded frames per second of match time (default 5 Hz
             so a 90-minute game is sampled ~27,000 times).
         max_side: Longest resized edge in pixels.

@@ -71,6 +71,7 @@ from analytics.video_auto_collect import (
     film_inbox_dir,
     film_upload_dir,
     normalize_film_path,
+    video_limit_label,
 )
 from api.film_upload import upload_page_html
 from analytics.game_ingest import MatchRundown, rundown_from_mapping, rundown_to_json
@@ -403,11 +404,14 @@ def _inject_styles() -> None:
         """
         <style>
           html { -webkit-text-size-adjust: 100%; }
+          .stApp { overflow-x: hidden; }
+          .stDeployButton, div[data-testid="stToolbar"] { display: none !important; }
+          footer { visibility: hidden; }
           .block-container {
             padding-top: 1.1rem;
-            padding-bottom: 2.4rem;
-            padding-left: 1.1rem;
-            padding-right: 1.1rem;
+            padding-bottom: max(2.4rem, env(safe-area-inset-bottom));
+            padding-left: max(1.1rem, env(safe-area-inset-left));
+            padding-right: max(1.1rem, env(safe-area-inset-right));
             max-width: 1280px;
           }
           div[data-testid="stMetric"] {
@@ -435,15 +439,17 @@ def _inject_styles() -> None:
             border: 0 !important;
           }
           div[data-testid="stTextInput"] input,
-          div[data-testid="stSelectbox"] div[data-baseweb="select"] {
+          div[data-testid="stSelectbox"] div[data-baseweb="select"],
+          div[data-testid="stFileUploader"] section {
             min-height: 44px;
+            font-size: 16px !important;
           }
-          div[data-testid="stDataFrame"] { overflow-x: auto; }
+          div[data-testid="stDataFrame"] { overflow-x: auto; -webkit-overflow-scrolling: touch; }
           @media (max-width: 640px) {
             .block-container {
               padding-top: 0.7rem;
-              padding-left: 0.65rem;
-              padding-right: 0.65rem;
+              padding-left: max(0.65rem, env(safe-area-inset-left));
+              padding-right: max(0.65rem, env(safe-area-inset-right));
               max-width: 100%;
             }
             h1 { font-size: 1.55rem !important; }
@@ -1025,15 +1031,15 @@ def render_sidebar() -> str:
     base_url = st.sidebar.text_input("FastAPI base URL", value=DEFAULT_BASE_URL).strip()
     if not base_url:
         base_url = DEFAULT_BASE_URL
-    collect_sample = st.sidebar.button("Load sample match")
-    clear_collected = st.sidebar.button("Clear collected match")
+    collect_sample = st.sidebar.button("Load sample match", use_container_width=True)
+    clear_collected = st.sidebar.button("Clear collected match", use_container_width=True)
     with st.sidebar.expander("Official JSON or XML"):
         uploaded_json = st.file_uploader(
             "AutoData JSON or Wyscout / Nacsport XML",
             type=["json", "xml"],
             help="Official event tags. Wyscout analysis XML is collected as the rundown.",
         )
-        collect_json = st.button("Collect tagged file")
+        collect_json = st.button("Collect tagged file", use_container_width=True)
 
     if clear_collected:
         st.session_state.pop(RUNDOWN_KEY, None)
@@ -1105,8 +1111,9 @@ def render_film_uploader_panel(base_url: str) -> None:
     st.markdown("**Upload from this device**")
     st.caption(
         "Saves the film in 4 MB chunks to "
-        f"`{inbox}` so a phone, tablet, or computer can send a full match "
-        "without Streamlit's large-PUT disconnect. Then click Analyse Stats."
+        f"`{inbox}` so any phone, tablet, or computer can send a full match "
+        f"(up to {video_limit_label()}) without Streamlit's large-PUT disconnect. "
+        "Then click Analyse Stats."
     )
     st.link_button("Open uploader in a new tab", upload_url)
     import streamlit.components.v1 as components
@@ -1122,6 +1129,7 @@ def render_analyse_landing(base_url: str) -> None:
     st.title("EnjoyStats")
     st.subheader("Analyse Stats")
     st.caption(
+        "Open this page from any phone, tablet, or computer. "
         "Register a match link or upload a film / Wyscout XML from this "
         "device. Click Analyse Stats, walk away — a full 90 minutes can take "
         "hours. Come back to collective Home / Away Spiideo pillars "
@@ -1141,9 +1149,12 @@ def render_analyse_landing(base_url: str) -> None:
     inbox_choice = st.selectbox("Films and tag sheets on this machine", options=list(disk_labels.keys()))
     inbox_path = disk_labels[inbox_choice]
     film = st.file_uploader(
-        "Or upload from this computer / phone",
+        "Or upload from this phone, tablet, or computer",
         type=["mp4", "mov", "mkv", "avi", "m4v", "webm", "xml"],
-        help="Small clips and XML work here. For a full 3 GB match use the chunked uploader below.",
+        help=(
+            "Clips and XML work here. For a full match (up to "
+            f"{video_limit_label()}) use the chunked uploader below."
+        ),
     )
     with st.expander("Large film uploader (any phone, tablet, or computer)", expanded=False):
         render_film_uploader_panel(base_url)

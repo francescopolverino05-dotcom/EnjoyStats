@@ -9,7 +9,9 @@ import pytest
 
 from analytics.video_auto_collect import (
     MAX_VIDEO_BYTES,
+    MAX_VIDEO_GIB,
     VIDEO_SUFFIXES,
+    video_limit_label,
     Track,
     VideoCollectError,
     collect_from_video,
@@ -51,9 +53,15 @@ def test_list_ready_films_ignores_empty_and_non_video(tmp_path: Path) -> None:
     assert found == {keep.resolve(), sheet.resolve()}
 
 
+def test_film_size_cap_is_five_gigabytes() -> None:
+    assert MAX_VIDEO_GIB == 5
+    assert MAX_VIDEO_BYTES == 5 * 1024 * 1024 * 1024
+    assert video_limit_label() == "5 GB"
+
+
 def test_write_film_chunks_rejects_oversize(tmp_path: Path) -> None:
     dest = tmp_path / "too-big.mp4"
-    with pytest.raises(VideoCollectError, match="3 GB"):
+    with pytest.raises(VideoCollectError, match="upload limit"):
         write_film_chunks(dest, [b"abc", b"def"], max_bytes=4)
 
 

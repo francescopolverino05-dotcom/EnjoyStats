@@ -1,7 +1,7 @@
 """Register a match film URL and save it into the local inbox.
 
 Impact Soccer accepts a public link or a file. EnjoyStats does the same
-locally: a direct ``http(s)`` video is streamed to disk (3 GB cap). A
+locally: a direct ``http(s)`` video is streamed to disk (5 GB cap). A
 ``file://`` or bare path is copied. Hosted pages (YouTube, Vimeo) are
 fetched with ``yt-dlp`` when that tool is installed — only for film the
 operator has the right to analyse.

@@ -65,6 +65,6 @@ CMD ["streamlit", "run", "app/dashboard.py", \
      "--server.address=0.0.0.0", \
      "--server.port=8501", \
      "--server.headless=true", \
-     "--server.maxUploadSize=3072", \
-     "--server.maxMessageSize=3072", \
+     "--server.maxUploadSize=5120", \
+     "--server.maxMessageSize=5120", \
      "--browser.gatherUsageStats=false"]

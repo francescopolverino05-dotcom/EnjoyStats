@@ -182,7 +182,7 @@ def save_uploaded_film(
     *,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> Path:
-    """Write an uploaded film to disk in 8 MiB chunks (up to 3 GB)."""
+    """Write an uploaded film to disk in 8 MiB chunks (up to 5 GB)."""
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     total = int(getattr(uploaded, "size", 0) or 0)
