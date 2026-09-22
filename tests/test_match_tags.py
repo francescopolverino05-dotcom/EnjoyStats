@@ -182,3 +182,54 @@ def test_find_official_tag_xml_pairs_film_with_wyscout_sheet(tmp_path) -> None:
     (tmp_path / "Arsenal_v_Palace__1-1_.tags.xml").write_text("<MatchTags/>", encoding="utf-8")
     found = find_official_tag_xml(film, tmp_path)
     assert found == sheet.resolve()
+
+
+def _palace_analysis_xml(*, actions: int = 40) -> str:
+    rows = [
+        '    <action id="a0000000-0000-0000-0000-000000000001" '
+        'actionName="(10) E. Eze / Goal di sinistro" startTime="00:50:27"/>',
+        '    <action id="a0000000-0000-0000-0000-000000000002" '
+        'actionName="(10) E. Eze / Tiri" startTime="00:50:20"/>',
+        '    <action id="a0000000-0000-0000-0000-000000000003" '
+        'actionName="(1) D. Henderson / Parate" startTime="00:20:00"/>',
+    ]
+    for index in range(actions):
+        rows.append(
+            f'    <action id="b{index:08d}-0000-0000-0000-000000000000" '
+            f'actionName="(10) E. Eze / Passaggi" startTime="00:{index:02d}:10"/>'
+        )
+    body = "\n".join(rows)
+    return (
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<analysis id="cccccccc-cccc-cccc-cccc-cccccccccccc" '
+        'title="Arsenal v Palace (1-1)">\n'
+        f"  <actions>\n{body}\n  </actions>\n</analysis>\n"
+    )
+
+
+def test_paired_home_away_analysis_is_official_two_team() -> None:
+    from pathlib import Path
+
+    from analytics.match_tags import collect_paired_analysis
+    from analytics.team_collect import is_one_sided_sheet, team_profiles_from_rundown
+    from app.ingest import collect_official_two_team
+
+    home = (Path(__file__).resolve().parent / "fixtures" / "arsenal_v_palace_1-1.xml").read_text(
+        encoding="utf-8"
+    )
+    away = _palace_analysis_xml()
+    rundown = collect_paired_analysis(home, away)
+    assert is_one_sided_sheet(rundown) is False
+    teams = team_profiles_from_rundown(rundown)
+    assert {row.player_name for row in teams} == {"Arsenal", "Palace"}
+    by_name = {row.player_name: row for row in teams}
+    assert by_name["Arsenal"].offensive.goals == 1
+    assert by_name["Palace"].offensive.goals == 1
+    assert by_name["Palace"].distribution.passes.total >= 40
+    assert by_name["Arsenal"].distribution.passes.total >= 300
+    names = {profile.player_name for profile in rundown.players}
+    assert "E. Eze" in names
+    assert "A. Harriman-Annous" in names
+    via_ingest = collect_official_two_team(home.encode("utf-8"), away.encode("utf-8"))
+    assert via_ingest.summary.goals == 2
+    assert is_one_sided_sheet(via_ingest) is False

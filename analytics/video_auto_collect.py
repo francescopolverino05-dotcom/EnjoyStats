@@ -59,7 +59,7 @@ def video_limit_label(max_bytes: int = MAX_VIDEO_BYTES) -> str:
         return f"{max_bytes // (1024 ** 3)} GB"
     if max_bytes >= 1024**2:
         return f"{max_bytes / (1024 ** 2):.1f} MB"
-        return f"{max_bytes} bytes"
+    return f"{max_bytes} bytes"
 
 
 FILM_CHUNK_BYTES: int = 8 * 1024 * 1024

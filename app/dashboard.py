@@ -37,15 +37,14 @@ from app.metrics import PassDirections
 import analytics.match_tags as _match_tags_mod
 import app.ingest as _ingest_mod
 import analytics.team_collect as _team_collect_mod
-import analytics.video_auto_collect as _video_auto_collect_mod
 
 importlib.reload(_match_tags_mod)
 importlib.reload(_ingest_mod)
 importlib.reload(_team_collect_mod)
-importlib.reload(_video_auto_collect_mod)
 from app.ingest import (
     UPLOAD_DISCONNECT_HINT,
     collect_from_film_path,
+    collect_official_two_team,
     collect_sample_match,
     collect_uploaded_bytes,
     film_has_official_tags,
@@ -1123,19 +1122,71 @@ def render_film_uploader_panel(base_url: str) -> None:
     components.html(upload_page_html(base_url.rstrip("/")), height=420, scrolling=False)
 
 
+def render_official_tag_section(base_url: str) -> None:
+    """Upload a two-team export, or merge Home + Away one-team analyses."""
+
+    st.subheader("Official two-team tag sheet")
+    st.caption(
+        "This is how you skip hand-tagging when the tags already exist. "
+        "Drop one two-team Wyscout / Spiideo / JSON export, or the Home "
+        "analysis XML plus the Away analysis XML. Both sides keep their "
+        "real passes, shots, and corners. Film Analyse Stats below is the "
+        "time-saver when you only have the video — the machine tags both "
+        "teams so an analyst does not, but that sheet is not official."
+    )
+    two_team = st.file_uploader(
+        "One two-team export (JSON, MatchTags, or Wyscout XML)",
+        type=["json", "xml"],
+        key="official_two_team",
+    )
+    home_xml = st.file_uploader(
+        "Or Home one-team analysis XML",
+        type=["xml"],
+        key="official_home_xml",
+    )
+    away_xml = st.file_uploader(
+        "And Away one-team analysis XML",
+        type=["xml"],
+        key="official_away_xml",
+    )
+    collect = st.button("Collect official tags", use_container_width=True)
+    if not collect:
+        return
+    try:
+        if two_team is not None:
+            rundown = collect_official_two_team(two_team.getvalue())
+        elif home_xml is not None and away_xml is not None:
+            rundown = collect_official_two_team(home_xml.getvalue(), away_xml.getvalue())
+        elif home_xml is not None:
+            rundown = collect_official_two_team(home_xml.getvalue())
+        else:
+            raise ValueError(
+                "Upload one two-team export, or both Home and Away analysis XMLs."
+            )
+        st.session_state[RUNDOWN_KEY] = rundown_to_json(rundown)
+        st.session_state.pop("analyse_cleared", None)
+        _persisted, message = asyncio.run(persist_rundown(base_url, rundown))
+        st.session_state[PERSIST_KEY] = message
+        st.rerun()
+    except ValueError as exc:
+        st.error(str(exc))
+
+
 def render_analyse_landing(base_url: str) -> None:
-    """Impact concept: register a link or upload, then Analyse Stats."""
+    """Impact concept: official tags, or register a film and Analyse Stats."""
 
     inbox_dir = film_inbox_dir()
     upload_dir = film_upload_dir()
     st.title("EnjoyStats")
+    render_official_tag_section(base_url)
     st.subheader("Analyse Stats")
     st.caption(
-        "Open this page from any phone, tablet, or computer. "
-        "Register a match link or upload a film / Wyscout XML from this "
-        "device. Click Analyse Stats, walk away — a full 90 minutes can take "
-        "hours. Come back to collective Home / Away Spiideo pillars "
-        "(attack, construction, defending, distribution, possession)."
+        "No official sheet? Upload the match film (up to "
+        f"{video_limit_label()}). Analyse Stats watches both teams and "
+        "tags shots, passes, corners, and the rest so an analyst does not "
+        "have to do that by hand. Walk away — a full 90 minutes can take "
+        "hours. Come back to collective Home / Away pillars. This saves "
+        "tagging time; it is not a Wyscout scoresheet."
     )
     link = st.text_input(
         "Register a link",
@@ -1232,7 +1283,8 @@ def render_collective_rundown(rundown: MatchRundown) -> None:
         st.info(
             f"This official sheet is a one-team analysis of {analysed}. "
             f"{other} only has tags that appear on this export — usually the "
-            "goal they scored — not a full opposition Spiideo sheet."
+            "goal they scored. Upload {other}'s analysis XML next to this one "
+            "under Official two-team tag sheet to keep both sides official."
         )
     teams = team_profiles_from_rundown(rundown)
     if teams:

@@ -17,6 +17,7 @@ collect from official or corrected tags.
 from __future__ import annotations
 
 import re
+from collections import Counter
 from collections.abc import Sequence
 from pathlib import Path
 from uuid import UUID, uuid4, uuid5
@@ -393,6 +394,101 @@ def collect_from_tag_xml(raw: str) -> MatchRundown:
     """Collect four-pillar stats from a MatchTags or Wyscout analysis XML."""
 
     return collect_game(parse_tag_xml(raw))
+
+
+def _majority_team_id(payload: GamePayload) -> UUID:
+    counts = Counter(event.team_id for event in payload.events)
+    if not counts:
+        raise ValueError("Official tag sheet has no events to merge.")
+    return counts.most_common(1)[0][0]
+
+
+def _flip_x(value: float) -> float:
+    return round(100.0 - float(value), 4)
+
+
+def _remap_side(
+    payload: GamePayload,
+    *,
+    match_id: UUID,
+    team_id: UUID,
+    side: str,
+    flip_attack: bool,
+) -> tuple[list[PlayerRosterEntry], list[MatchEvent]]:
+    """Keep the analysed side of a one-team export and point it at ``team_id``."""
+
+    analysed = _majority_team_id(payload)
+    player_map: dict[UUID, UUID] = {}
+    roster: list[PlayerRosterEntry] = []
+    for entry in payload.players:
+        if entry.team_id != analysed:
+            continue
+        new_id = uuid5(match_id, f"{side}-player:{entry.player_id}")
+        player_map[entry.player_id] = new_id
+        roster.append(
+            PlayerRosterEntry(
+                player_id=new_id,
+                team_id=team_id,
+                jersey_number=entry.jersey_number,
+                player_name=entry.player_name,
+                position=entry.position,
+            )
+        )
+    events: list[MatchEvent] = []
+    for event in payload.events:
+        if event.team_id != analysed:
+            continue
+        player_id = player_map.get(event.player_id)
+        if player_id is None and event.player_id is not None:
+            player_id = uuid5(match_id, f"{side}-player:{event.player_id}")
+        updates: dict[str, object] = {
+            "event_id": uuid5(match_id, f"{side}-event:{event.event_id}"),
+            "match_id": match_id,
+            "team_id": team_id,
+            "player_id": player_id,
+            "attacking_left_to_right": not flip_attack,
+        }
+        if flip_attack:
+            updates["x"] = _flip_x(event.x)
+            if event.end_x is not None:
+                updates["end_x"] = _flip_x(event.end_x)
+        events.append(event.model_copy(update=updates))
+    if not events:
+        raise ValueError(f"{side.title()} official sheet has no analysed-side tags.")
+    return roster, events
+
+
+def merge_analysis_payloads(home: GamePayload, away: GamePayload) -> GamePayload:
+    """Join two one-team Wyscout analyses into one official two-team payload.
+
+    Each file's majority team is the analysed side. Synthetic opposition
+    tags (the thin ``Goal subiti`` goal) are dropped because the other
+    file already has that side's real sheet. Away coordinates are flipped
+    so both teams attack in the same 0–100 match frame.
+    """
+
+    match_id = home.match_id or away.match_id or uuid4()
+    home_team = uuid5(match_id, "team:home")
+    away_team = uuid5(match_id, "team:away")
+    home_roster, home_events = _remap_side(
+        home, match_id=match_id, team_id=home_team, side="home", flip_attack=False
+    )
+    away_roster, away_events = _remap_side(
+        away, match_id=match_id, team_id=away_team, side="away", flip_attack=True
+    )
+    return GamePayload(
+        match_id=match_id,
+        players=home_roster + away_roster,
+        events=home_events + away_events,
+        home_team_name=home.home_team_name or "Home",
+        away_team_name=home.away_team_name or away.home_team_name or "Away",
+    )
+
+
+def collect_paired_analysis(home_xml: str, away_xml: str) -> MatchRundown:
+    """Collect one rundown from Home + Away official one-team analysis XMLs."""
+
+    return collect_game(merge_analysis_payloads(parse_tag_xml(home_xml), parse_tag_xml(away_xml)))
 
 
 def _unescape_label(raw: str) -> str:

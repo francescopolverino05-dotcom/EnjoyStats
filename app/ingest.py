@@ -17,7 +17,11 @@ from analytics.game_ingest import (
     parse_game_payload,
 )
 from analytics.sample_game import sample_game_payload
-from analytics.match_tags import collect_from_tag_xml, find_official_tag_xml
+from analytics.match_tags import (
+    collect_from_tag_xml,
+    collect_paired_analysis,
+    find_official_tag_xml,
+)
 from analytics.video_auto_collect import (
     MAX_VIDEO_BYTES,
     VIDEO_SUFFIXES,
@@ -154,6 +158,34 @@ def collect_sample_match() -> MatchRundown:
     """Collect the bundled sample game without an uploaded file."""
 
     return collect_game(sample_game_payload())
+
+
+def collect_official_two_team(
+    home_bytes: bytes,
+    away_bytes: bytes | None = None,
+) -> MatchRundown:
+    """Collect an official two-team sheet.
+
+    One file is a two-team export (JSON, MatchTags, or a two-club Wyscout
+    sheet). Two files are Home + Away one-team analysis XMLs that are
+    merged so both sides keep their real tags.
+    """
+
+    home_text = _decode_tag_bytes(home_bytes)
+    if away_bytes is None:
+        return collect_uploaded_bytes(home_bytes)
+    away_text = _decode_tag_bytes(away_bytes)
+    try:
+        return collect_paired_analysis(home_text, away_text)
+    except ValueError as exc:
+        raise ValueError(f"Official Home + Away sheets could not be merged ({exc}).") from exc
+
+
+def _decode_tag_bytes(raw_bytes: bytes) -> str:
+    try:
+        return raw_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"Tag file is not valid UTF-8 ({exc}).") from exc
 
 
 def collect_uploaded_bytes(raw_bytes: bytes) -> MatchRundown:
