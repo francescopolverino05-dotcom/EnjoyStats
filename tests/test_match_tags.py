@@ -6,6 +6,7 @@ from analytics.match_tags import (
     collect_from_tag_xml,
     find_official_tag_xml,
     infer_team_names,
+    rundown_to_csv,
     rundown_to_xml,
     write_sidecar_xml,
 )
@@ -41,6 +42,11 @@ def test_sample_game_xml_roundtrip_keeps_goals_and_passes() -> None:
     assert restored.summary.passes == rundown.summary.passes
     assert restored.summary.shots == rundown.summary.shots
     assert restored.summary.player_count == rundown.summary.player_count
+    csv_text = rundown_to_csv(rundown)
+    lines = [line for line in csv_text.splitlines() if line.strip()]
+    assert lines[0].startswith("Clock,Period,Minute,Second,Tag,")
+    assert len(lines) == rundown.summary.event_count + 1
+    assert any(",pass," in line or ",shot," in line or ",goal," in line for line in lines[1:])
 
 
 def test_sidecar_xml_recollects_from_path(tmp_path) -> None:

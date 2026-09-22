@@ -16,6 +16,8 @@ collect from official or corrected tags.
 
 from __future__ import annotations
 
+import csv
+import io
 import re
 from collections import Counter
 from collections.abc import Sequence
@@ -296,6 +298,70 @@ def rundown_to_xml(rundown: MatchRundown, *, source: str = "enjoystats-auto") ->
 
     indent(root)
     return '<?xml version="1.0" encoding="UTF-8"?>\n' + tostring(root, encoding="unicode")
+
+
+def rundown_to_csv(rundown: MatchRundown) -> str:
+    """Serialize the tag sheet as CSV so an analyst can drop it into Excel.
+
+    Same rows as :func:`rundown_to_xml` — one line per tagged action.
+    """
+
+    names = {profile.player_id: profile.player_name or "" for profile in rundown.players}
+    team_order: list[UUID] = []
+    for profile in rundown.players:
+        if profile.team_id not in team_order:
+            team_order.append(profile.team_id)
+    for event in rundown.events:
+        if event.team_id not in team_order:
+            team_order.append(event.team_id)
+    labels = {
+        team_id: (
+            (rundown.summary.home_team_name or "Home")
+            if index == 0
+            else (rundown.summary.away_team_name or "Away")
+            if index == 1
+            else f"Team {index + 1}"
+        )
+        for index, team_id in enumerate(team_order)
+    }
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(
+        (
+            "Clock",
+            "Period",
+            "Minute",
+            "Second",
+            "Tag",
+            "Player",
+            "Team",
+            "X",
+            "Y",
+            "End X",
+            "End Y",
+            "Goal",
+            "Successful",
+        )
+    )
+    for event in rundown.events:
+        writer.writerow(
+            (
+                f"{event.period}' {event.minute:02d}:{event.second:02d}",
+                event.period,
+                event.minute,
+                event.second,
+                event.event_type.value,
+                names.get(event.player_id, "") if event.player_id else "",
+                labels.get(event.team_id, "Team"),
+                f"{event.x:.2f}",
+                f"{event.y:.2f}",
+                "" if event.end_x is None else f"{event.end_x:.2f}",
+                "" if event.end_y is None else f"{event.end_y:.2f}",
+                "true" if event.is_goal else "false",
+                "true" if event.successful else "false",
+            )
+        )
+    return buffer.getvalue()
 
 
 def write_sidecar_xml(rundown: MatchRundown, video_path: Path) -> Path:

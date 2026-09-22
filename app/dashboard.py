@@ -76,8 +76,13 @@ from analytics.video_auto_collect import (
 )
 from api.film_upload import upload_page_html
 from analytics.game_ingest import MatchRundown, rundown_from_mapping, rundown_to_json
-from analytics.team_sheet import highlight_moments_from_rundown, team_sheet_rows, team_sheets_from_rundown
-from analytics.match_tags import attacks_from_events, rundown_to_xml
+from analytics.team_sheet import (
+    highlight_moments_from_rundown,
+    tag_inventory_rows,
+    team_sheet_rows,
+    team_sheets_from_rundown,
+)
+from analytics.match_tags import attacks_from_events, rundown_to_csv, rundown_to_xml
 from config.pitch_config import (
     CENTRE_CIRCLE_RADIUS_M,
     FIFA_PITCH,
@@ -848,7 +853,11 @@ def render_match_summary(rundown: MatchRundown) -> None:
     summary = rundown.summary
     st.title("EnjoyStats")
     st.subheader("Match rundown")
-    st.caption("Automatically collected from the match film or official tag XML.")
+    st.caption(
+        "These tags are already collected — an analyst does not have to click "
+        "every shot, pass, or corner. Official XML is the scoresheet; film "
+        "Analyse Stats is the time-saver for both teams."
+    )
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Events", summary.event_count)
     c2.metric("Players", summary.player_count)
@@ -860,9 +869,25 @@ def render_match_summary(rundown: MatchRundown) -> None:
         "Every number below is counted from the match tags (passes, shots, "
         "recoveries) — the same sheet Spiideo / Wyscout XML export uses."
     )
+    render_tag_inventory(rundown)
     render_team_sheet(rundown)
     render_match_tags(rundown)
     render_highlight_moments(rundown)
+
+
+def render_tag_inventory(rundown: MatchRundown) -> None:
+    """Show how many of each action the machine (or official XML) already tagged."""
+
+    rows = tag_inventory_rows(rundown)
+    if not rows:
+        return
+    st.subheader("What you no longer have to tag")
+    st.caption(
+        "Each row is one action type an analyst would otherwise mark by hand. "
+        "Totals are the collected sheet — download CSV or XML below to take "
+        "this into the rest of the data-collection workflow."
+    )
+    st.dataframe(rows, hide_index=True, width="stretch")
 
 
 def render_team_sheet(rundown: MatchRundown) -> None:
@@ -911,7 +936,7 @@ def render_match_tags(rundown: MatchRundown) -> None:
     st.subheader("Match tags")
     st.caption(
         "Each row is one tagged action. Player pillars are the sums of these "
-        "tags. Download the XML to inspect or re-import the same sheet."
+        "tags. Download XML for a tagger re-import, or CSV for a spreadsheet."
     )
     attacks = attacks_from_events(rundown.events)
     a1, a2 = st.columns(2)
@@ -939,12 +964,23 @@ def render_match_tags(rundown: MatchRundown) -> None:
     st.dataframe(rows, hide_index=True, width="stretch")
     if len(rundown.events) > 500:
         st.caption(f"Showing the first 500 of {len(rundown.events)} tags.")
-    st.download_button(
-        "Download match tags (XML)",
-        data=rundown_to_xml(rundown),
-        file_name="match_tags.xml",
-        mime="application/xml",
-    )
+    xml_col, csv_col = st.columns(2)
+    with xml_col:
+        st.download_button(
+            "Download match tags (XML)",
+            data=rundown_to_xml(rundown),
+            file_name="match_tags.xml",
+            mime="application/xml",
+            use_container_width=True,
+        )
+    with csv_col:
+        st.download_button(
+            "Download match tags (CSV)",
+            data=rundown_to_csv(rundown),
+            file_name="match_tags.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
 
 
 def _resolve_film_source(
@@ -1025,9 +1061,9 @@ def render_sidebar() -> str:
 
     st.sidebar.header("EnjoyStats")
     st.sidebar.caption(
-        "Analyse a match on any phone, tablet, or computer. "
-        "The main page is the Impact-style flow: register a link or upload, "
-        "then Analyse Stats. A full film can take hours."
+        "Skip hand-tagging every shot, pass, and corner. "
+        "Register a film or drop official XML, then Analyse Stats. "
+        "A full film can take hours — the tag sheet is waiting when you come back."
     )
     base_url = st.sidebar.text_input("FastAPI base URL", value=DEFAULT_BASE_URL).strip()
     if not base_url:
@@ -1127,12 +1163,10 @@ def render_official_tag_section(base_url: str) -> None:
 
     st.subheader("Official two-team tag sheet")
     st.caption(
-        "This is how you skip hand-tagging when the tags already exist. "
-        "Drop one two-team Wyscout / Spiideo / JSON export, or the Home "
-        "analysis XML plus the Away analysis XML. Both sides keep their "
-        "real passes, shots, and corners. Film Analyse Stats below is the "
-        "time-saver when you only have the video — the machine tags both "
-        "teams so an analyst does not, but that sheet is not official."
+        "Fastest path when Wyscout / Spiideo / Nacsport already tagged the "
+        "match: drop one two-team export, or Home analysis XML plus Away "
+        "analysis XML. Both sides keep their real shots, passes, and corners. "
+        "That is the official scoresheet — not film computer vision."
     )
     two_team = st.file_uploader(
         "One two-team export (JSON, MatchTags, or Wyscout XML)",
@@ -1178,6 +1212,13 @@ def render_analyse_landing(base_url: str) -> None:
     inbox_dir = film_inbox_dir()
     upload_dir = film_upload_dir()
     st.title("EnjoyStats")
+    st.caption(
+        "The job is to cut the hours an analyst spends tagging. "
+        "If official XML exists, collect it. If you only have the film, "
+        "Analyse Stats tags shots, passes, corners, throw-ins, recoveries, "
+        "and the rest for both teams so data collection starts from a "
+        "sheet — not from a blank timeline."
+    )
     render_official_tag_section(base_url)
     st.subheader("Analyse Stats")
     st.caption(
@@ -1185,8 +1226,8 @@ def render_analyse_landing(base_url: str) -> None:
         f"{video_limit_label()}). Analyse Stats watches both teams and "
         "tags shots, passes, corners, and the rest so an analyst does not "
         "have to do that by hand. Walk away — a full 90 minutes can take "
-        "hours. Come back to collective Home / Away pillars. This saves "
-        "tagging time; it is not a Wyscout scoresheet."
+        "hours. Come back to a Home / Away tag inventory plus collective "
+        "pillars. This saves tagging time; it is not a Wyscout scoresheet."
     )
     link = st.text_input(
         "Register a link",

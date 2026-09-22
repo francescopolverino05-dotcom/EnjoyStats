@@ -31,6 +31,71 @@ HIGHLIGHT_TYPES = {
     EventType.CORNER,
 }
 
+# The actions an analyst would otherwise click one-by-one on a tagger.
+ANALYST_TAG_ORDER: tuple[EventType, ...] = (
+    EventType.GOAL,
+    EventType.SHOT,
+    EventType.PASS,
+    EventType.CROSS,
+    EventType.CUTBACK,
+    EventType.ASSIST,
+    EventType.CORNER,
+    EventType.THROW_IN,
+    EventType.FREE_KICK,
+    EventType.SAVE,
+    EventType.INTERCEPTION,
+    EventType.BALL_RECOVERY,
+    EventType.BALL_LOST,
+    EventType.AERIAL_DUEL,
+    EventType.GROUND_DUEL,
+    EventType.FOUL_COMMITTED,
+    EventType.FOUL_WON,
+    EventType.OFFSIDE,
+    EventType.BLOCK_SHOT,
+    EventType.BLOCK_CROSS,
+    EventType.BLOCK_PASS,
+    EventType.YELLOW_CARD,
+    EventType.RED_CARD,
+    EventType.GOAL_CONCEDED,
+)
+ANALYST_TAG_LABELS: dict[EventType, str] = {
+    EventType.GOAL: "Goals",
+    EventType.SHOT: "Shots",
+    EventType.PASS: "Passes",
+    EventType.CROSS: "Crosses",
+    EventType.CUTBACK: "Cutbacks",
+    EventType.ASSIST: "Assists",
+    EventType.CORNER: "Corners",
+    EventType.THROW_IN: "Throw-ins",
+    EventType.FREE_KICK: "Free kicks",
+    EventType.SAVE: "Saves",
+    EventType.INTERCEPTION: "Interceptions",
+    EventType.BALL_RECOVERY: "Recoveries",
+    EventType.BALL_LOST: "Balls lost",
+    EventType.AERIAL_DUEL: "Aerial duels",
+    EventType.GROUND_DUEL: "Ground duels",
+    EventType.FOUL_COMMITTED: "Fouls",
+    EventType.FOUL_WON: "Fouls won",
+    EventType.OFFSIDE: "Offsides",
+    EventType.BLOCK_SHOT: "Blocked shots",
+    EventType.BLOCK_CROSS: "Blocked crosses",
+    EventType.BLOCK_PASS: "Blocked passes",
+    EventType.YELLOW_CARD: "Yellow cards",
+    EventType.RED_CARD: "Red cards",
+    EventType.GOAL_CONCEDED: "Goals conceded",
+}
+CORE_ANALYST_TAGS: frozenset[EventType] = frozenset(
+    {
+        EventType.GOAL,
+        EventType.SHOT,
+        EventType.PASS,
+        EventType.CORNER,
+        EventType.THROW_IN,
+        EventType.FREE_KICK,
+        EventType.SAVE,
+    }
+)
+
 
 class TeamBasicStats(StrictModel):
     """One team's 15-stat Impact-style headline board."""
@@ -167,6 +232,63 @@ def highlight_moments_from_rundown(rundown: MatchRundown) -> list[HighlightMomen
             )
         )
     return moments
+
+
+def tag_inventory_rows(rundown: MatchRundown) -> list[dict[str, object]]:
+    """Count every tag type an analyst would otherwise click by hand.
+
+    Core actions (goals, shots, passes, corners, throw-ins, free kicks,
+    saves) always appear so a zero is visible. Other types appear only
+    when the sheet actually has them.
+    """
+
+    sheets = team_sheets_from_rundown(rundown)
+    home_id = sheets[0].team_id if sheets else None
+    away_id = sheets[1].team_id if len(sheets) > 1 else None
+    home_name = sheets[0].team_name if sheets else (rundown.summary.home_team_name or "Home")
+    away_name = (
+        sheets[1].team_name if len(sheets) > 1 else (rundown.summary.away_team_name or "Away")
+    )
+    totals: dict[EventType, int] = defaultdict(int)
+    home_counts: dict[EventType, int] = defaultdict(int)
+    away_counts: dict[EventType, int] = defaultdict(int)
+    for event in rundown.events:
+        kind = event.event_type
+        totals[kind] += 1
+        if home_id is not None and event.team_id == home_id:
+            home_counts[kind] += 1
+        elif away_id is not None and event.team_id == away_id:
+            away_counts[kind] += 1
+
+    rows: list[dict[str, object]] = []
+    listed: set[EventType] = set()
+    for kind in ANALYST_TAG_ORDER:
+        listed.add(kind)
+        total = totals[kind]
+        if total == 0 and kind not in CORE_ANALYST_TAGS:
+            continue
+        rows.append(
+            {
+                "Tag": ANALYST_TAG_LABELS[kind],
+                "Total": total,
+                home_name: home_counts[kind],
+                away_name: away_counts[kind],
+            }
+        )
+    leftovers = sorted(
+        (kind for kind in totals if kind not in listed and totals[kind] > 0),
+        key=lambda kind: kind.value,
+    )
+    for kind in leftovers:
+        rows.append(
+            {
+                "Tag": ANALYST_TAG_LABELS.get(kind, kind.value.replace("_", " ").title()),
+                "Total": totals[kind],
+                home_name: home_counts[kind],
+                away_name: away_counts[kind],
+            }
+        )
+    return rows
 
 
 def team_sheet_rows(sheets: Sequence[TeamBasicStats]) -> list[dict[str, object]]:

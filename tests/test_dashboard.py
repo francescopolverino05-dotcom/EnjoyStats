@@ -128,6 +128,8 @@ def test_dashboard_renders_analyse_landing(tmp_path, monkeypatch) -> None:
     assert any("Register a link" in label for label in input_labels)
     captions = [str(element.value) for element in at.caption]
     assert any("phone, tablet, or computer" in caption.lower() for caption in captions)
+    assert any("shot" in caption.lower() and "pass" in caption.lower() for caption in captions)
+    assert any("hand" in caption.lower() or "analyst" in caption.lower() for caption in captions)
     buttons = [str(element.label) for element in at.button]
     assert any("Analyse Stats" in label for label in buttons)
     subheaders = [str(element.value) for element in at.subheader]
@@ -155,6 +157,7 @@ def test_collected_rundown_shows_match_tags(tmp_path, monkeypatch) -> None:
     assert not at.exception
     subheaders = [str(element.value) for element in at.subheader]
     assert "Match rundown" in subheaders
+    assert "What you no longer have to tag" in subheaders
     assert "Match tags" in subheaders
     assert "Team statistics" in subheaders
     assert "Collective team stats" in subheaders

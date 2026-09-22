@@ -9,6 +9,7 @@ from analytics.match_tags import collect_from_tag_xml
 from analytics.sample_game import sample_game_payload
 from analytics.team_sheet import (
     highlight_moments_from_rundown,
+    tag_inventory_rows,
     team_sheet_rows,
     team_sheets_from_rundown,
 )
@@ -39,6 +40,20 @@ def test_sample_game_team_sheet_has_fifteen_stats() -> None:
         "Penalties",
     ]
     assert sum(sheet.goals for sheet in sheets) == rundown.summary.goals
+    inventory = tag_inventory_rows(rundown)
+    labels = [row["Tag"] for row in inventory]
+    assert "Passes" in labels
+    assert "Shots" in labels
+    assert "Corners" in labels
+    by_tag = {row["Tag"]: row for row in inventory}
+    pass_total = sum(
+        int(by_tag[label]["Total"])
+        for label in ("Passes", "Crosses", "Cutbacks", "Assists")
+        if label in by_tag
+    )
+    assert pass_total == rundown.summary.passes
+    assert int(by_tag["Shots"]["Total"]) + int(by_tag["Goals"]["Total"]) == rundown.summary.shots
+    assert sum(int(row["Total"]) for row in inventory) == rundown.summary.event_count
 
 
 def test_arsenal_palace_xml_fills_impact_team_board() -> None:
