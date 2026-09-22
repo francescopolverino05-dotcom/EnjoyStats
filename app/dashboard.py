@@ -1,4 +1,4 @@
-"""EnjoyStats Streamlit dashboard — three-pillar view plus 2D pitch map.
+"""EnjoyStats Streamlit dashboard — Analyse Stats plus collective team pillars.
 
 Launch from the repository root::
 
@@ -46,17 +46,26 @@ from app.ingest import (
     collect_uploaded_bytes,
     film_has_official_tags,
     load_from_rundown,
+    load_from_team_profile,
     persist_rundown,
     profile_label,
     ready_films,
     save_uploaded_film,
 )
 from analytics.collect_job import (
+    latest_job_status_path,
     load_job_rundown,
     read_job_status,
     start_collect_job,
 )
-from analytics.video_auto_collect import film_inbox_dir, film_upload_dir, normalize_film_path
+from analytics.film_link import register_match_link
+from analytics.team_collect import named_player_profiles, team_profiles_from_rundown
+from analytics.video_auto_collect import (
+    VideoCollectError,
+    film_inbox_dir,
+    film_upload_dir,
+    normalize_film_path,
+)
 from api.film_upload import upload_page_html
 from analytics.game_ingest import MatchRundown, rundown_from_mapping, rundown_to_json
 from analytics.team_sheet import highlight_moments_from_rundown, team_sheet_rows, team_sheets_from_rundown
@@ -387,7 +396,14 @@ def _inject_styles() -> None:
     st.markdown(
         """
         <style>
-          .block-container { padding-top: 1.4rem; max-width: 1280px; }
+          html { -webkit-text-size-adjust: 100%; }
+          .block-container {
+            padding-top: 1.1rem;
+            padding-bottom: 2.4rem;
+            padding-left: 1.1rem;
+            padding-right: 1.1rem;
+            max-width: 1280px;
+          }
           div[data-testid="stMetric"] {
             background: #0f172a;
             border: 1px solid #1e293b;
@@ -400,6 +416,37 @@ def _inject_styles() -> None:
             font-weight: 700;
           }
           h1, h2, h3 { letter-spacing: -0.02em; }
+          div[data-testid="stButton"] button {
+            min-height: 48px;
+            border-radius: 12px;
+          }
+          div[data-testid="stButton"] button[kind="primary"] {
+            width: 100%;
+            font-weight: 700;
+          }
+          div[data-testid="stTextInput"] input,
+          div[data-testid="stSelectbox"] div[data-baseweb="select"] {
+            min-height: 44px;
+          }
+          div[data-testid="stDataFrame"] { overflow-x: auto; }
+          @media (max-width: 640px) {
+            .block-container {
+              padding-top: 0.7rem;
+              padding-left: 0.65rem;
+              padding-right: 0.65rem;
+              max-width: 100%;
+            }
+            h1 { font-size: 1.55rem !important; }
+            h2 { font-size: 1.2rem !important; }
+            h3 { font-size: 1.05rem !important; }
+            div[data-testid="stMetric"] { padding: 0.55rem 0.65rem; }
+            div[data-testid="stMetric"] [data-testid="stMetricValue"] {
+              font-size: 1.15rem;
+            }
+          }
+          @media (min-width: 641px) and (max-width: 1024px) {
+            .block-container { max-width: 960px; }
+          }
         </style>
         """,
         unsafe_allow_html=True,
@@ -448,10 +495,13 @@ def render_offensive(profile: PlayerMatchProfile) -> None:
     offensive = profile.offensive
     identity = st.columns(2)
     identity[0].metric("Minutes played", f"{offensive.minutes:.1f}")
-    identity[1].metric(
-        "Number / name",
-        f"#{profile.jersey_number or '—'} {profile.player_name or profile.position or 'Player'}",
-    )
+    if profile.position == "TEAM":
+        identity[1].metric("Team", profile.player_name or "Team")
+    else:
+        identity[1].metric(
+            "Number / name",
+            f"#{profile.jersey_number or '—'} {profile.player_name or profile.position or 'Player'}",
+        )
     top = st.columns(2)
     top[0].metric("Goals", offensive.goals)
     top[1].metric("Assists", offensive.assists)
@@ -649,8 +699,12 @@ def render_possession(profile: PlayerMatchProfile) -> None:
     )
 
 
-def render_tactical_pitch(actions: tuple[PitchAction, ...]) -> None:
-    """Interactive 2D pitch: selected player's shots and passes."""
+def render_tactical_pitch(
+    actions: tuple[PitchAction, ...],
+    *,
+    subject: str = "this player",
+) -> None:
+    """Interactive 2D pitch: selected team's or player's shots and passes."""
 
     st.subheader("Tactical pitch")
     st.caption(
@@ -663,7 +717,7 @@ def render_tactical_pitch(actions: tuple[PitchAction, ...]) -> None:
     st.pyplot(fig, width="stretch")
     plt.close(fig)
     if plotted == 0:
-        st.info("No plottable shot or pass locations for this player.")
+        st.info(f"No plottable shot or pass locations for {subject}.")
     elif skipped:
         st.caption(
             f"Plotted {plotted} actions. Skipped {skipped} tags with missing "
@@ -673,28 +727,37 @@ def render_tactical_pitch(actions: tuple[PitchAction, ...]) -> None:
         st.caption(f"Plotted {plotted} shot and pass locations.")
 
 
-def render_dashboard(load: ProfileLoad) -> None:
-    """Compose the three-pillar layout and pitch map for one loaded profile."""
+def render_dashboard(
+    load: ProfileLoad,
+    *,
+    collective: bool = False,
+    show_chrome: bool = True,
+) -> None:
+    """Compose the four-pillar layout and pitch map for one loaded profile."""
 
     profile = load.profile
-    header_l, header_r = st.columns([3, 1])
-    with header_l:
-        jersey = f"#{profile.jersey_number} " if profile.jersey_number else ""
-        name = profile.player_name or profile.position or "Player"
-        st.title("EnjoyStats")
-        st.markdown("### Player match dashboard")
-        st.write(
-            f"{jersey}{name}  ·  {profile.position or 'Player'}  ·  "
-            f"match `{profile.match_id}`  ·  player `{profile.player_id}`"
-        )
-    with header_r:
-        if load.source == "live":
-            st.success("Live FastAPI")
-        elif load.source == "collected":
-            st.success("Collected match")
-        else:
-            st.warning("Dummy fallback")
+    name = profile.player_name or profile.position or "Player"
+    if collective or not show_chrome:
+        st.markdown(f"#### {name}")
         st.caption(load.message)
+    else:
+        header_l, header_r = st.columns([3, 1])
+        with header_l:
+            jersey = f"#{profile.jersey_number} " if profile.jersey_number else ""
+            st.title("EnjoyStats")
+            st.markdown("### Player match dashboard")
+            st.write(
+                f"{jersey}{name}  ·  {profile.position or 'Player'}  ·  "
+                f"match `{profile.match_id}`  ·  player `{profile.player_id}`"
+            )
+        with header_r:
+            if load.source == "live":
+                st.success("Live FastAPI")
+            elif load.source == "collected":
+                st.success("Collected match")
+            else:
+                st.warning("Dummy fallback")
+            st.caption(load.message)
 
     top_l, top_r = st.columns(2)
     with top_l:
@@ -706,7 +769,8 @@ def render_dashboard(load: ProfileLoad) -> None:
         render_distribution(profile, load.directions)
     with bottom_r:
         render_possession(profile)
-    render_tactical_pitch(load.actions)
+    subject = name if collective else "this player"
+    render_tactical_pitch(load.actions, subject=subject)
 
 
 def _format_elapsed(seconds: float) -> str:
@@ -765,6 +829,7 @@ def render_match_summary(rundown: MatchRundown) -> None:
     """Headline match totals collected from the uploaded event feed."""
 
     summary = rundown.summary
+    st.title("EnjoyStats")
     st.subheader("Match rundown")
     st.caption("Automatically collected from the match film or official tag XML.")
     c1, c2, c3, c4, c5 = st.columns(5)
@@ -896,219 +961,320 @@ def _resolve_film_source(
     return str(dest)
 
 
-def render_sidebar() -> tuple[str, UUID, UUID, MatchRundown | None]:
-    """Upload a match film (or a catalog match) and open a player rundown."""
+RUNDOWN_KEY = "collected_rundown"
+PERSIST_KEY = "ingest_persist_message"
+JOB_KEY = "collect_job_path"
 
-    rundown_key = "collected_rundown"
-    persist_key = "ingest_persist_message"
-    job_key = "collect_job_path"
-    upload_dir = film_upload_dir()
+
+def _hydrate_collect_job() -> None:
+    """Resume a background analyse after a refresh or a new phone session."""
+
+    if st.session_state.get(RUNDOWN_KEY):
+        return
+    job_path_raw = str(st.session_state.get(JOB_KEY, "") or "")
+    if not job_path_raw and not st.session_state.get("analyse_cleared"):
+        latest = latest_job_status_path()
+        if latest is not None:
+            job_path_raw = str(latest)
+            st.session_state[JOB_KEY] = job_path_raw
+    if not job_path_raw:
+        return
+    status = read_job_status(Path(job_path_raw))
+    if status is None:
+        return
+    if status.get("state") == "done":
+        loaded = load_job_rundown(status)
+        if loaded is not None:
+            st.session_state[RUNDOWN_KEY] = rundown_to_json(loaded)
+            st.session_state[PERSIST_KEY] = str(status.get("label") or "Background collect ready.")
+        return
+    if status.get("state") == "error":
+        st.session_state[PERSIST_KEY] = str(status.get("error") or "Background collect failed.")
+
+
+def _stored_rundown() -> MatchRundown | None:
+    stored = st.session_state.get(RUNDOWN_KEY)
+    if not stored:
+        return None
+    return rundown_from_mapping(stored)
+
+
+def render_sidebar() -> str:
+    """Settings, sample load, and optional FastAPI demo — analyse lives on the page."""
+
     inbox_dir = film_inbox_dir()
     inbox_dir.mkdir(parents=True, exist_ok=True)
-    upload_dir.mkdir(parents=True, exist_ok=True)
+    film_upload_dir().mkdir(parents=True, exist_ok=True)
 
-    st.sidebar.header("Upload a game")
+    st.sidebar.header("EnjoyStats")
     st.sidebar.caption(
-        "Drop a full match film (up to 3 GB) or a Wyscout XML into "
-        f"`{inbox_dir}`. Collection watches the whole 90 minutes at 5 Hz "
-        "(this can take hours). If an official analysis XML for the same "
-        "fixture is in the inbox, those tags are used instead of broadcast CV."
+        "Analyse a match on any phone, tablet, or computer. "
+        "The main page is the Impact-style flow: register a link or upload, "
+        "then Analyse Stats. A full film can take hours."
     )
-    on_disk = ready_films()
-    none_label = "(none — paste a path or drop a file in .local-run/inbox)"
-    disk_labels = {none_label: None}
-    for path in on_disk:
-        label = f"{path.name}  ·  {_format_bytes(path.stat().st_size)}"
-        disk_labels[label] = path
-    inbox_choice = st.sidebar.selectbox(
-        "Films and tag sheets on this machine",
-        options=list(disk_labels.keys()),
-    )
-    inbox_path = disk_labels[inbox_choice]
-    film_path = st.sidebar.text_input(
-        "Or local path (best for ~3 GB files)",
-        value="",
-        help="Absolute path on this machine. Quoted Finder/Explorer paths are OK.",
-    ).strip()
-    with st.sidebar.expander("Short clip only (Streamlit picker)"):
-        st.caption("Do not use this for a full match. It disconnects on large PUTs.")
-        film = st.file_uploader(
-            "Short clip",
-            type=["mp4", "mov", "mkv", "avi", "m4v", "webm"],
-            help="Only for small clips. Prefer the inbox uploader on the main page.",
-        )
-    collect_film = st.sidebar.button("Collect stats from film", type="primary")
-    collect_sample = st.sidebar.button("Collect sample match")
+    base_url = st.sidebar.text_input("FastAPI base URL", value=DEFAULT_BASE_URL).strip()
+    if not base_url:
+        base_url = DEFAULT_BASE_URL
+    collect_sample = st.sidebar.button("Load sample match")
     clear_collected = st.sidebar.button("Clear collected match")
-    with st.sidebar.expander("Advanced: tagged JSON or XML"):
+    with st.sidebar.expander("Official JSON or XML"):
         uploaded_json = st.file_uploader(
             "AutoData JSON or Wyscout / Nacsport XML",
             type=["json", "xml"],
             help="Official event tags. Wyscout analysis XML is collected as the rundown.",
         )
         collect_json = st.button("Collect tagged file")
-    base_url = st.sidebar.text_input("FastAPI base URL", value=DEFAULT_BASE_URL).strip()
-    if not base_url:
-        base_url = DEFAULT_BASE_URL
 
     if clear_collected:
-        st.session_state.pop(rundown_key, None)
-        st.session_state.pop(persist_key, None)
-        st.session_state.pop(job_key, None)
+        st.session_state.pop(RUNDOWN_KEY, None)
+        st.session_state.pop(PERSIST_KEY, None)
+        st.session_state.pop(JOB_KEY, None)
+        st.session_state["analyse_cleared"] = True
 
     error: str | None = None
     if collect_sample:
         try:
             rundown = collect_sample_match()
-            st.session_state[rundown_key] = rundown_to_json(rundown)
+            st.session_state[RUNDOWN_KEY] = rundown_to_json(rundown)
             _persisted, message = asyncio.run(persist_rundown(base_url, rundown))
-            st.session_state[persist_key] = message
+            st.session_state[PERSIST_KEY] = message
         except ValueError as exc:
             error = str(exc)
         except Exception as exc:  # noqa: BLE001 — surface unexpected collect failures
             error = f"Sample collection failed ({exc})."
-    elif collect_film:
-        try:
-            pending_upload = None
-            if film_path.strip().strip("'\"").strip():
-                source_path = str(normalize_film_path(film_path))
-            elif inbox_path is not None:
-                source_path = str(inbox_path)
-            elif film is not None:
-                pending_upload = film
-                source_path = ""
-            else:
-                raise ValueError(UPLOAD_DISCONNECT_HINT)
-            update, finish = render_upload_loader()
-            update("Preparing the match film…", 0.04)
-            if pending_upload is not None:
-                source_path = _resolve_film_source("", None, pending_upload, upload_dir, update)
-            source = Path(source_path)
-            if film_has_official_tags(source):
-                update("Collecting official tags…", 0.36)
-
-                def _on_collect(label: str, fraction: float) -> None:
-                    update(label, 0.36 + 0.64 * fraction)
-
-                rundown = collect_from_film_path(source_path, on_progress=_on_collect)
-                finish()
-                st.session_state[rundown_key] = rundown_to_json(rundown)
-                _persisted, message = asyncio.run(persist_rundown(base_url, rundown))
-                st.session_state[persist_key] = message
-            else:
-                update("Starting background collect…", 0.2)
-                status_path = start_collect_job(source)
-                st.session_state[job_key] = str(status_path)
-                finish()
-                st.session_state.pop(rundown_key, None)
-                st.session_state[persist_key] = (
-                    "Full-match collect is running in the background "
-                    "(Impact-style: walk away, refresh later). "
-                    f"Status: {status_path.name}"
-                )
-        except ValueError as exc:
-            error = str(exc)
-        except OSError as exc:
-            error = f"Could not read the match film ({exc})."
-        except Exception as exc:  # noqa: BLE001 — file_uploader failures are not ValueError
-            error = f"{exc}. {UPLOAD_DISCONNECT_HINT}"
     elif collect_json:
         if uploaded_json is None:
-            error = "Choose a JSON or XML tag file first, or upload a film instead."
+            error = "Choose a JSON or XML tag file first, or use Analyse Stats on the main page."
         else:
             try:
                 rundown = collect_uploaded_bytes(uploaded_json.getvalue())
-                st.session_state[rundown_key] = rundown_to_json(rundown)
+                st.session_state[RUNDOWN_KEY] = rundown_to_json(rundown)
                 _persisted, message = asyncio.run(persist_rundown(base_url, rundown))
-                st.session_state[persist_key] = message
+                st.session_state[PERSIST_KEY] = message
             except ValueError as exc:
                 error = str(exc)
     if error:
         st.sidebar.error(error)
 
-    job_path_raw = str(st.session_state.get(job_key, "") or "")
-    if job_path_raw:
-        status = read_job_status(Path(job_path_raw))
-        if status and status.get("state") == "done" and rundown_key not in st.session_state:
-            loaded = load_job_rundown(status)
-            if loaded is not None:
-                st.session_state[rundown_key] = rundown_to_json(loaded)
-                st.session_state[persist_key] = str(status.get("label") or "Background collect ready.")
-        elif status and status.get("state") in {"queued", "running"}:
-            fraction = float(status.get("fraction") or 0.0)
-            st.sidebar.info(
-                f"{status.get('label') or 'Watching the film…'}  ·  {fraction * 100:.0f}%"
-            )
-            st.sidebar.caption(
-                "Leave this tab or close it — the collect keeps running on disk. "
-                "Refresh to pull progress."
-            )
-        elif status and status.get("state") == "error":
-            st.sidebar.error(str(status.get("error") or "Background collect failed."))
-
-    stored = st.session_state.get(rundown_key)
-    if stored:
-        rundown = rundown_from_mapping(stored)
+    rundown = _stored_rundown()
+    if rundown is not None:
         st.sidebar.success(
             f"Collected {rundown.summary.event_count} events · "
-            f"{rundown.summary.player_count} players"
+            f"{rundown.summary.goals} goals"
         )
-        persist_message = st.session_state.get(persist_key)
+        persist_message = st.session_state.get(PERSIST_KEY)
         if persist_message:
             st.sidebar.caption(str(persist_message))
-        player_map = {profile_label(profile): profile.player_id for profile in rundown.players}
-        player_label = st.sidebar.selectbox("Player rundown", options=list(player_map.keys()))
-        return base_url, rundown.match_id, player_map[player_label], rundown
+    return base_url
 
-    st.sidebar.divider()
-    st.sidebar.header("Match selection")
-    st.sidebar.caption("Choosing a match or player loads `/api/v1/matches/{id}/players/{id}`.")
-    matches = _match_options()
-    match_label = st.sidebar.selectbox("Match UUID", options=list(matches.keys()))
-    match_id = matches[match_label]
-    players = _player_options(match_id)
-    player_label = st.sidebar.selectbox("Player ID", options=list(players.keys()))
-    player_id = players[player_label]
-    st.sidebar.caption("If FastAPI is down, dummy values for this selection still render.")
-    return base_url, match_id, player_id, None
+
+def render_job_progress(status: dict[str, object]) -> None:
+    """Main-panel watch for a hours-long background analyse."""
+
+    st.title("EnjoyStats")
+    st.subheader("Analysing match")
+    st.caption(
+        "Watching the whole film at Wyscout tag density. "
+        "You can close this tab — come back later and refresh. "
+        "This page also rechecks while it stays open."
+    )
+    fraction = float(status.get("fraction") or 0.0)
+    label = str(status.get("label") or "Watching the film…")
+    st.progress(min(1.0, max(0.0, fraction)), text=label)
+    st.caption(f"{fraction * 100:.0f}%  ·  {label}")
+    film = str(status.get("film") or "")
+    if film:
+        st.caption(f"Film: `{Path(film).name}`")
 
 
 def render_film_uploader_panel(base_url: str) -> None:
-    """Main-panel streaming uploader that writes films to the FastAPI inbox."""
+    """Chunked FastAPI uploader for large films on any device."""
 
     upload_url = f"{base_url.rstrip('/')}/upload-film"
     inbox = film_inbox_dir()
-    st.subheader("Upload a game")
+    st.markdown("**Upload from this device**")
     st.caption(
-        "Choose a film here. Progress should move off Preparing within a few "
-        "seconds as 4 MB chunks land in "
-        f"`{inbox}`. Then pick that file under Films and tag sheets and "
-        "click Collect stats from film. Keep the tab open — a 90-minute "
-        "watch tags the whole match, not a 9-action excerpt."
+        "Saves the film in 4 MB chunks to "
+        f"`{inbox}` so a phone, tablet, or computer can send a full match "
+        "without Streamlit's large-PUT disconnect. Then click Analyse Stats."
     )
     st.link_button("Open uploader in a new tab", upload_url)
     import streamlit.components.v1 as components
 
-    components.html(upload_page_html(base_url.rstrip("/")), height=380, scrolling=False)
+    components.html(upload_page_html(base_url.rstrip("/")), height=420, scrolling=False)
+
+
+def render_analyse_landing(base_url: str) -> None:
+    """Impact concept: register a link or upload, then Analyse Stats."""
+
+    inbox_dir = film_inbox_dir()
+    upload_dir = film_upload_dir()
+    st.title("EnjoyStats")
+    st.subheader("Analyse Stats")
+    st.caption(
+        "Register a match link or upload a film / Wyscout XML from this "
+        "device. Click Analyse Stats, walk away — a full 90 minutes can take "
+        "hours. Come back to collective Home / Away Spiideo pillars "
+        "(attack, construction, defending, distribution, possession)."
+    )
+    link = st.text_input(
+        "Register a link",
+        value="",
+        placeholder="https://…  ·  file:///…  ·  or a local path",
+        help="Direct video URL, local path, file://, or YouTube/Vimeo when yt-dlp is installed.",
+    ).strip()
+    on_disk = ready_films()
+    none_label = "(none — register a link or upload below)"
+    disk_labels: dict[str, Path | None] = {none_label: None}
+    for path in on_disk:
+        disk_labels[f"{path.name}  ·  {_format_bytes(path.stat().st_size)}"] = path
+    inbox_choice = st.selectbox("Films and tag sheets on this machine", options=list(disk_labels.keys()))
+    inbox_path = disk_labels[inbox_choice]
+    film = st.file_uploader(
+        "Or upload from this computer / phone",
+        type=["mp4", "mov", "mkv", "avi", "m4v", "webm", "xml"],
+        help="Small clips and XML work here. For a full 3 GB match use the chunked uploader below.",
+    )
+    with st.expander("Large film uploader (any phone, tablet, or computer)", expanded=False):
+        render_film_uploader_panel(base_url)
+    analyse = st.button("Analyse Stats", type="primary")
+
+    if not analyse:
+        return
+    try:
+        source_path = ""
+        pending_upload = None
+        if link:
+            update, finish = render_upload_loader()
+            update("Registering match link…", 0.08)
+            registered = register_match_link(link, inbox_dir)
+            source_path = str(registered)
+            finish()
+        elif inbox_path is not None:
+            source_path = str(inbox_path)
+        elif film is not None:
+            pending_upload = film
+        else:
+            raise ValueError(
+                "Register a link, pick a film on this machine, or upload a file first."
+            )
+        update, finish = render_upload_loader()
+        update("Preparing the match…", 0.04)
+        if pending_upload is not None:
+            source_path = _resolve_film_source("", None, pending_upload, upload_dir, update)
+        source = Path(source_path)
+        if film_has_official_tags(source):
+            update("Collecting official tags…", 0.36)
+
+            def _on_collect(label: str, fraction: float) -> None:
+                update(label, 0.36 + 0.64 * fraction)
+
+            rundown = collect_from_film_path(source_path, on_progress=_on_collect)
+            finish()
+            st.session_state[RUNDOWN_KEY] = rundown_to_json(rundown)
+            st.session_state.pop("analyse_cleared", None)
+            _persisted, message = asyncio.run(persist_rundown(base_url, rundown))
+            st.session_state[PERSIST_KEY] = message
+            st.rerun()
+        else:
+            update("Starting background analyse…", 0.2)
+            status_path = start_collect_job(source)
+            st.session_state[JOB_KEY] = str(status_path)
+            st.session_state.pop(RUNDOWN_KEY, None)
+            st.session_state.pop("analyse_cleared", None)
+            st.session_state[PERSIST_KEY] = (
+                "Full-match analyse is running in the background. "
+                "Walk away and refresh later. "
+                f"Status: {status_path.name}"
+            )
+            finish()
+            st.rerun()
+    except VideoCollectError as exc:
+        st.error(str(exc))
+    except ValueError as exc:
+        st.error(str(exc))
+    except OSError as exc:
+        st.error(f"Could not read the match film ({exc}).")
+    except Exception as exc:  # noqa: BLE001 — uploader failures are not always ValueError
+        st.error(f"{exc}. {UPLOAD_DISCONNECT_HINT}")
+
+
+def render_collective_rundown(rundown: MatchRundown) -> None:
+    """Home / Away Spiideo pillars counted from the match tags."""
+
+    render_match_summary(rundown)
+    teams = team_profiles_from_rundown(rundown)
+    if teams:
+        st.subheader("Collective team stats")
+        st.caption(
+            "Every tagged event for a side is folded into the same four "
+            "pillars Spiideo publishes (offensive / construction, defending, "
+            "distribution, possession). Substitutions do not split the sheet — "
+            "there are still two teams for the full match."
+        )
+        tabs = st.tabs([profile.player_name for profile in teams])
+        for tab, profile in zip(tabs, teams, strict=True):
+            with tab:
+                load = load_from_team_profile(rundown, profile)
+                render_dashboard(load, collective=True)
+    named = named_player_profiles(rundown)
+    if named:
+        with st.expander("Named player sheets (official tags)", expanded=False):
+            st.caption(
+                "Individual rows from a Wyscout / Nacsport sheet. "
+                "Film-only collects hide invented Home CM 4 identities."
+            )
+            player_map = {profile_label(profile): profile.player_id for profile in named}
+            player_label = st.selectbox("Named player", options=list(player_map.keys()))
+            load = load_from_rundown(rundown, player_map[player_label])
+            render_dashboard(load, collective=False, show_chrome=False)
+
+
+def render_api_demo(base_url: str, fetch: FetchFn) -> None:
+    """Optional catalog profile when no match has been analysed yet."""
+
+    with st.expander("API demo match (no upload)", expanded=False):
+        matches = _match_options()
+        match_label = st.selectbox("Match UUID", options=list(matches.keys()))
+        match_id = matches[match_label]
+        players = _player_options(match_id)
+        player_label = st.selectbox("Player ID", options=list(players.keys()))
+        player_id = players[player_label]
+        st.caption("Loads `/api/v1/matches/{id}/players/{id}` or a dummy fallback.")
+        render_dashboard(fetch(base_url, match_id, player_id))
 
 
 def main(*, fetch: FetchFn = _run_fetch) -> None:
     """Streamlit entry point. ``fetch`` is injectable for tests."""
 
     st.set_page_config(
-        page_title="EnjoyStats · Player dashboard",
+        page_title="EnjoyStats · Analyse Stats",
         page_icon="⚽",
         layout="wide",
+        initial_sidebar_state="collapsed",
     )
     _inject_styles()
-    base_url, match_id, player_id, rundown = render_sidebar()
+    _hydrate_collect_job()
+    base_url = render_sidebar()
+    rundown = _stored_rundown()
     if rundown is not None:
-        render_match_summary(rundown)
-        load = load_from_rundown(rundown, player_id)
-    else:
-        render_film_uploader_panel(base_url)
-        load = fetch(base_url, match_id, player_id)
-    render_dashboard(load)
+        render_collective_rundown(rundown)
+        return
+
+    job_path_raw = str(st.session_state.get(JOB_KEY, "") or "")
+    if job_path_raw:
+        status = read_job_status(Path(job_path_raw))
+        if status and status.get("state") in {"queued", "running"}:
+            render_job_progress(status)
+            time.sleep(8)
+            st.rerun()
+            return
+        if status and status.get("state") == "error":
+            st.title("EnjoyStats")
+            st.error(str(status.get("error") or "Background collect failed."))
+
+    render_analyse_landing(base_url)
+    render_api_demo(base_url, fetch)
 
 
 if __name__ == "__main__":

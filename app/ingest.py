@@ -55,6 +55,34 @@ def ready_films() -> list[Path]:
     return list_ready_films(inbox, uploads)
 
 
+def actions_from_team(
+    events: Sequence[MatchEvent],
+    team_id: UUID,
+) -> tuple[PitchAction, ...]:
+    """Project every tagged event for one team onto the 2D pitch."""
+
+    actions: list[PitchAction] = []
+    for event in events:
+        if event.team_id != team_id:
+            continue
+        kind = event.event_type.value
+        if kind not in {"pass", "cross", "cutback", "assist", "shot", "goal"}:
+            continue
+        actions.append(
+            PitchAction(
+                event_type=kind,
+                x=event.x,
+                y=event.y,
+                end_x=event.end_x,
+                end_y=event.end_y,
+                successful=event.successful,
+                is_goal=event.is_goal or event.event_type is EventType.GOAL,
+                shot_outcome=event.shot_outcome.value if event.shot_outcome else None,
+            )
+        )
+    return tuple(actions)
+
+
 def actions_from_events(
     events: Sequence[MatchEvent],
     player_id: UUID,
@@ -99,6 +127,26 @@ def load_from_rundown(rundown: MatchRundown, player_id: UUID) -> ProfileLoad:
         ),
         api_online=True,
         actions=actions_from_events(rundown.events, player_id),
+    )
+
+
+def load_from_team_profile(rundown: MatchRundown, profile: PlayerMatchProfile) -> ProfileLoad:
+    """Build the dashboard view from a collective Home / Away pillar row.
+
+    Team rows are folded from the tag sheet and are not looked up in
+    ``rundown.players`` (film collection invents individual names).
+    """
+
+    return ProfileLoad(
+        profile=profile,
+        directions=directions_from_distribution(profile.distribution),
+        source="collected",
+        message=(
+            f"Collective {profile.player_name} sheet from "
+            f"{rundown.summary.event_count} tagged events."
+        ),
+        api_online=True,
+        actions=actions_from_team(rundown.events, profile.team_id),
     )
 
 
