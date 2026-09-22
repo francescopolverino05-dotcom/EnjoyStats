@@ -132,6 +132,7 @@ def test_dashboard_renders_analyse_landing(tmp_path, monkeypatch) -> None:
     assert any("hand" in caption.lower() or "analyst" in caption.lower() for caption in captions)
     buttons = [str(element.label) for element in at.button]
     assert any("Analyse Stats" in label for label in buttons)
+    assert any("Load sample match" in label for label in buttons)
     subheaders = [str(element.value) for element in at.subheader]
     assert any("Analyse Stats" in header for header in subheaders)
     assert any("Official two-team tag sheet" in header for header in subheaders)
@@ -140,6 +141,27 @@ def test_dashboard_renders_analyse_landing(tmp_path, monkeypatch) -> None:
     assert not at.exception
     errors = [str(element.value) for element in at.error]
     assert any("Register a link" in message or "upload" in message.lower() for message in errors)
+
+
+def test_landing_sample_opens_tag_inventory(tmp_path, monkeypatch) -> None:
+    from streamlit.testing.v1 import AppTest
+
+    monkeypatch.setenv("ENJOYSTATS_JOBS_DIR", str(tmp_path / "jobs"))
+    monkeypatch.setenv("ENJOYSTATS_FILM_INBOX", str(tmp_path / "inbox"))
+    monkeypatch.setenv("ENJOYSTATS_FILM_UPLOADS", str(tmp_path / "uploads"))
+    script = Path(__file__).resolve().parents[1] / "app" / "dashboard.py"
+    at = AppTest.from_file(str(script), default_timeout=20)
+    at.run()
+    assert not at.exception
+    sample = next(button for button in at.button if "Load sample match" in str(button.label))
+    sample.click().run()
+    assert not at.exception
+    subheaders = [str(element.value) for element in at.subheader]
+    assert "Match rundown" in subheaders
+    assert "What you no longer have to tag" in subheaders
+    downloads = [str(button.label) for button in at.download_button]
+    assert any("CSV" in label for label in downloads)
+    assert any("XML" in label for label in downloads)
 
 
 def test_collected_rundown_shows_match_tags(tmp_path, monkeypatch) -> None:

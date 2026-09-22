@@ -1052,6 +1052,22 @@ def _stored_rundown() -> MatchRundown | None:
     return rundown_from_mapping(stored)
 
 
+def _load_sample_match(base_url: str) -> str | None:
+    """Collect the bundled sample into session state. Returns an error or None."""
+
+    try:
+        rundown = collect_sample_match()
+        st.session_state[RUNDOWN_KEY] = rundown_to_json(rundown)
+        st.session_state.pop("analyse_cleared", None)
+        _persisted, message = asyncio.run(persist_rundown(base_url, rundown))
+        st.session_state[PERSIST_KEY] = message
+    except ValueError as exc:
+        return str(exc)
+    except Exception as exc:  # noqa: BLE001 — surface unexpected collect failures
+        return f"Sample collection failed ({exc})."
+    return None
+
+
 def render_sidebar() -> str:
     """Settings, sample load, and optional FastAPI demo — analyse lives on the page."""
 
@@ -1068,7 +1084,11 @@ def render_sidebar() -> str:
     base_url = st.sidebar.text_input("FastAPI base URL", value=DEFAULT_BASE_URL).strip()
     if not base_url:
         base_url = DEFAULT_BASE_URL
-    collect_sample = st.sidebar.button("Load sample match", use_container_width=True)
+    collect_sample = st.sidebar.button(
+        "Load sample match",
+        use_container_width=True,
+        key="sidebar_sample",
+    )
     clear_collected = st.sidebar.button("Clear collected match", use_container_width=True)
     with st.sidebar.expander("Official JSON or XML"):
         uploaded_json = st.file_uploader(
@@ -1086,15 +1106,7 @@ def render_sidebar() -> str:
 
     error: str | None = None
     if collect_sample:
-        try:
-            rundown = collect_sample_match()
-            st.session_state[RUNDOWN_KEY] = rundown_to_json(rundown)
-            _persisted, message = asyncio.run(persist_rundown(base_url, rundown))
-            st.session_state[PERSIST_KEY] = message
-        except ValueError as exc:
-            error = str(exc)
-        except Exception as exc:  # noqa: BLE001 — surface unexpected collect failures
-            error = f"Sample collection failed ({exc})."
+        error = _load_sample_match(base_url)
     elif collect_json:
         if uploaded_json is None:
             error = "Choose a JSON or XML tag file first, or use Analyse Stats on the main page."
@@ -1219,6 +1231,12 @@ def render_analyse_landing(base_url: str) -> None:
         "and the rest for both teams so data collection starts from a "
         "sheet — not from a blank timeline."
     )
+    if st.button("Load sample match", use_container_width=True, key="landing_sample"):
+        sample_error = _load_sample_match(base_url)
+        if sample_error:
+            st.error(sample_error)
+        else:
+            st.rerun()
     render_official_tag_section(base_url)
     st.subheader("Analyse Stats")
     st.caption(
