@@ -37,10 +37,12 @@ from app.metrics import PassDirections
 import analytics.match_tags as _match_tags_mod
 import app.ingest as _ingest_mod
 import analytics.team_collect as _team_collect_mod
+import analytics.video_auto_collect as _video_auto_collect_mod
 
 importlib.reload(_match_tags_mod)
 importlib.reload(_ingest_mod)
 importlib.reload(_team_collect_mod)
+importlib.reload(_video_auto_collect_mod)
 from app.ingest import (
     UPLOAD_DISCONNECT_HINT,
     collect_from_film_path,
