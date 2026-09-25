@@ -61,7 +61,7 @@ from analytics.collect_job import (
     read_job_status,
     start_collect_job,
 )
-from analytics.film_link import BROWSER_COOKIE_CHOICES, register_match_link
+from analytics.film_link import register_match_link
 from analytics.team_collect import (
     is_one_sided_sheet,
     named_player_profiles,
@@ -1254,36 +1254,11 @@ def render_analyse_landing(base_url: str) -> None:
         "Register a link",
         value="",
         placeholder="https://…  ·  file:///…  ·  or a local path",
-        help="Direct video URL, local path, file://, or YouTube/Vimeo when yt-dlp is installed.",
+        help=(
+            "Direct video URL, local path, or file://. "
+            "Vimeo page links are not supported — upload the MP4 instead."
+        ),
     ).strip()
-    with st.expander("Vimeo / YouTube login (private links)", expanded=bool(link)):
-        st.caption(
-            "Private Vimeo needs the session from a browser where you are "
-            "already logged in, or a Netscape cookies.txt export. "
-            "Password-gated shares also need the video password below. "
-            "Fastest fallback: download the MP4 yourself and upload it."
-        )
-        browser_options = ["(none — public link)"] + list(BROWSER_COOKIE_CHOICES)
-        cookies_browser = st.selectbox(
-            "Cookies from browser on this machine",
-            options=browser_options,
-            help="Use Chrome/Firefox/etc. on the same computer that is logged into Vimeo.",
-        )
-        cookies_upload = st.file_uploader(
-            "Or upload Netscape cookies.txt",
-            type=["txt"],
-            key="ytdlp_cookies_upload",
-            help=(
-                "Export with a cookies extension while logged into Vimeo, "
-                "then upload the file here."
-            ),
-        )
-        video_password = st.text_input(
-            "Video password (optional)",
-            value="",
-            type="password",
-            help="Only for password-gated Vimeo shares — not your Vimeo account password.",
-        ).strip()
     on_disk = ready_films()
     none_label = "(none — register a link or upload below)"
     disk_labels: dict[str, Path | None] = {none_label: None}
@@ -1314,18 +1289,7 @@ def render_analyse_landing(base_url: str) -> None:
         if link:
             update, finish = render_upload_loader()
             update("Registering match link…", 0.08)
-            cookies_path: Path | None = None
-            if cookies_upload is not None:
-                cookies_path = inbox_dir / "ytdlp_cookies.txt"
-                cookies_path.write_bytes(cookies_upload.getvalue())
-            browser_choice = None if cookies_browser.startswith("(none") else cookies_browser
-            registered = register_match_link(
-                link,
-                inbox_dir,
-                cookies_file=cookies_path,
-                cookies_from_browser=browser_choice,
-                video_password=video_password or None,
-            )
+            registered = register_match_link(link, inbox_dir)
             source_path = str(registered)
             finish()
         elif inbox_path is not None:

@@ -2,18 +2,13 @@
 
 Impact Soccer accepts a public link or a file. EnjoyStats does the same
 locally: a direct ``http(s)`` video is streamed to disk (5 GB cap). A
-``file://`` or bare path is copied. Hosted pages (YouTube, Vimeo) are
-fetched with ``yt-dlp`` when that tool is installed — only for film the
-operator has the right to analyse.
-
-Private Vimeo / logged-in pages need session cookies (browser cookies on
-this machine, or a Netscape ``cookies.txt``), or a video password when
-the share is password-gated.
+``file://`` or bare path is copied. Public YouTube pages can be fetched
+with ``yt-dlp`` when installed. Vimeo page links are not supported —
+download the MP4 and upload it (or drop it in the inbox).
 """
 
 from __future__ import annotations
 
-import os
 import shutil
 import subprocess
 import sys
@@ -31,51 +26,25 @@ from analytics.video_auto_collect import (
     write_film_chunks,
 )
 
-PAGE_HOSTS = {
+YOUTUBE_HOSTS = {
     "youtube.com",
     "www.youtube.com",
     "m.youtube.com",
     "youtu.be",
+}
+VIMEO_HOSTS = {
     "vimeo.com",
     "www.vimeo.com",
     "player.vimeo.com",
 }
-BROWSER_COOKIE_CHOICES = (
-    "chrome",
-    "chromium",
-    "firefox",
-    "edge",
-    "safari",
-    "brave",
-    "opera",
-)
+UPLOAD_MP4_HINT = "Download the MP4 and upload it, or drop it in the inbox."
+VIMEO_UNSUPPORTED = f"Vimeo page links are not supported. {UPLOAD_MP4_HINT}"
 LINK_TIMEOUT_S = 120.0
 DOWNLOAD_TIMEOUT_S = 3600.0
-VIMEO_LOGIN_HINT = (
-    "This Vimeo film needs a logged-in session. "
-    "Under Register a link, pick Cookies from browser "
-    "(Chrome on this computer where you are logged into Vimeo), "
-    "or upload a Netscape cookies.txt. "
-    "Or download the MP4 yourself and drop it in the inbox / upload it."
-)
 
 
-def register_match_link(
-    url: str,
-    destination_dir: Path,
-    *,
-    cookies_file: Path | str | None = None,
-    cookies_from_browser: str | None = None,
-    video_password: str | None = None,
-) -> Path:
+def register_match_link(url: str, destination_dir: Path) -> Path:
     """Download or copy ``url`` into ``destination_dir`` and return the file.
-
-    Args:
-        url: Direct video URL, local path, ``file://``, or YouTube/Vimeo page.
-        destination_dir: Inbox folder that receives the film.
-        cookies_file: Netscape cookies file for logged-in Vimeo / YouTube.
-        cookies_from_browser: Browser name for ``yt-dlp --cookies-from-browser``.
-        video_password: Password for a password-gated Vimeo share.
 
     Raises:
         VideoCollectError: If the URL is empty, unsupported, or too large.
@@ -92,52 +61,11 @@ def register_match_link(
     if scheme not in {"http", "https"}:
         raise VideoCollectError("Match links must be http(s), file://, or a local path.")
     host = (parsed.netloc or "").split("@")[-1].split(":")[0].lower()
-    auth = _resolve_ytdlp_auth(
-        cookies_file=cookies_file,
-        cookies_from_browser=cookies_from_browser,
-        video_password=video_password,
-    )
-    if host in PAGE_HOSTS or host.endswith(".youtube.com"):
-        return _download_page_link(raw, destination_dir, auth=auth)
+    if host in VIMEO_HOSTS or host.endswith(".vimeo.com"):
+        raise VideoCollectError(VIMEO_UNSUPPORTED)
+    if host in YOUTUBE_HOSTS or host.endswith(".youtube.com"):
+        return _download_page_link(raw, destination_dir)
     return _stream_direct_video(raw, parsed, destination_dir)
-
-
-def _resolve_ytdlp_auth(
-    *,
-    cookies_file: Path | str | None,
-    cookies_from_browser: str | None,
-    video_password: str | None,
-) -> dict[str, str | None]:
-    """Merge UI auth with env defaults for private page downloads."""
-
-    file_raw = (
-        str(cookies_file).strip()
-        if cookies_file is not None
-        else (os.environ.get("ENJOYSTATS_YTDLP_COOKIES") or "").strip()
-    )
-    browser_raw = (cookies_from_browser or "").strip().lower() or (
-        os.environ.get("ENJOYSTATS_YTDLP_BROWSER") or ""
-    ).strip().lower()
-    password_raw = (video_password or "").strip() or (
-        os.environ.get("ENJOYSTATS_YTDLP_PASSWORD") or ""
-    ).strip()
-    if browser_raw in {"", "none", "(none)"}:
-        browser_raw = ""
-    if browser_raw and browser_raw not in BROWSER_COOKIE_CHOICES:
-        raise VideoCollectError(
-            "Cookies from browser must be one of: " + ", ".join(BROWSER_COOKIE_CHOICES) + "."
-        )
-    cookies_path: str | None = None
-    if file_raw:
-        path = Path(file_raw).expanduser()
-        if not path.is_file():
-            raise VideoCollectError(f"Cookies file not found: {path}")
-        cookies_path = str(path)
-    return {
-        "cookies_file": cookies_path,
-        "cookies_from_browser": browser_raw or None,
-        "video_password": password_raw or None,
-    }
 
 
 def _copy_name(source: Path) -> str:
@@ -196,8 +124,7 @@ def _stream_direct_video(url: str, parsed: ParseResult, destination_dir: Path) -
                 }
             ):
                 raise VideoCollectError(
-                    "That link is a web page, not a film file. Drop the MP4 "
-                    "into the inbox, or install yt-dlp for YouTube/Vimeo."
+                    "That link is a web page, not a film file. " + UPLOAD_MP4_HINT
                 )
             suffix = Path(safe_film_name(name)).suffix.lower()
             if suffix not in VIDEO_SUFFIXES:
@@ -214,11 +141,7 @@ def _stream_direct_video(url: str, parsed: ParseResult, destination_dir: Path) -
 
 
 def resolve_ytdlp_command() -> list[str] | None:
-    """Return an argv prefix that can run yt-dlp, or ``None`` if missing.
-
-    Prefers the ``yt-dlp`` binary on ``PATH``, then the one next to the
-    active interpreter (venv), then ``python -m yt_dlp``.
-    """
+    """Return an argv prefix that can run yt-dlp, or ``None`` if missing."""
 
     on_path = shutil.which("yt-dlp")
     if on_path:
@@ -234,50 +157,12 @@ def resolve_ytdlp_command() -> list[str] | None:
     return [sys.executable, "-m", "yt_dlp"]
 
 
-def _ytdlp_auth_args(auth: dict[str, str | None]) -> list[str]:
-    args: list[str] = []
-    cookies_file = auth.get("cookies_file")
-    browser = auth.get("cookies_from_browser")
-    password = auth.get("video_password")
-    if cookies_file:
-        args.extend(["--cookies", cookies_file])
-    elif browser:
-        args.extend(["--cookies-from-browser", browser])
-    if password:
-        args.extend(["--video-password", password])
-    return args
-
-
-def _login_required_message(detail: str) -> str | None:
-    lowered = detail.lower()
-    if "logged-in" in lowered or "cookies-from-browser" in lowered or "use --cookies" in lowered:
-        return VIMEO_LOGIN_HINT
-    if "password" in lowered and "vimeo" in lowered:
-        return (
-            "That Vimeo share needs a video password. "
-            "Enter it under Register a link → Vimeo / YouTube login, "
-            "or download the MP4 and upload it."
-        )
-    return None
-
-
-def _download_page_link(
-    url: str,
-    destination_dir: Path,
-    *,
-    auth: dict[str, str | None] | None = None,
-) -> Path:
+def _download_page_link(url: str, destination_dir: Path) -> Path:
     ytdlp = resolve_ytdlp_command()
     if ytdlp is None:
         raise VideoCollectError(
-            "YouTube/Vimeo links need yt-dlp on this machine. "
-            "Drop the MP4 into the inbox, or paste a direct video URL."
+            "YouTube page links need yt-dlp on this machine. " + UPLOAD_MP4_HINT
         )
-    resolved_auth = auth or {
-        "cookies_file": None,
-        "cookies_from_browser": None,
-        "video_password": None,
-    }
     dest_tmpl = str(destination_dir / "link-match.%(ext)s")
     command = [
         *ytdlp,
@@ -288,7 +173,6 @@ def _download_page_link(
         dest_tmpl,
         "--max-filesize",
         str(MAX_VIDEO_BYTES),
-        *_ytdlp_auth_args(resolved_auth),
         url,
     ]
     try:
@@ -302,10 +186,12 @@ def _download_page_link(
         raise VideoCollectError("The match link download timed out.") from exc
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout or b"").decode("utf-8", errors="replace")
-        login_hint = _login_required_message(detail)
-        if login_hint is not None:
-            raise VideoCollectError(login_hint)
-        snippet = " ".join(detail.strip().splitlines()[-2:])[:240]
+        lowered = detail.lower()
+        if "logged-in" in lowered or "private" in lowered or "sign in" in lowered:
+            raise VideoCollectError(
+                "That YouTube film is private or needs a login. " + UPLOAD_MP4_HINT
+            )
+        snippet = " ".join(detail.strip().splitlines()[-2:])[:200]
         raise VideoCollectError(
             "Could not fetch that page link." + (f" {snippet}" if snippet else "")
         )
