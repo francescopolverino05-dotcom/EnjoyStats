@@ -144,6 +144,30 @@ def test_dashboard_renders_analyse_landing(tmp_path, monkeypatch) -> None:
     assert any("Register a link" in message or "upload" in message.lower() for message in errors)
 
 
+def test_vimeo_paste_prompts_upload_not_hard_error(tmp_path, monkeypatch) -> None:
+    from streamlit.testing.v1 import AppTest
+
+    monkeypatch.setenv("ENJOYSTATS_JOBS_DIR", str(tmp_path / "jobs"))
+    monkeypatch.setenv("ENJOYSTATS_FILM_INBOX", str(tmp_path / "inbox"))
+    monkeypatch.setenv("ENJOYSTATS_FILM_UPLOADS", str(tmp_path / "uploads"))
+    script = Path(__file__).resolve().parents[1] / "app" / "dashboard.py"
+    at = AppTest.from_file(str(script), default_timeout=15)
+    at.run()
+    link = next(field for field in at.text_input if "Register a link" in str(field.label))
+    link.set_value("https://vimeo.com/1224195986").run()
+    assert not at.exception
+    infos = [str(element.value) for element in at.info]
+    assert any("Vimeo" in message and "Upload the MP4" in message for message in infos)
+    errors = [str(element.value) for element in at.error]
+    assert not any("not supported" in message.lower() for message in errors)
+    analyse = next(button for button in at.button if "Analyse Stats" in str(button.label))
+    analyse.click().run()
+    assert not at.exception
+    errors = [str(element.value) for element in at.error]
+    assert any("Upload the match MP4" in message for message in errors)
+    assert not any("not supported" in message.lower() for message in errors)
+
+
 def test_landing_sample_opens_tag_inventory(tmp_path, monkeypatch) -> None:
     from streamlit.testing.v1 import AppTest
 

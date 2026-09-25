@@ -38,9 +38,21 @@ VIMEO_HOSTS = {
     "player.vimeo.com",
 }
 UPLOAD_MP4_HINT = "Download the MP4 and upload it, or drop it in the inbox."
-VIMEO_UNSUPPORTED = f"Vimeo page links are not supported. {UPLOAD_MP4_HINT}"
 LINK_TIMEOUT_S = 120.0
 DOWNLOAD_TIMEOUT_S = 3600.0
+
+
+def is_vimeo_page_link(url: str) -> bool:
+    """Return whether ``url`` is a Vimeo watch/player page (not a direct file)."""
+
+    raw = url.strip().strip("\u200b")
+    if not raw:
+        return False
+    parsed = urlparse(raw)
+    if (parsed.scheme or "").lower() not in {"http", "https"}:
+        return False
+    host = (parsed.netloc or "").split("@")[-1].split(":")[0].lower()
+    return host in VIMEO_HOSTS or host.endswith(".vimeo.com")
 
 
 def register_match_link(url: str, destination_dir: Path) -> Path:
@@ -61,8 +73,10 @@ def register_match_link(url: str, destination_dir: Path) -> Path:
     if scheme not in {"http", "https"}:
         raise VideoCollectError("Match links must be http(s), file://, or a local path.")
     host = (parsed.netloc or "").split("@")[-1].split(":")[0].lower()
-    if host in VIMEO_HOSTS or host.endswith(".vimeo.com"):
-        raise VideoCollectError(VIMEO_UNSUPPORTED)
+    if is_vimeo_page_link(raw):
+        raise VideoCollectError(
+            "Paste a direct video URL, or upload the MP4 / pick it from the inbox."
+        )
     if host in YOUTUBE_HOSTS or host.endswith(".youtube.com"):
         return _download_page_link(raw, destination_dir)
     return _stream_direct_video(raw, parsed, destination_dir)

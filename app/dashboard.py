@@ -61,7 +61,7 @@ from analytics.collect_job import (
     read_job_status,
     start_collect_job,
 )
-from analytics.film_link import register_match_link
+from analytics.film_link import is_vimeo_page_link, register_match_link
 from analytics.team_collect import (
     is_one_sided_sheet,
     named_player_profiles,
@@ -1254,11 +1254,14 @@ def render_analyse_landing(base_url: str) -> None:
         "Register a link",
         value="",
         placeholder="https://…  ·  file:///…  ·  or a local path",
-        help=(
-            "Direct video URL, local path, or file://. "
-            "Vimeo page links are not supported — upload the MP4 instead."
-        ),
+        help="Direct video URL, local path, or file://. Prefer uploading the match MP4.",
     ).strip()
+    vimeo_link = bool(link) and is_vimeo_page_link(link)
+    if vimeo_link:
+        st.info(
+            "Got a Vimeo watch page. Upload the MP4 below "
+            "(or pick it from the inbox), then click Analyse Stats."
+        )
     on_disk = ready_films()
     none_label = "(none — register a link or upload below)"
     disk_labels: dict[str, Path | None] = {none_label: None}
@@ -1277,7 +1280,10 @@ def render_analyse_landing(base_url: str) -> None:
             f"{video_limit_label()}) use the chunked uploader below."
         ),
     )
-    with st.expander("Large film uploader (any phone, tablet, or computer)", expanded=False):
+    with st.expander(
+        "Large film uploader (any phone, tablet, or computer)",
+        expanded=vimeo_link,
+    ):
         render_film_uploader_panel(base_url)
     analyse = st.button("Analyse Stats", type="primary", use_container_width=True)
 
@@ -1286,16 +1292,21 @@ def render_analyse_landing(base_url: str) -> None:
     try:
         source_path = ""
         pending_upload = None
-        if link:
+        usable_link = link if link and not vimeo_link else ""
+        if usable_link:
             update, finish = render_upload_loader()
             update("Registering match link…", 0.08)
-            registered = register_match_link(link, inbox_dir)
+            registered = register_match_link(usable_link, inbox_dir)
             source_path = str(registered)
             finish()
         elif inbox_path is not None:
             source_path = str(inbox_path)
         elif film is not None:
             pending_upload = film
+        elif vimeo_link:
+            raise ValueError(
+                "Upload the match MP4 (or pick it from the inbox), then Analyse Stats."
+            )
         else:
             raise ValueError(
                 "Register a link, pick a film on this machine, or upload a file first."

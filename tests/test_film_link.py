@@ -8,7 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from analytics.film_link import (
-    VIMEO_UNSUPPORTED,
+    is_vimeo_page_link,
     register_match_link,
     resolve_ytdlp_command,
 )
@@ -33,12 +33,11 @@ def test_youtube_link_without_ytdlp_is_clear(tmp_path: Path) -> None:
             register_match_link("https://www.youtube.com/watch?v=dQw4w9WgXcQ", tmp_path)
 
 
-def test_vimeo_page_link_is_rejected_without_cookies_dance(tmp_path: Path) -> None:
-    with pytest.raises(VideoCollectError, match="not supported"):
-        register_match_link("https://vimeo.com/1224195986", tmp_path)
-    assert "cookies" not in VIMEO_UNSUPPORTED.lower()
-    assert "logged-in" not in VIMEO_UNSUPPORTED.lower()
-    assert "MP4" in VIMEO_UNSUPPORTED
+def test_vimeo_page_is_detected_and_not_fetched(tmp_path: Path) -> None:
+    url = "https://vimeo.com/1224195986"
+    assert is_vimeo_page_link(url)
+    with pytest.raises(VideoCollectError, match="upload the MP4"):
+        register_match_link(url, tmp_path)
 
 
 def test_register_copies_local_path_and_file_uri(tmp_path: Path) -> None:
