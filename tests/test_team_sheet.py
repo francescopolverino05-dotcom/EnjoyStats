@@ -5,7 +5,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from analytics.game_ingest import collect_game
-from analytics.match_tags import collect_from_tag_xml
 from analytics.sample_game import sample_game_payload
 from analytics.team_sheet import (
     highlight_moments_from_rundown,
@@ -61,7 +60,6 @@ def test_arsenal_palace_xml_fills_impact_team_board() -> None:
     rundown = collect_from_film_path(fixture)
     sheets = team_sheets_from_rundown(rundown)
     assert len(sheets) == 2
-    by_name = {sheet.team_name: sheet for sheet in sheets}
     home = sheets[0]
     away = sheets[1]
     assert home.team_name == "Arsenal"

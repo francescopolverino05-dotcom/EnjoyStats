@@ -706,11 +706,20 @@ def stitch_tracks(
     return identities
 
 
-def _xy_at(track: Track, frame_index: int, lookup: dict[int, dict[int, tuple[float, float]]]) -> tuple[float, float] | None:
+def _xy_at(
+    track: Track,
+    frame_index: int,
+    lookup: dict[int, dict[int, tuple[float, float]]],
+) -> tuple[float, float] | None:
     return lookup.get(track.track_id, {}).get(frame_index)
 
 
-def _same_actor(left: Track, right: Track, lookup: dict[int, dict[int, tuple[float, float]]], frame_index: int) -> bool:
+def _same_actor(
+    left: Track,
+    right: Track,
+    lookup: dict[int, dict[int, tuple[float, float]]],
+    frame_index: int,
+) -> bool:
     if left.track_id == right.track_id:
         return True
     if left.team != right.team:
@@ -757,7 +766,10 @@ def events_from_tracks(
         if mobile:
             ball = max(
                 mobile,
-                key=lambda track: math.hypot(track.xs[-1] - track.xs[0], track.ys[-1] - track.ys[0]),
+                key=lambda track: math.hypot(
+                    track.xs[-1] - track.xs[0],
+                    track.ys[-1] - track.ys[0],
+                ),
             )
             players = [track for track in players if track is not ball]
     if not players:
@@ -895,7 +907,11 @@ def events_from_tracks(
                     **payload,
                     "event_type": EventType.GOAL if is_goal else EventType.SHOT,
                     "is_goal": is_goal,
-                    "shot_outcome": ShotOutcome.ON_TARGET if is_goal or mouth else ShotOutcome.MISSED,
+                    "shot_outcome": (
+                        ShotOutcome.ON_TARGET
+                        if is_goal or mouth
+                        else ShotOutcome.MISSED
+                    ),
                 }
             )
             pending_shot = None if is_goal else shot
@@ -918,7 +934,11 @@ def events_from_tracks(
                 _emit(
                     {
                         **payload,
-                        "event_type": EventType.AERIAL_DUEL if clustered >= 4 else EventType.GROUND_DUEL,
+                        "event_type": (
+                            EventType.AERIAL_DUEL
+                            if clustered >= 4
+                            else EventType.GROUND_DUEL
+                        ),
                         "end_x": None,
                         "end_y": None,
                         "successful": True,
@@ -960,7 +980,12 @@ def events_from_tracks(
                     }
                 )
                 tagged = True
-            elif last_owner is not None and not _same_actor(last_owner, owner, lookup, frame_index) and travel >= 3.5 and gap_ok:
+            elif (
+                last_owner is not None
+                and not _same_actor(last_owner, owner, lookup, frame_index)
+                and travel >= 3.5
+                and gap_ok
+            ):
                 if corner:
                     kind = EventType.CORNER
                 elif touchline:
@@ -1045,7 +1070,11 @@ def sample_and_track(
     """
 
     step = max(1, int(round(info.fps / max(sample_hz, 0.1))))
-    duration_samples = int(info.duration_seconds * max(sample_hz, 0.1)) if info.duration_seconds else 0
+    duration_samples = (
+        int(info.duration_seconds * max(sample_hz, 0.1))
+        if info.duration_seconds
+        else 0
+    )
     from_frames = info.frame_count // step if info.frame_count > 0 else 0
     planned = from_frames or duration_samples or max_sample_frames
     planned = max(1, min(planned, max_sample_frames))

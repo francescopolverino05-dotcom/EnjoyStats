@@ -190,7 +190,11 @@ def team_sheets_from_rundown(rundown: MatchRundown) -> list[TeamBasicStats]:
                 team_name=_team_name(
                     rundown, team_id, fallback=labels[index] if index < 2 else f"Team {index + 1}"
                 ),
-                goals=sum(1 for event in owned if event.is_goal or event.event_type is EventType.GOAL),
+                goals=sum(
+                    1
+                    for event in owned
+                    if event.is_goal or event.event_type is EventType.GOAL
+                ),
                 assists=sum(1 for event in owned if event.event_type is EventType.ASSIST),
                 possession_pct=round(100.0 * len(owned) / total, 1),
                 total_shots=len(shots),
@@ -224,7 +228,11 @@ def highlight_moments_from_rundown(rundown: MatchRundown) -> list[HighlightMomen
         moments.append(
             HighlightMoment(
                 clock=f"{event.period}' {event.minute:02d}:{event.second:02d}",
-                kind="goal" if event.is_goal or event.event_type is EventType.GOAL else event.event_type.value,
+                kind=(
+                    "goal"
+                    if event.is_goal or event.event_type is EventType.GOAL
+                    else event.event_type.value
+                ),
                 player=names.get(event.player_id, "—") if event.player_id else "—",
                 team_name=team_names.get(event.team_id, "Team"),
                 start_ms=start_ms,

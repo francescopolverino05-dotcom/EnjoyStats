@@ -63,7 +63,11 @@ def latest_job_status_path() -> Path | None:
     folder = collect_jobs_dir()
     if not folder.is_dir():
         return None
-    files = sorted(folder.glob(f"*{JOB_SUFFIX}"), key=lambda path: path.stat().st_mtime, reverse=True)
+    files = sorted(
+        folder.glob(f"*{JOB_SUFFIX}"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
     return files[0] if files else None
 
 
@@ -172,7 +176,8 @@ def start_collect_job(film: Path) -> Path:
     )
     root = Path(__file__).resolve().parents[1]
     env = os.environ.copy()
-    env["PYTHONPATH"] = str(root) + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = str(root) + ((os.pathsep + existing) if existing else "")
     log_handle = log_path.open("w", encoding="utf-8")
     subprocess.Popen(
         [sys.executable, "-m", "analytics.collect_job", str(resolved), str(status_path)],

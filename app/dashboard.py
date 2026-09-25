@@ -522,7 +522,10 @@ def render_offensive(profile: PlayerMatchProfile) -> None:
     else:
         identity[1].metric(
             "Number / name",
-            f"#{profile.jersey_number or '—'} {profile.player_name or profile.position or 'Player'}",
+            (
+                f"#{profile.jersey_number or '—'}"
+                f" {profile.player_name or profile.position or 'Player'}"
+            ),
         )
     top = st.columns(2)
     top[0].metric("Goals", offensive.goals)
@@ -828,7 +831,10 @@ def render_upload_loader() -> tuple[Callable[[str, float], None], Callable[[], N
 
     started = time.monotonic()
     st.subheader("Collecting match stats")
-    st.caption("Watching every sampled frame of the film on disk. Keep this tab open — a full match can take hours.")
+    st.caption(
+        "Watching every sampled frame of the film on disk. "
+        "Keep this tab open — a full match can take hours."
+    )
     bar = st.progress(0, text="Preparing the match film…")
     meta = st.empty()
     meta.caption("Elapsed 00:00  ·  estimating remaining time…")
@@ -1270,7 +1276,10 @@ def render_analyse_landing(base_url: str) -> None:
             "Or upload Netscape cookies.txt",
             type=["txt"],
             key="ytdlp_cookies_upload",
-            help="Export with a cookies extension while logged into Vimeo, then upload the file here.",
+            help=(
+                "Export with a cookies extension while logged into Vimeo, "
+                "then upload the file here."
+            ),
         )
         video_password = st.text_input(
             "Video password (optional)",
@@ -1283,7 +1292,10 @@ def render_analyse_landing(base_url: str) -> None:
     disk_labels: dict[str, Path | None] = {none_label: None}
     for path in on_disk:
         disk_labels[f"{path.name}  ·  {_format_bytes(path.stat().st_size)}"] = path
-    inbox_choice = st.selectbox("Films and tag sheets on this machine", options=list(disk_labels.keys()))
+    inbox_choice = st.selectbox(
+        "Films and tag sheets on this machine",
+        options=list(disk_labels.keys()),
+    )
     inbox_path = disk_labels[inbox_choice]
     film = st.file_uploader(
         "Or upload from this phone, tablet, or computer",

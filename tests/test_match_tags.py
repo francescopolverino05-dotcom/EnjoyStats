@@ -120,21 +120,35 @@ def test_synthetic_clip_tags_shots_or_passes(tmp_path) -> None:
     assert "type=" in xml
 
 
-_WYSCOUT_MINI = """<?xml version="1.0" encoding="utf-8"?>
-<analysis id="9f3a2dfe-78c8-48bf-8e94-7483348ffb45" title="Arsenal v Palace (1-1)">
-  <actions>
-    <action id="11111111-1111-1111-1111-111111111111" actionName=" / Inizio secondo tempo" startTime="00:46:27"/>
-    <action id="22222222-2222-2222-2222-222222222222" actionName="(4) M. Salmon / Passaggi" startTime="00:10:00"/>
-    <action id="33333333-3333-3333-3333-333333333333" actionName="(8) C. O''Neill / Falli" startTime="00:12:00"/>
-    <action id="44444444-4444-4444-4444-444444444444" actionName="(1) J. Porter / Parate" startTime="00:45:35"/>
-    <action id="55555555-5555-5555-5555-555555555555" actionName="(1) J. Porter / Tiro fuori dallo specchio" startTime="00:33:39"/>
-    <action id="66666666-6666-6666-6666-666666666666" actionName="(7) A. Stevens / Tiri" startTime="00:09:55"/>
-    <action id="77777777-7777-7777-7777-777777777777" actionName="(1) J. Porter / Goal subiti" startTime="00:50:27"/>
-    <action id="88888888-8888-8888-8888-888888888888" actionName="(11) A. Harriman-Annous / Goal di destro" startTime="01:04:53"/>
-    <action id="99999999-9999-9999-9999-999999999999" actionName="(2) T. Julienne / Coinvolgimento nell'azione del goal" startTime="01:04:54"/>
-  </actions>
-</analysis>
-"""
+_WYSCOUT_MINI = (
+    '<?xml version="1.0" encoding="utf-8"?>\n'
+    '<analysis id="9f3a2dfe-78c8-48bf-8e94-7483348ffb45" '
+    'title="Arsenal v Palace (1-1)">\n'
+    "  <actions>\n"
+    '    <action id="11111111-1111-1111-1111-111111111111" '
+    'actionName=" / Inizio secondo tempo" startTime="00:46:27"/>\n'
+    '    <action id="22222222-2222-2222-2222-222222222222" '
+    'actionName="(4) M. Salmon / Passaggi" startTime="00:10:00"/>\n'
+    '    <action id="33333333-3333-3333-3333-333333333333" '
+    'actionName="(8) C. O\'\'Neill / Falli" startTime="00:12:00"/>\n'
+    '    <action id="44444444-4444-4444-4444-444444444444" '
+    'actionName="(1) J. Porter / Parate" startTime="00:45:35"/>\n'
+    '    <action id="55555555-5555-5555-5555-555555555555" '
+    'actionName="(1) J. Porter / Tiro fuori dallo specchio" '
+    'startTime="00:33:39"/>\n'
+    '    <action id="66666666-6666-6666-6666-666666666666" '
+    'actionName="(7) A. Stevens / Tiri" startTime="00:09:55"/>\n'
+    '    <action id="77777777-7777-7777-7777-777777777777" '
+    'actionName="(1) J. Porter / Goal subiti" startTime="00:50:27"/>\n'
+    '    <action id="88888888-8888-8888-8888-888888888888" '
+    'actionName="(11) A. Harriman-Annous / Goal di destro" '
+    'startTime="01:04:53"/>\n'
+    '    <action id="99999999-9999-9999-9999-999999999999" '
+    'actionName="(2) T. Julienne / Coinvolgimento nell\'azione del goal" '
+    'startTime="01:04:54"/>\n'
+    "  </actions>\n"
+    "</analysis>\n"
+)
 
 
 def test_wyscout_analysis_xml_maps_italian_tags_to_one_one() -> None:
@@ -153,7 +167,11 @@ def test_wyscout_analysis_xml_maps_italian_tags_to_one_one() -> None:
     assert names["J. Porter"].offensive.total_shots == 0
     assert names["T. Julienne"].offensive.assists == 1
     assert any(name.endswith("Scorer") and "Palace" in name for name in names)
-    conceded = next(event for event in rundown.events if event.event_type is EventType.GOAL_CONCEDED)
+    conceded = next(
+        event
+        for event in rundown.events
+        if event.event_type is EventType.GOAL_CONCEDED
+    )
     assert conceded.period == 2
     assert conceded.minute == 5
     scored = next(

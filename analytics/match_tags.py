@@ -169,7 +169,9 @@ def find_official_tag_xml(video_path: Path, *directories: Path) -> Path | None:
                 score += 4
             if not generic and names == wanted:
                 score += 3
-            if resolved.stem.casefold() in path.stem.casefold() or path.stem.casefold() in resolved.stem.casefold():
+            left = resolved.stem.casefold()
+            right = path.stem.casefold()
+            if left in right or right in left:
                 score += 2
             if score > 0:
                 ranked.append((score, path))
@@ -740,7 +742,10 @@ def _parse_analysis_xml(root: Element) -> GamePayload:
             "y": start_y,
             "successful": successful,
             "is_goal": is_goal,
-            "is_progressive": "filtranti" in _normalize_kind(kind) or "lanci" in _normalize_kind(kind),
+            "is_progressive": (
+                "filtranti" in _normalize_kind(kind)
+                or "lanci" in _normalize_kind(kind)
+            ),
             "video_timestamp_ms": clock_s * 1000,
         }
         if end_x is not None and end_y is not None:
