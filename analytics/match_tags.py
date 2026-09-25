@@ -42,9 +42,7 @@ _AWAY_TRIM = re.compile(
     r").*$",
     re.IGNORECASE,
 )
-_ACTION_NAME = re.compile(
-    r"^(?:\((?P<jersey>\d+)\)\s*)?(?P<player>.*?)\s*/\s*(?P<kind>.+)$"
-)
+_ACTION_NAME = re.compile(r"^(?:\((?P<jersey>\d+)\)\s*)?(?P<player>.*?)\s*/\s*(?P<kind>.+)$")
 _HALF_KICKOFF = {
     "inizio primo tempo": 1,
     "inizio secondo tempo": 2,
@@ -320,9 +318,7 @@ def rundown_to_csv(rundown: MatchRundown) -> str:
         team_id: (
             (rundown.summary.home_team_name or "Home")
             if index == 0
-            else (rundown.summary.away_team_name or "Away")
-            if index == 1
-            else f"Team {index + 1}"
+            else (rundown.summary.away_team_name or "Away") if index == 1 else f"Team {index + 1}"
         )
         for index, team_id in enumerate(team_order)
     }
@@ -743,8 +739,7 @@ def _parse_analysis_xml(root: Element) -> GamePayload:
             "successful": successful,
             "is_goal": is_goal,
             "is_progressive": (
-                "filtranti" in _normalize_kind(kind)
-                or "lanci" in _normalize_kind(kind)
+                "filtranti" in _normalize_kind(kind) or "lanci" in _normalize_kind(kind)
             ),
             "video_timestamp_ms": clock_s * 1000,
         }

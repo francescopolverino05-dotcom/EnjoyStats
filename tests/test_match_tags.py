@@ -168,9 +168,7 @@ def test_wyscout_analysis_xml_maps_italian_tags_to_one_one() -> None:
     assert names["T. Julienne"].offensive.assists == 1
     assert any(name.endswith("Scorer") and "Palace" in name for name in names)
     conceded = next(
-        event
-        for event in rundown.events
-        if event.event_type is EventType.GOAL_CONCEDED
+        event for event in rundown.events if event.event_type is EventType.GOAL_CONCEDED
     )
     assert conceded.period == 2
     assert conceded.minute == 5

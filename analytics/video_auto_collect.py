@@ -898,8 +898,11 @@ def events_from_tracks(
             )
             pending_shot = None
             tagged = True
-        elif toward_goal and in_box and (travel >= 6.0 or speed >= 12.0 or mouth) and (
-            gap_ok or mouth
+        elif (
+            toward_goal
+            and in_box
+            and (travel >= 6.0 or speed >= 12.0 or mouth)
+            and (gap_ok or mouth)
         ):
             is_goal = mouth
             shot = _emit(
@@ -908,9 +911,7 @@ def events_from_tracks(
                     "event_type": EventType.GOAL if is_goal else EventType.SHOT,
                     "is_goal": is_goal,
                     "shot_outcome": (
-                        ShotOutcome.ON_TARGET
-                        if is_goal or mouth
-                        else ShotOutcome.MISSED
+                        ShotOutcome.ON_TARGET if is_goal or mouth else ShotOutcome.MISSED
                     ),
                 }
             )
@@ -935,9 +936,7 @@ def events_from_tracks(
                     {
                         **payload,
                         "event_type": (
-                            EventType.AERIAL_DUEL
-                            if clustered >= 4
-                            else EventType.GROUND_DUEL
+                            EventType.AERIAL_DUEL if clustered >= 4 else EventType.GROUND_DUEL
                         ),
                         "end_x": None,
                         "end_y": None,
@@ -1071,9 +1070,7 @@ def sample_and_track(
 
     step = max(1, int(round(info.fps / max(sample_hz, 0.1))))
     duration_samples = (
-        int(info.duration_seconds * max(sample_hz, 0.1))
-        if info.duration_seconds
-        else 0
+        int(info.duration_seconds * max(sample_hz, 0.1)) if info.duration_seconds else 0
     )
     from_frames = info.frame_count // step if info.frame_count > 0 else 0
     planned = from_frames or duration_samples or max_sample_frames

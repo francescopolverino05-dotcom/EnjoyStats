@@ -1130,8 +1130,7 @@ def render_sidebar() -> str:
     rundown = _stored_rundown()
     if rundown is not None:
         st.sidebar.success(
-            f"Collected {rundown.summary.event_count} events · "
-            f"{rundown.summary.goals} goals"
+            f"Collected {rundown.summary.event_count} events · " f"{rundown.summary.goals} goals"
         )
         persist_message = st.session_state.get(PERSIST_KEY)
         if persist_message:
@@ -1212,9 +1211,7 @@ def render_official_tag_section(base_url: str) -> None:
         elif home_xml is not None:
             rundown = collect_official_two_team(home_xml.getvalue())
         else:
-            raise ValueError(
-                "Upload one two-team export, or both Home and Away analysis XMLs."
-            )
+            raise ValueError("Upload one two-team export, or both Home and Away analysis XMLs.")
         st.session_state[RUNDOWN_KEY] = rundown_to_json(rundown)
         st.session_state.pop("analyse_cleared", None)
         _persisted, message = asyncio.run(persist_rundown(base_url, rundown))

@@ -179,9 +179,7 @@ def team_sheets_from_rundown(rundown: MatchRundown) -> list[TeamBasicStats]:
         passes = [event for event in owned if event.event_type in PASS_TYPES]
         shots = [event for event in owned if event.event_type in SHOT_TYPES]
         on_target = [
-            event
-            for event in shots
-            if event.shot_outcome is ShotOutcome.ON_TARGET or event.is_goal
+            event for event in shots if event.shot_outcome is ShotOutcome.ON_TARGET or event.is_goal
         ]
         successful_passes = sum(1 for event in passes if event.successful)
         sheets.append(
@@ -191,9 +189,7 @@ def team_sheets_from_rundown(rundown: MatchRundown) -> list[TeamBasicStats]:
                     rundown, team_id, fallback=labels[index] if index < 2 else f"Team {index + 1}"
                 ),
                 goals=sum(
-                    1
-                    for event in owned
-                    if event.is_goal or event.event_type is EventType.GOAL
+                    1 for event in owned if event.is_goal or event.event_type is EventType.GOAL
                 ),
                 assists=sum(1 for event in owned if event.event_type is EventType.ASSIST),
                 possession_pct=round(100.0 * len(owned) / total, 1),

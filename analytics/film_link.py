@@ -115,21 +115,17 @@ def _resolve_ytdlp_auth(
         if cookies_file is not None
         else (os.environ.get("ENJOYSTATS_YTDLP_COOKIES") or "").strip()
     )
-    browser_raw = (
-        (cookies_from_browser or "").strip().lower()
-        or (os.environ.get("ENJOYSTATS_YTDLP_BROWSER") or "").strip().lower()
-    )
-    password_raw = (
-        (video_password or "").strip()
-        or (os.environ.get("ENJOYSTATS_YTDLP_PASSWORD") or "").strip()
-    )
+    browser_raw = (cookies_from_browser or "").strip().lower() or (
+        os.environ.get("ENJOYSTATS_YTDLP_BROWSER") or ""
+    ).strip().lower()
+    password_raw = (video_password or "").strip() or (
+        os.environ.get("ENJOYSTATS_YTDLP_PASSWORD") or ""
+    ).strip()
     if browser_raw in {"", "none", "(none)"}:
         browser_raw = ""
     if browser_raw and browser_raw not in BROWSER_COOKIE_CHOICES:
         raise VideoCollectError(
-            "Cookies from browser must be one of: "
-            + ", ".join(BROWSER_COOKIE_CHOICES)
-            + "."
+            "Cookies from browser must be one of: " + ", ".join(BROWSER_COOKIE_CHOICES) + "."
         )
     cookies_path: str | None = None
     if file_raw:
@@ -147,9 +143,12 @@ def _resolve_ytdlp_auth(
 def _copy_name(source: Path) -> str:
     suffix = source.suffix.lower()
     if suffix in TAG_SUFFIXES:
-        base = "".join(
-            char if char.isalnum() or char in ".-_" else "_" for char in source.name
-        ).strip("._") or "match.xml"
+        base = (
+            "".join(char if char.isalnum() or char in ".-_" else "_" for char in source.name).strip(
+                "._"
+            )
+            or "match.xml"
+        )
         if Path(base).suffix.lower() not in TAG_SUFFIXES:
             return f"{base}.xml"
         return base
@@ -187,10 +186,15 @@ def _stream_direct_video(url: str, parsed: ParseResult, destination_dir: Path) -
         with httpx.stream("GET", url, follow_redirects=True, timeout=timeout) as response:
             response.raise_for_status()
             ctype = (response.headers.get("content-type") or "").split(";")[0].strip().lower()
-            if ctype and not ctype.startswith("video/") and ctype not in {
-                "application/octet-stream",
-                "application/mp4",
-            }:
+            if (
+                ctype
+                and not ctype.startswith("video/")
+                and ctype
+                not in {
+                    "application/octet-stream",
+                    "application/mp4",
+                }
+            ):
                 raise VideoCollectError(
                     "That link is a web page, not a film file. Drop the MP4 "
                     "into the inbox, or install yt-dlp for YouTube/Vimeo."
@@ -303,8 +307,7 @@ def _download_page_link(
             raise VideoCollectError(login_hint)
         snippet = " ".join(detail.strip().splitlines()[-2:])[:240]
         raise VideoCollectError(
-            "Could not fetch that page link."
-            + (f" {snippet}" if snippet else "")
+            "Could not fetch that page link." + (f" {snippet}" if snippet else "")
         )
     found = sorted(
         destination_dir.glob("link-match.*"),
