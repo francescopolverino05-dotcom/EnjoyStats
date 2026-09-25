@@ -124,6 +124,7 @@ def test_dashboard_renders_analyse_landing(tmp_path, monkeypatch) -> None:
     assert any("EnjoyStats" in header for header in sidebar_headers)
     select_labels = [str(element.label) for element in at.selectbox]
     assert any("Films and tag sheets on this machine" in label for label in select_labels)
+    assert any("Cookies from browser" in label for label in select_labels)
     input_labels = [str(element.label) for element in at.text_input]
     assert any("Register a link" in label for label in input_labels)
     captions = [str(element.value) for element in at.caption]
