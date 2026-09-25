@@ -9,7 +9,7 @@ from analytics.temporal_stats import (
     possession_pct_per_15_minute_segment,
     temporal_breakdown,
 )
-from analytics.match_tags import collect_from_tag_xml, rundown_to_xml
+from analytics.match_tags import collect_from_tag_xml, rundown_to_csv, rundown_to_xml
 from analytics.video_auto_collect import collect_from_video
 
 __all__ = [
@@ -17,6 +17,7 @@ __all__ = [
     "collect_from_tag_xml",
     "collect_from_video",
     "collect_game",
+    "rundown_to_csv",
     "rundown_to_xml",
     "detect_pass_strings",
     "map_to_play_zone",

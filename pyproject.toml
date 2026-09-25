@@ -23,6 +23,7 @@ dependencies = [
     "seaborn>=0.13,<1",
     "numpy>=1.26,<3",
     "opencv-python-headless>=4.9,<5",
+    "yt-dlp>=2024.8.0",
 ]
 
 [project.optional-dependencies]

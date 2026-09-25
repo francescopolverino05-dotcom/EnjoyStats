@@ -19,6 +19,7 @@ from analytics.video_auto_collect import (
     VIDEO_SUFFIXES,
     film_inbox_dir,
     safe_film_name,
+    video_limit_label,
 )
 from data_models.player_stats import StrictModel
 
@@ -33,23 +34,38 @@ def upload_page_html(api_origin: str = "") -> str:
     """
 
     origin = api_origin.rstrip("/")
+    limit = video_limit_label()
     return f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>EnjoyStats · Upload match film</title>
   <style>
+    html {{ -webkit-text-size-adjust: 100%; }}
     body {{ font-family: ui-sans-serif, system-ui, sans-serif; background:#0f172a;
-           color:#e2e8f0; margin:0; padding:1.1rem; }}
+           color:#e2e8f0; margin:0;
+           padding: max(1.1rem, env(safe-area-inset-top))
+                    max(1.1rem, env(safe-area-inset-right))
+                    max(1.1rem, env(safe-area-inset-bottom))
+                    max(1.1rem, env(safe-area-inset-left)); }}
     .card {{ max-width: 640px; margin: 0 auto; background:#111827;
             border:1px solid #1e293b; border-radius:16px; padding:1.15rem 1.3rem; }}
     h1 {{ font-size:1.2rem; margin:0 0 .35rem; }}
     p {{ color:#94a3b8; font-size:.92rem; line-height:1.45; }}
-    input[type=file] {{ width:100%; margin:.75rem 0; color:#e2e8f0; }}
+    input[type=file] {{ width:100%; margin:.75rem 0; color:#e2e8f0; min-height:44px;
+                        font-size:16px; }}
     button {{ background:#16a34a; color:#fff; border:0; border-radius:10px;
-             padding:.65rem 1rem; font-weight:700; cursor:pointer; }}
+             padding:.85rem 1rem; font-weight:700; cursor:pointer;
+             width:100%; min-height:48px; font-size:16px; }}
     button:disabled {{ opacity:.5; cursor:not-allowed; }}
+    @media (max-width: 640px) {{
+      .card {{ padding:.95rem 1rem; }}
+      h1 {{ font-size:1.1rem; }}
+    }}
+    @media (min-width: 641px) and (max-width: 1024px) {{
+      .card {{ max-width: 720px; }}
+    }}
     #bar {{ height:10px; background:#1e293b; border-radius:999px; overflow:hidden;
            margin-top:1rem; }}
     #bar > i {{ display:block; height:100%; width:0; background:#22c55e; }}
@@ -61,9 +77,9 @@ def upload_page_html(api_origin: str = "") -> str:
 <body>
   <div class="card">
     <h1>Upload a match film</h1>
-    <p>Sends the file in 4&nbsp;MB chunks (up to 3&nbsp;GB). After it says
-    Saved, pick the film under <b>Films on this machine</b> and click
-    Collect stats from film.</p>
+    <p>Sends the file in 4&nbsp;MB chunks (up to {limit}) from any phone,
+    tablet, or computer. After it says Saved, pick the film under
+    <b>Films on this machine</b> and click Analyse Stats.</p>
     <input id="file" type="file" accept="video/*,.mp4,.mov,.mkv,.avi,.m4v,.webm">
     <button id="go" type="button">Save film to inbox</button>
     <div id="bar"><i id="fill"></i></div>
@@ -90,8 +106,8 @@ def upload_page_html(api_origin: str = "") -> str:
   go.onclick = async () => {{
     const file = fileInput.files[0];
     if (!file) {{ fail("Choose a match film first."); return; }}
-    if (file.size > 3 * 1024 * 1024 * 1024) {{
-      fail("Film exceeds the 3 GB limit."); return;
+    if (file.size > {MAX_VIDEO_BYTES}) {{
+      fail("Film exceeds the {limit} limit."); return;
     }}
     go.disabled = true;
     msg.className = "";
@@ -130,8 +146,8 @@ def upload_page_html(api_origin: str = "") -> str:
       }}
       msg.className = "ok";
       msg.textContent = "Saved " + savedName
-        + ". In the sidebar, pick it under Films on this machine, "
-        + "then click Collect stats from film.";
+        + ". On the main page, pick it under Films on this machine, "
+        + "then click Analyse Stats.";
       go.disabled = false;
     }} catch (err) {{
       fail("The connection dropped while uploading. Copy the film "
@@ -176,7 +192,7 @@ async def _read_limited_body(request: Request, *, already: int = 0) -> bytes:
         if written > MAX_VIDEO_BYTES:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail="Match film exceeds the 3 GB upload limit.",
+                detail=f"Match film exceeds the {video_limit_label()} upload limit.",
             )
         chunks.append(chunk)
     return b"".join(chunks)
@@ -207,7 +223,7 @@ async def upload_match_film_chunk(
     if total > MAX_VIDEO_BYTES:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="Match film exceeds the 3 GB upload limit.",
+            detail=f"Match film exceeds the {video_limit_label()} upload limit.",
         )
     chosen = x_filename or filename or "match.mp4"
     destination = _destination_for(chosen)
@@ -288,7 +304,7 @@ async def upload_match_film(
         if declared > MAX_VIDEO_BYTES:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail="Match film exceeds the 3 GB upload limit.",
+                detail=f"Match film exceeds the {video_limit_label()} upload limit.",
             )
 
     chosen = x_filename or filename or "match.mp4"

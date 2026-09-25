@@ -108,11 +108,12 @@ async def test_fetch_uses_live_payload_when_api_returns_profile() -> None:
     assert load.actions[0].is_goal is True
 
 
-def test_dashboard_renders_fallback_without_network() -> None:
-    from pathlib import Path
-
+def test_dashboard_renders_analyse_landing(tmp_path, monkeypatch) -> None:
     from streamlit.testing.v1 import AppTest
 
+    monkeypatch.setenv("ENJOYSTATS_JOBS_DIR", str(tmp_path / "jobs"))
+    monkeypatch.setenv("ENJOYSTATS_FILM_INBOX", str(tmp_path / "inbox"))
+    monkeypatch.setenv("ENJOYSTATS_FILM_UPLOADS", str(tmp_path / "uploads"))
     script = Path(__file__).resolve().parents[1] / "app" / "dashboard.py"
     at = AppTest.from_file(str(script), default_timeout=15)
     at.run()
@@ -120,25 +121,82 @@ def test_dashboard_renders_fallback_without_network() -> None:
     titles = [str(element.value) for element in at.title]
     assert any("EnjoyStats" in title for title in titles)
     sidebar_headers = [str(element.value) for element in at.sidebar.header]
-    assert any("Upload a game" in header for header in sidebar_headers)
-    select_labels = [str(element.label) for element in at.sidebar.selectbox]
+    assert any("EnjoyStats" in header for header in sidebar_headers)
+    select_labels = [str(element.label) for element in at.selectbox]
     assert any("Films and tag sheets on this machine" in label for label in select_labels)
+    assert not any("Cookies from browser" in label for label in select_labels)
+    input_labels = [str(element.label) for element in at.text_input]
+    assert any("Register a link" in label for label in input_labels)
+    captions = [str(element.value) for element in at.caption]
+    assert any("phone, tablet, or computer" in caption.lower() for caption in captions)
+    assert any("shot" in caption.lower() and "pass" in caption.lower() for caption in captions)
+    assert any("hand" in caption.lower() or "analyst" in caption.lower() for caption in captions)
+    buttons = [str(element.label) for element in at.button]
+    assert any("Analyse Stats" in label for label in buttons)
+    assert any("Load sample match" in label for label in buttons)
     subheaders = [str(element.value) for element in at.subheader]
-    assert any("Upload a game" in header for header in subheaders)
-    assert "Offensive" in subheaders
-    assert "Defensive" in subheaders
-    assert "Distribution" in subheaders
-    assert "Possession" in subheaders
-    assert "Tactical pitch" in subheaders
+    assert any("Analyse Stats" in header for header in subheaders)
+    assert any("Official two-team tag sheet" in header for header in subheaders)
+    analyse = next(button for button in at.button if "Analyse Stats" in str(button.label))
+    analyse.click().run()
+    assert not at.exception
+    errors = [str(element.value) for element in at.error]
+    assert any("Register a link" in message or "upload" in message.lower() for message in errors)
 
 
-def test_collected_rundown_shows_match_tags(tmp_path) -> None:
+def test_vimeo_paste_prompts_upload_not_hard_error(tmp_path, monkeypatch) -> None:
+    from streamlit.testing.v1 import AppTest
+
+    monkeypatch.setenv("ENJOYSTATS_JOBS_DIR", str(tmp_path / "jobs"))
+    monkeypatch.setenv("ENJOYSTATS_FILM_INBOX", str(tmp_path / "inbox"))
+    monkeypatch.setenv("ENJOYSTATS_FILM_UPLOADS", str(tmp_path / "uploads"))
+    script = Path(__file__).resolve().parents[1] / "app" / "dashboard.py"
+    at = AppTest.from_file(str(script), default_timeout=15)
+    at.run()
+    link = next(field for field in at.text_input if "Register a link" in str(field.label))
+    link.set_value("https://vimeo.com/1224195986").run()
+    assert not at.exception
+    infos = [str(element.value) for element in at.info]
+    assert any("Vimeo" in message and "Upload the MP4" in message for message in infos)
+    errors = [str(element.value) for element in at.error]
+    assert not any("not supported" in message.lower() for message in errors)
+    analyse = next(button for button in at.button if "Analyse Stats" in str(button.label))
+    analyse.click().run()
+    assert not at.exception
+    errors = [str(element.value) for element in at.error]
+    assert any("Upload the match MP4" in message for message in errors)
+    assert not any("not supported" in message.lower() for message in errors)
+
+
+def test_landing_sample_opens_tag_inventory(tmp_path, monkeypatch) -> None:
+    from streamlit.testing.v1 import AppTest
+
+    monkeypatch.setenv("ENJOYSTATS_JOBS_DIR", str(tmp_path / "jobs"))
+    monkeypatch.setenv("ENJOYSTATS_FILM_INBOX", str(tmp_path / "inbox"))
+    monkeypatch.setenv("ENJOYSTATS_FILM_UPLOADS", str(tmp_path / "uploads"))
+    script = Path(__file__).resolve().parents[1] / "app" / "dashboard.py"
+    at = AppTest.from_file(str(script), default_timeout=20)
+    at.run()
+    assert not at.exception
+    sample = next(button for button in at.button if "Load sample match" in str(button.label))
+    sample.click().run()
+    assert not at.exception
+    subheaders = [str(element.value) for element in at.subheader]
+    assert "Match rundown" in subheaders
+    assert "What you no longer have to tag" in subheaders
+    downloads = [str(button.label) for button in at.download_button]
+    assert any("CSV" in label for label in downloads)
+    assert any("XML" in label for label in downloads)
+
+
+def test_collected_rundown_shows_match_tags(tmp_path, monkeypatch) -> None:
     from streamlit.testing.v1 import AppTest
 
     from analytics.game_ingest import rundown_to_json
     from analytics.sample_game import sample_game_payload
     from analytics.game_ingest import collect_game
 
+    monkeypatch.setenv("ENJOYSTATS_JOBS_DIR", str(tmp_path / "jobs"))
     script = Path(__file__).resolve().parents[1] / "app" / "dashboard.py"
     at = AppTest.from_file(str(script), default_timeout=20)
     at.session_state["collected_rundown"] = rundown_to_json(collect_game(sample_game_payload()))
@@ -146,8 +204,12 @@ def test_collected_rundown_shows_match_tags(tmp_path) -> None:
     assert not at.exception
     subheaders = [str(element.value) for element in at.subheader]
     assert "Match rundown" in subheaders
+    assert "What you no longer have to tag" in subheaders
     assert "Match tags" in subheaders
     assert "Team statistics" in subheaders
+    assert "Collective team stats" in subheaders
+    assert "Offensive" in subheaders
+    assert "Defensive" in subheaders
 
 
 def test_unknown_fallback_actions_include_a_missing_coordinate() -> None:

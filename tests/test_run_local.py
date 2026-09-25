@@ -40,8 +40,10 @@ def test_run_local_script_covers_stack_phases() -> None:
     assert "/docs" in text
     assert "streamlit" in text
     assert "8501" in text
-    assert "maxUploadSize=3072" in text
-    assert "maxMessageSize=3072" in text
+    assert "maxUploadSize=5120" in text
+    assert "maxMessageSize=5120" in text
+    assert "--server.address=0.0.0.0" in text
+    assert "Phone / tablet / other computer" in text
     assert "upload-film" in text
     assert "inbox" in text
     assert "trap cleanup INT TERM EXIT" in text
@@ -53,6 +55,7 @@ def test_run_local_script_covers_stack_phases() -> None:
 
 def test_streamlit_config_raises_upload_limits() -> None:
     config = (ROOT / ".streamlit" / "config.toml").read_text(encoding="utf-8")
-    assert "maxUploadSize = 3072" in config
-    assert "maxMessageSize = 3072" in config
+    assert "maxUploadSize = 5120" in config
+    assert "maxMessageSize = 5120" in config
+    assert 'address = "0.0.0.0"' in config
     assert "enableXsrfProtection = false" in config
