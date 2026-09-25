@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from urllib.parse import ParseResult, unquote, urlparse
 
@@ -126,8 +127,29 @@ def _stream_direct_video(url: str, parsed: ParseResult, destination_dir: Path) -
         raise VideoCollectError(f"Could not download the match link ({exc}).") from exc
 
 
+def resolve_ytdlp_command() -> list[str] | None:
+    """Return an argv prefix that can run yt-dlp, or ``None`` if missing.
+
+    Prefers the ``yt-dlp`` binary on ``PATH``, then the one next to the
+    active interpreter (venv), then ``python -m yt_dlp``.
+    """
+
+    on_path = shutil.which("yt-dlp")
+    if on_path:
+        return [on_path]
+    exe = Path(sys.executable)
+    for candidate in (exe.parent / "yt-dlp", exe.resolve().parent / "yt-dlp"):
+        if candidate.is_file():
+            return [str(candidate)]
+    try:
+        import yt_dlp  # noqa: F401
+    except ImportError:
+        return None
+    return [sys.executable, "-m", "yt_dlp"]
+
+
 def _download_page_link(url: str, destination_dir: Path) -> Path:
-    ytdlp = shutil.which("yt-dlp")
+    ytdlp = resolve_ytdlp_command()
     if ytdlp is None:
         raise VideoCollectError(
             "YouTube/Vimeo links need yt-dlp on this machine. "
@@ -135,7 +157,7 @@ def _download_page_link(url: str, destination_dir: Path) -> Path:
         )
     dest_tmpl = str(destination_dir / "link-match.%(ext)s")
     command = [
-        ytdlp,
+        *ytdlp,
         "--no-playlist",
         "-f",
         "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/b",

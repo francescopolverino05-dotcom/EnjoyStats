@@ -37,6 +37,7 @@ def test_dockerfiles_are_multistage_slim_python() -> None:
     assert 'CMD ["python", "-m", "api.main"]' in api
     assert "streamlit" in dashboard
     assert "opencv-python-headless" in dashboard
+    assert "yt-dlp" in dashboard
     assert "maxUploadSize=5120" in dashboard
     assert "maxMessageSize=5120" in dashboard
     assert "0.0.0.0" in dashboard

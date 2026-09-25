@@ -3,16 +3,30 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
-from analytics.film_link import register_match_link
+from analytics.film_link import register_match_link, resolve_ytdlp_command
 from analytics.video_auto_collect import VideoCollectError
 
 
 def test_register_rejects_empty_link(tmp_path: Path) -> None:
     with pytest.raises(VideoCollectError, match="link"):
         register_match_link("   ", tmp_path)
+
+
+def test_resolve_ytdlp_finds_installed_module() -> None:
+    command = resolve_ytdlp_command()
+    assert command is not None
+    assert command[0]
+    assert "yt-dlp" in " ".join(command) or "yt_dlp" in " ".join(command)
+
+
+def test_youtube_link_without_ytdlp_is_clear(tmp_path: Path) -> None:
+    with patch("analytics.film_link.resolve_ytdlp_command", return_value=None):
+        with pytest.raises(VideoCollectError, match="yt-dlp"):
+            register_match_link("https://www.youtube.com/watch?v=dQw4w9WgXcQ", tmp_path)
 
 
 def test_register_copies_local_path_and_file_uri(tmp_path: Path) -> None:
