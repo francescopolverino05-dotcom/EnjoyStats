@@ -281,14 +281,17 @@ def test_static_crowd_does_not_hide_a_full_possession_chain() -> None:
     )
 
 
-def test_collect_film_uses_sibling_wyscout_xml(tmp_path: Path) -> None:
+def test_analyse_stats_runs_film_even_with_sibling_wyscout(tmp_path: Path) -> None:
+    """One-team XML next to the film must not replace automated both-team collect."""
+
     clip = write_synthetic_match_clip(tmp_path / "Arsenal_v_Palace.avi", frames=24, fps=8)
     shutil.copy(
         Path(__file__).resolve().parent / "fixtures" / "arsenal_v_palace_1-1.xml",
         tmp_path / "Arsenal_v_Palace.xml",
     )
     rundown = collect_from_film_path(clip)
-    assert rundown.summary.goals == 2
-    assert rundown.summary.passes >= 300
+    assert rundown.summary.tag_source == "film"
+    # Sibling Wyscout sheet has 300+ passes and named players — film CV must win.
+    assert rundown.summary.passes < 100
     names = {profile.player_name for profile in rundown.players}
-    assert "A. Harriman-Annous" in names
+    assert "A. Harriman-Annous" not in names

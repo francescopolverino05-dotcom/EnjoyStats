@@ -138,7 +138,7 @@ def test_dashboard_renders_analyse_landing(tmp_path, monkeypatch) -> None:
     assert any("Load sample match" in label for label in buttons)
     subheaders = [str(element.value) for element in at.subheader]
     assert any("Analyse Stats" in header for header in subheaders)
-    assert any("Official two-team tag sheet" in header for header in subheaders)
+    assert any("Official tag sheet" in header for header in subheaders)
     analyse = next(button for button in at.button if "Analyse Stats" in str(button.label))
     analyse.click().run()
     assert not at.exception
@@ -208,8 +208,10 @@ def test_collected_rundown_shows_match_tags(tmp_path, monkeypatch) -> None:
     assert "Match rundown" in subheaders
     assert "What you no longer have to tag" in subheaders
     assert "Match tags" in subheaders
-    assert "Team statistics" in subheaders
-    assert "Collective team stats" in subheaders
+    assert any(
+        "team statistics" in header.lower() or "Team statistics" in header for header in subheaders
+    )
+    assert any("collective stats" in header.lower() for header in subheaders)
     assert "Offensive" in subheaders
     assert "Defensive" in subheaders
 

@@ -63,7 +63,9 @@ from analytics.collect_job import (
 )
 from analytics.film_link import is_vimeo_page_link, register_match_link
 from analytics.team_collect import (
-    is_one_sided_sheet,
+    SheetPerspective,
+    analysed_team_profile,
+    analysis_perspective,
     named_player_profiles,
     team_profiles_from_rundown,
 )
@@ -853,21 +855,78 @@ def render_upload_loader() -> tuple[Callable[[str, float], None], Callable[[], N
     return update, finish
 
 
+def render_perspective_banner(
+    perspective: SheetPerspective,
+    *,
+    tag_source: str = "official",
+) -> None:
+    """Explain film vs one-team XML so Home/Away never overclaims the score."""
+
+    if tag_source == "film":
+        st.success(
+            f"Film Analyse Stats · both teams auto-tagged · "
+            f"{perspective.analysed_team_name} {perspective.analysed_goals}–"
+            f"{perspective.opposition_goals_on_sheet} {perspective.opposition_team_name}. "
+            "This is the automated rundown (not a Wyscout scoresheet)."
+        )
+        return
+    if not perspective.one_sided:
+        st.success(
+            f"Official two-team sheet · "
+            f"{perspective.analysed_team_name} {perspective.analysed_goals}–"
+            f"{perspective.opposition_goals_on_sheet} {perspective.opposition_team_name}"
+        )
+        return
+    st.warning(
+        f"**{perspective.analysed_team_name} analysis sheet** — your one-team XML, "
+        "not a full Home/Away board. "
+        f"Offensive / construction tags are {perspective.analysed_team_name}. "
+        f"Defensive tags are still {perspective.analysed_team_name}'s defending "
+        f"(saves, recoveries, goals conceded). "
+        f"{perspective.opposition_team_name} only appears where this export mentions them "
+        "— usually Goal subiti, which can undercount the real score. "
+        "For both-team stats without the other side's XML, run Analyse Stats on the film."
+    )
+    score_l, score_r = st.columns(2)
+    score_l.metric(
+        f"{perspective.analysed_team_name} goals (this sheet)",
+        perspective.analysed_goals,
+    )
+    score_r.metric(
+        f"{perspective.opposition_team_name} goals on this sheet",
+        perspective.opposition_goals_on_sheet,
+    )
+    st.caption(
+        f"Score line: {perspective.score_line}. "
+        "Pair the other side's analysis XML only if you want an official scoresheet; "
+        "otherwise use film Analyse Stats for an automated both-team rundown."
+    )
+
+
 def render_match_summary(rundown: MatchRundown) -> None:
     """Headline match totals collected from the uploaded event feed."""
 
     summary = rundown.summary
+    perspective = analysis_perspective(rundown)
+    tag_source = getattr(rundown.summary, "tag_source", "official") or "official"
     st.title("EnjoyStats")
     st.subheader("Match rundown")
     st.caption(
         "These tags are already collected — an analyst does not have to click "
-        "every shot, pass, or corner. Official XML is the scoresheet; film "
-        "Analyse Stats is the time-saver for both teams."
+        "every shot, pass, or corner. Your one-team XML is the analysed-side "
+        "sheet; film Analyse Stats auto-tags both teams from the match film."
     )
+    render_perspective_banner(perspective, tag_source=tag_source)
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Events", summary.event_count)
     c2.metric("Players", summary.player_count)
-    c3.metric("Goals", summary.goals)
+    if perspective.one_sided:
+        c3.metric(
+            f"{perspective.analysed_team_name} goals",
+            perspective.analysed_goals,
+        )
+    else:
+        c3.metric("Goals", summary.goals)
     c4.metric("Shots", summary.shots)
     c5.metric("Passes", summary.passes)
     st.caption(
@@ -875,38 +934,70 @@ def render_match_summary(rundown: MatchRundown) -> None:
         "Every number below is counted from the match tags (passes, shots, "
         "recoveries) — the same sheet Spiideo / Wyscout XML export uses."
     )
-    render_tag_inventory(rundown)
-    render_team_sheet(rundown)
+    render_tag_inventory(rundown, perspective=perspective)
+    render_team_sheet(rundown, perspective=perspective)
     render_match_tags(rundown)
     render_highlight_moments(rundown)
 
 
-def render_tag_inventory(rundown: MatchRundown) -> None:
+def render_tag_inventory(
+    rundown: MatchRundown,
+    *,
+    perspective: SheetPerspective | None = None,
+) -> None:
     """Show how many of each action the machine (or official XML) already tagged."""
 
-    rows = tag_inventory_rows(rundown)
+    view = perspective or analysis_perspective(rundown)
+    rows = tag_inventory_rows(
+        rundown,
+        analysed_team_id=view.analysed_team_id,
+        analysed_label=view.analysed_team_name,
+        opposition_label=view.opposition_team_name,
+        one_sided=view.one_sided,
+    )
     if not rows:
         return
     st.subheader("What you no longer have to tag")
-    st.caption(
-        "Each row is one action type an analyst would otherwise mark by hand. "
-        "Totals are the collected sheet — download CSV or XML below to take "
-        "this into the rest of the data-collection workflow."
-    )
+    if view.one_sided:
+        st.caption(
+            f"One analysis sheet for {view.analysed_team_name}. "
+            f"The {view.opposition_team_name} column is only tags that appear on "
+            "this export (usually goals conceded) — not their full offensive sheet."
+        )
+    else:
+        st.caption(
+            "Each row is one action type an analyst would otherwise mark by hand. "
+            "Totals are the collected sheet — download CSV or XML below to take "
+            "this into the rest of the data-collection workflow."
+        )
     st.dataframe(rows, hide_index=True, width="stretch")
 
 
-def render_team_sheet(rundown: MatchRundown) -> None:
-    """Impact-style 15-stat board, one column per team."""
+def render_team_sheet(
+    rundown: MatchRundown,
+    *,
+    perspective: SheetPerspective | None = None,
+) -> None:
+    """Impact-style 15-stat board — analysed side only when the sheet is one-team."""
 
+    view = perspective or analysis_perspective(rundown)
     sheets = team_sheets_from_rundown(rundown)
     if not sheets:
         return
-    st.subheader("Team statistics")
-    st.caption(
-        "The 15 basic team stats Impact-style analysis publishes: counted "
-        "from this match's tags, not a second spreadsheet."
-    )
+    if view.one_sided and view.analysed_team_id is not None:
+        sheets = [sheet for sheet in sheets if sheet.team_id == view.analysed_team_id] or sheets[:1]
+        st.subheader(f"{view.analysed_team_name} team statistics")
+        st.caption(
+            f"15 basic Impact-style stats for the analysed side only. "
+            f"{view.opposition_team_name} does not get a parallel board from this "
+            "one-team XML — pair their analysis file for a full two-team sheet."
+        )
+    else:
+        st.subheader("Team statistics")
+        st.caption(
+            "The 15 basic team stats Impact-style analysis publishes: counted "
+            "from this match's tags, not a second spreadsheet."
+        )
     st.dataframe(team_sheet_rows(sheets), hide_index=True, width="stretch")
 
 
@@ -1181,12 +1272,15 @@ def render_film_uploader_panel(base_url: str) -> None:
 def render_official_tag_section(base_url: str) -> None:
     """Upload a two-team export, or merge Home + Away one-team analyses."""
 
-    st.subheader("Official two-team tag sheet")
+    st.subheader("Official tag sheet (optional)")
     st.caption(
-        "Fastest path when Wyscout / Spiideo / Nacsport already tagged the "
-        "match: drop one two-team export, or Home analysis XML plus Away "
-        "analysis XML. Both sides keep their real shots, passes, and corners. "
-        "That is the official scoresheet — not film computer vision."
+        "Use this when you already have Wyscout / Nacsport XML for the side "
+        "you analyse. A single one-team file is that team's perspective "
+        "(offensive = analysed team; defensive = their defending) and can "
+        "undercount the opposition score. You do not need the other team's "
+        "XML for day-to-day work — run Analyse Stats on the film for an "
+        "automated both-team rundown. Pair both analysis files only when "
+        "you want an official two-team scoresheet."
     )
     two_team = st.file_uploader(
         "One two-team export (JSON, MatchTags, or Wyscout XML)",
@@ -1232,10 +1326,10 @@ def render_analyse_landing(base_url: str) -> None:
     st.title("EnjoyStats")
     st.caption(
         "The job is to cut the hours an analyst spends tagging. "
-        "If official XML exists, collect it. If you only have the film, "
-        "Analyse Stats tags shots, passes, corners, throw-ins, recoveries, "
-        "and the rest for both teams so data collection starts from a "
-        "sheet — not from a blank timeline."
+        "Analyse Stats watches the match film and auto-collects shots, "
+        "passes, corners, recoveries, and the rest for both teams — you "
+        "do not need the opposition's XML. Optional: drop your one-team "
+        "analysis XML below for that side's official perspective."
     )
     if st.button("Load sample match", use_container_width=True, key="landing_sample"):
         sample_error = _load_sample_match(base_url)
@@ -1243,15 +1337,14 @@ def render_analyse_landing(base_url: str) -> None:
             st.error(sample_error)
         else:
             st.rerun()
-    render_official_tag_section(base_url)
     st.subheader("Analyse Stats")
     st.caption(
-        "No official sheet? Upload the match film (up to "
-        f"{video_limit_label()}). Analyse Stats watches both teams and "
-        "tags shots, passes, corners, and the rest so an analyst does not "
-        "have to do that by hand. Walk away — a full 90 minutes can take "
-        "hours. Come back to a Home / Away tag inventory plus collective "
-        "pillars. This saves tagging time; it is not a Wyscout scoresheet."
+        f"Upload the match film (up to {video_limit_label()}). "
+        "Analyse Stats runs the match down automatically and tags both "
+        "teams so you are not limited to one-sided Wyscout XML. Walk away "
+        "— a full 90 minutes can take hours. Come back to a Home / Away "
+        "tag inventory plus collective pillars. This saves tagging time; "
+        "it is not a Wyscout scoresheet."
     )
     link = st.text_input(
         "Register a link",
@@ -1289,6 +1382,7 @@ def render_analyse_landing(base_url: str) -> None:
     ):
         render_film_uploader_panel(base_url)
     analyse = st.button("Analyse Stats", type="primary", use_container_width=True)
+    render_official_tag_section(base_url)
 
     if not analyse:
         return
@@ -1356,32 +1450,46 @@ def render_analyse_landing(base_url: str) -> None:
 
 
 def render_collective_rundown(rundown: MatchRundown) -> None:
-    """Home / Away Spiideo pillars counted from the match tags."""
+    """Spiideo pillars from the match tags — one analysed side when the sheet is one-team."""
 
+    perspective = analysis_perspective(rundown)
     render_match_summary(rundown)
-    if is_one_sided_sheet(rundown):
-        analysed = rundown.summary.home_team_name or "Home"
-        other = rundown.summary.away_team_name or "Away"
+    tag_source = getattr(rundown.summary, "tag_source", "official") or "official"
+    if perspective.one_sided and tag_source != "film":
         st.info(
-            f"This official sheet is a one-team analysis of {analysed}. "
-            f"{other} only has tags that appear on this export — usually the "
-            "goal they scored. Upload {other}'s analysis XML next to this one "
-            "under Official two-team tag sheet to keep both sides official."
+            f"This XML is {perspective.analysed_team_name}'s analysis only. "
+            "For automated stats on both teams, upload the match film and click "
+            "Analyse Stats — you do not need the other side's XML. "
+            f"Optional: pair {perspective.opposition_team_name}'s analysis under "
+            "Official two-team tag sheet for an official scoresheet."
         )
-    teams = team_profiles_from_rundown(rundown)
-    if teams:
-        st.subheader("Collective team stats")
-        st.caption(
-            "Every tagged event for a side is folded into the same four "
-            "pillars Spiideo publishes (offensive / construction, defending, "
-            "distribution, possession). Substitutions do not split the sheet — "
-            "there are still two teams for the full match."
-        )
-        tabs = st.tabs([profile.player_name for profile in teams])
-        for tab, profile in zip(tabs, teams, strict=True):
-            with tab:
-                load = load_from_team_profile(rundown, profile)
-                render_dashboard(load, collective=True)
+        profile = analysed_team_profile(rundown)
+        if profile is not None:
+            st.subheader(f"{perspective.analysed_team_name} collective stats")
+            st.caption(
+                f"One sheet, one perspective. Offensive / construction = "
+                f"{perspective.analysed_team_name}. Defensive = "
+                f"{perspective.analysed_team_name} defending "
+                f"(including goals conceded against {perspective.opposition_team_name}). "
+                "Distribution and possession are from the same analysed-side tags."
+            )
+            load = load_from_team_profile(rundown, profile)
+            render_dashboard(load, collective=True)
+    else:
+        teams = team_profiles_from_rundown(rundown)
+        if teams:
+            st.subheader("Collective team stats")
+            st.caption(
+                "Every tagged event for a side is folded into the same four "
+                "pillars Spiideo publishes (offensive / construction, defending, "
+                "distribution, possession). Substitutions do not split the sheet — "
+                "there are still two teams for the full match."
+            )
+            tabs = st.tabs([profile.player_name for profile in teams])
+            for tab, profile in zip(tabs, teams, strict=True):
+                with tab:
+                    load = load_from_team_profile(rundown, profile)
+                    render_dashboard(load, collective=True)
     named = named_player_profiles(rundown)
     if named:
         with st.expander("Named player sheets (official tags)", expanded=False):

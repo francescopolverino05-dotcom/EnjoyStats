@@ -1200,6 +1200,7 @@ def collect_from_video(
             events=events,
             home_team_name=home_name,
             away_team_name=away_name,
+            tag_source="film",
         )
     )
     try:

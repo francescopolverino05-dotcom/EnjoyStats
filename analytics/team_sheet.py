@@ -238,31 +238,57 @@ def highlight_moments_from_rundown(rundown: MatchRundown) -> list[HighlightMomen
     return moments
 
 
-def tag_inventory_rows(rundown: MatchRundown) -> list[dict[str, object]]:
+def tag_inventory_rows(
+    rundown: MatchRundown,
+    *,
+    analysed_team_id: UUID | None = None,
+    analysed_label: str | None = None,
+    opposition_label: str | None = None,
+    one_sided: bool = False,
+) -> list[dict[str, object]]:
     """Count every tag type an analyst would otherwise click by hand.
 
     Core actions (goals, shots, passes, corners, throw-ins, free kicks,
     saves) always appear so a zero is visible. Other types appear only
     when the sheet actually has them.
+
+    When ``one_sided`` is true, columns are the analysed side versus the
+    thin opposition tags on this export — not a fake full Home/Away board.
     """
 
     sheets = team_sheets_from_rundown(rundown)
-    home_id = sheets[0].team_id if sheets else None
-    away_id = sheets[1].team_id if len(sheets) > 1 else None
-    home_name = sheets[0].team_name if sheets else (rundown.summary.home_team_name or "Home")
-    away_name = (
-        sheets[1].team_name if len(sheets) > 1 else (rundown.summary.away_team_name or "Away")
-    )
+    if one_sided and analysed_team_id is not None:
+        primary_id = analysed_team_id
+        secondary_id = next(
+            (sheet.team_id for sheet in sheets if sheet.team_id != analysed_team_id),
+            None,
+        )
+        primary_name = analysed_label or next(
+            (sheet.team_name for sheet in sheets if sheet.team_id == analysed_team_id),
+            rundown.summary.home_team_name or "Analysed",
+        )
+        secondary_base = opposition_label or next(
+            (sheet.team_name for sheet in sheets if sheet.team_id == secondary_id),
+            rundown.summary.away_team_name or "Opposition",
+        )
+        secondary_name = f"{secondary_base} (this sheet only)"
+    else:
+        primary_id = sheets[0].team_id if sheets else None
+        secondary_id = sheets[1].team_id if len(sheets) > 1 else None
+        primary_name = sheets[0].team_name if sheets else (rundown.summary.home_team_name or "Home")
+        secondary_name = (
+            sheets[1].team_name if len(sheets) > 1 else (rundown.summary.away_team_name or "Away")
+        )
     totals: dict[EventType, int] = defaultdict(int)
-    home_counts: dict[EventType, int] = defaultdict(int)
-    away_counts: dict[EventType, int] = defaultdict(int)
+    primary_counts: dict[EventType, int] = defaultdict(int)
+    secondary_counts: dict[EventType, int] = defaultdict(int)
     for event in rundown.events:
         kind = event.event_type
         totals[kind] += 1
-        if home_id is not None and event.team_id == home_id:
-            home_counts[kind] += 1
-        elif away_id is not None and event.team_id == away_id:
-            away_counts[kind] += 1
+        if primary_id is not None and event.team_id == primary_id:
+            primary_counts[kind] += 1
+        elif secondary_id is not None and event.team_id == secondary_id:
+            secondary_counts[kind] += 1
 
     rows: list[dict[str, object]] = []
     listed: set[EventType] = set()
@@ -271,27 +297,27 @@ def tag_inventory_rows(rundown: MatchRundown) -> list[dict[str, object]]:
         total = totals[kind]
         if total == 0 and kind not in CORE_ANALYST_TAGS:
             continue
-        rows.append(
-            {
-                "Tag": ANALYST_TAG_LABELS[kind],
-                "Total": total,
-                home_name: home_counts[kind],
-                away_name: away_counts[kind],
-            }
-        )
+        row: dict[str, object] = {
+            "Tag": ANALYST_TAG_LABELS[kind],
+            "Total": total,
+            primary_name: primary_counts[kind],
+        }
+        if not one_sided or secondary_id is not None:
+            row[secondary_name] = secondary_counts[kind]
+        rows.append(row)
     leftovers = sorted(
         (kind for kind in totals if kind not in listed and totals[kind] > 0),
         key=lambda kind: kind.value,
     )
     for kind in leftovers:
-        rows.append(
-            {
-                "Tag": ANALYST_TAG_LABELS.get(kind, kind.value.replace("_", " ").title()),
-                "Total": totals[kind],
-                home_name: home_counts[kind],
-                away_name: away_counts[kind],
-            }
-        )
+        row = {
+            "Tag": ANALYST_TAG_LABELS.get(kind, kind.value.replace("_", " ").title()),
+            "Total": totals[kind],
+            primary_name: primary_counts[kind],
+        }
+        if not one_sided or secondary_id is not None:
+            row[secondary_name] = secondary_counts[kind]
+        rows.append(row)
     return rows
 
 

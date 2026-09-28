@@ -20,7 +20,6 @@ from analytics.sample_game import sample_game_payload
 from analytics.match_tags import (
     collect_from_tag_xml,
     collect_paired_analysis,
-    find_official_tag_xml,
 )
 from analytics.video_auto_collect import (
     MAX_VIDEO_BYTES,
@@ -245,10 +244,11 @@ def save_uploaded_film(
 
 
 def film_has_official_tags(path: str | Path) -> bool:
-    """Return whether collect can skip the hours-long film watch.
+    """Return whether ``path`` itself is an official tag sheet.
 
-    Official Wyscout / Nacsport XML (the file itself, or a sibling analysis
-    sheet) is the Impact-style source of truth and finishes in seconds.
+    Analyse Stats on a film always runs the automated both-team collect.
+    One-team Wyscout XML sitting next to the MP4 must not hijack that path —
+    analysts upload their own side's analysis separately under Official tags.
     """
 
     resolved = normalize_film_path(path)
@@ -256,9 +256,7 @@ def film_has_official_tags(path: str | Path) -> bool:
         resolved = resolved.resolve()
     except OSError:
         return False
-    if resolved.suffix.lower() == ".xml":
-        return resolved.is_file()
-    return find_official_tag_xml(resolved, film_inbox_dir(), film_upload_dir()) is not None
+    return resolved.suffix.lower() == ".xml" and resolved.is_file()
 
 
 def collect_from_film_path(
@@ -266,7 +264,13 @@ def collect_from_film_path(
     *,
     on_progress: ProgressFn | None = None,
 ) -> MatchRundown:
-    """Auto-tag a match film on disk and collect the four-pillar rundown."""
+    """Collect tags from a film (both teams) or from an explicit XML path.
+
+    Film paths always run computer-vision Analyse Stats for Home and Away.
+    Sibling one-team Wyscout sheets are ignored here so the automated
+    rundown is not replaced by a single-side analysis. Pass the XML path
+    itself (or use Official two-team tag sheet) for official tags.
+    """
 
     resolved = normalize_film_path(path)
     try:
@@ -284,12 +288,6 @@ def collect_from_film_path(
         raise ValueError("Choose a match film (mp4, mov, mkv, avi, m4v, webm) or a tag XML.")
     if not resolved.is_file():
         raise ValueError(f"Match film not found: {resolved}")
-    official = find_official_tag_xml(resolved, film_inbox_dir(), film_upload_dir())
-    if official is not None:
-        try:
-            return collect_from_tag_xml(official.read_text(encoding="utf-8-sig"))
-        except ValueError as exc:
-            raise ValueError(f"Tag XML could not be collected ({exc}).") from exc
     try:
         return collect_from_video(resolved, on_progress=on_progress)
     except VideoCollectError as exc:

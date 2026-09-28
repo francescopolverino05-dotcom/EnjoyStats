@@ -324,4 +324,9 @@ def sample_events() -> list[MatchEvent]:
 def sample_game_payload() -> GamePayload:
     """Roster plus events for one-click collection on the dashboard."""
 
-    return GamePayload(match_id=SIM_MATCH_ID, players=sample_roster(), events=sample_events())
+    return GamePayload(
+        match_id=SIM_MATCH_ID,
+        players=sample_roster(),
+        events=sample_events(),
+        tag_source="sample",
+    )

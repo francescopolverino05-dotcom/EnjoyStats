@@ -8,6 +8,7 @@ from analytics.game_ingest import collect_game
 from analytics.match_tags import collect_from_tag_xml
 from analytics.sample_game import TEAM_ID, sample_game_payload
 from analytics.team_collect import (
+    analysis_perspective,
     is_invented_film_identity,
     is_one_sided_sheet,
     named_player_profiles,
@@ -42,6 +43,13 @@ def test_arsenal_palace_xml_has_two_collective_sheets() -> None:
     assert {row.player_name for row in teams} == {"Arsenal", "Palace"}
     assert {row.offensive.goals for row in teams} == {1}
     assert is_one_sided_sheet(rundown) is True
+    perspective = analysis_perspective(rundown)
+    assert perspective.one_sided is True
+    assert perspective.analysed_team_name == "Arsenal"
+    assert perspective.opposition_team_name == "Palace"
+    assert perspective.analysed_goals == 1
+    assert perspective.opposition_goals_on_sheet == 1
+    assert "this sheet" in perspective.score_line
     assert sum(row.distribution.passes.total for row in teams) >= 400
     named = named_player_profiles(rundown)
     assert named
