@@ -1162,17 +1162,20 @@ def render_film_uploader_panel(base_url: str) -> None:
 
     upload_url = f"{base_url.rstrip('/')}/upload-film"
     inbox = film_inbox_dir()
+    inbox.mkdir(parents=True, exist_ok=True)
+    inbox_path = str(inbox.resolve())
     st.markdown("**Upload from this device**")
     st.caption(
-        "Saves the film in 4 MB chunks to "
-        f"`{inbox}` so any phone, tablet, or computer can send a full match "
-        f"(up to {video_limit_label()}) without Streamlit's large-PUT disconnect. "
-        "Then click Analyse Stats."
+        "Most reliable for a full match: copy the MP4 into "
+        f"`{inbox_path}`, then pick it under Films on this machine. "
+        "Or use the chunked uploader below (retries drops; up to "
+        f"{video_limit_label()})."
     )
+    st.code(inbox_path, language=None)
     st.link_button("Open uploader in a new tab", upload_url)
     import streamlit.components.v1 as components
 
-    components.html(upload_page_html(base_url.rstrip("/")), height=420, scrolling=False)
+    components.html(upload_page_html(base_url.rstrip("/")), height=480, scrolling=False)
 
 
 def render_official_tag_section(base_url: str) -> None:

@@ -125,6 +125,8 @@ def test_film_stream_upload_writes_inbox(tmp_path: Path, monkeypatch) -> None:
         assert "Analyse Stats" in page.text
         assert "width=device-width" in page.text
         assert "5 GB" in page.text or "5&nbsp;GB" in page.text
+        assert "Retry" in page.text
+        assert str(inbox.resolve()) in page.text
         response = client.post(
             "/api/v1/matches/film?filename=derby.mp4",
             content=payload,
@@ -162,6 +164,47 @@ def test_film_chunk_upload_assembles_inbox_file(tmp_path: Path, monkeypatch) -> 
     body = last.json()
     assert body["complete"] is True
     assert Path(body["path"]).read_bytes() == payload
+
+
+def test_api_starts_film_upload_when_postgres_is_down(tmp_path: Path, monkeypatch) -> None:
+    from unittest.mock import patch
+
+    from storage.db_aggregator import StorageError
+
+    inbox = tmp_path / "inbox"
+    monkeypatch.setenv("ENJOYSTATS_FILM_INBOX", str(inbox))
+
+    class _BoomAggregator:
+        def __init__(self, _url: str) -> None:
+            pass
+
+        async def connect(self) -> None:
+            raise StorageError("no database")
+
+        async def apply_schema(self) -> None:
+            return None
+
+        async def close(self) -> None:
+            return None
+
+    with patch("api.main.DatabaseAggregator", _BoomAggregator):
+        application = create_app()
+        with TestClient(application) as client:
+            health = client.get("/health")
+            assert health.status_code == 200
+            assert health.json()["mode"] == "film_upload_only"
+            page = client.get("/upload-film")
+            assert page.status_code == 200
+            saved = client.post(
+                "/api/v1/matches/film?filename=clip.mp4",
+                content=b"bytes",
+                headers={
+                    "Content-Type": "application/octet-stream",
+                    "X-Filename": "clip.mp4",
+                },
+            )
+    assert saved.status_code == 200, saved.text
+    assert (inbox / "clip.mp4").read_bytes() == b"bytes"
 
 
 def test_film_stream_upload_rejects_multipart(tmp_path: Path, monkeypatch) -> None:

@@ -128,9 +128,14 @@ def test_dashboard_renders_analyse_landing(tmp_path, monkeypatch) -> None:
     input_labels = [str(element.label) for element in at.text_input]
     assert any("Register a link" in label for label in input_labels)
     captions = [str(element.value) for element in at.caption]
-    assert any("phone, tablet, or computer" in caption.lower() for caption in captions)
     assert any("shot" in caption.lower() and "pass" in caption.lower() for caption in captions)
     assert any("hand" in caption.lower() or "analyst" in caption.lower() for caption in captions)
+    assert any(
+        "inbox" in caption.lower() or "mp4" in caption.lower() for caption in captions
+    ) or any(
+        "phone, tablet, or computer" in str(element.label).lower()
+        for element in at.expander
+    )
     buttons = [str(element.label) for element in at.button]
     assert any("Analyse Stats" in label for label in buttons)
     assert any("Load sample match" in label for label in buttons)
