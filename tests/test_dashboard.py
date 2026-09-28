@@ -214,6 +214,15 @@ def test_collected_rundown_shows_match_tags(tmp_path, monkeypatch) -> None:
     assert any("collective stats" in header.lower() for header in subheaders)
     assert "Offensive" in subheaders
     assert "Defensive" in subheaders
+    # Home tab returns to Analyse Stats without clearing the match.
+    nav = next(radio for radio in at.radio if set(radio.options) >= {"Home", "Match rundown"})
+    assert nav.value == "Match rundown"
+    nav.set_value("Home").run()
+    assert not at.exception
+    buttons = [str(element.label) for element in at.button]
+    assert any("Analyse Stats" in label for label in buttons)
+    subheaders_home = [str(element.value) for element in at.subheader]
+    assert any("Analyse Stats" in header for header in subheaders_home)
 
 
 def test_unknown_fallback_actions_include_a_missing_coordinate() -> None:

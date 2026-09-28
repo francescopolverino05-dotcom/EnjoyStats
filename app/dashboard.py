@@ -434,6 +434,17 @@ def _inject_styles() -> None:
             font-weight: 700;
           }
           h1, h2, h3 { letter-spacing: -0.02em; }
+          div[data-testid="stRadio"] {
+            background: #0f172a;
+            border: 1px solid #1e293b;
+            border-radius: 14px;
+            padding: 0.35rem 0.7rem;
+            margin-bottom: 0.85rem;
+          }
+          div[data-testid="stRadio"] label {
+            color: #e2e8f0 !important;
+            font-weight: 600;
+          }
           div[data-testid="stButton"] button {
             min-height: 48px;
             border-radius: 12px;
@@ -1114,6 +1125,40 @@ def _resolve_film_source(
 RUNDOWN_KEY = "collected_rundown"
 PERSIST_KEY = "ingest_persist_message"
 JOB_KEY = "collect_job_path"
+NAV_KEY = "app_nav"
+
+
+def _go_home() -> None:
+    st.session_state[NAV_KEY] = "Home"
+
+
+def _go_match() -> None:
+    st.session_state[NAV_KEY] = "Match rundown"
+
+
+def render_app_nav(*, has_match: bool, analysing: bool) -> str:
+    """Top Home / Match tabs so the landing stays one click away."""
+
+    options = ["Home"]
+    if has_match:
+        options.append("Match rundown")
+    if analysing:
+        options.append("Analysing")
+    current = str(st.session_state.get(NAV_KEY, "") or "")
+    if current not in options:
+        if analysing and not has_match:
+            st.session_state[NAV_KEY] = "Analysing"
+        elif has_match:
+            st.session_state[NAV_KEY] = "Match rundown"
+        else:
+            st.session_state[NAV_KEY] = "Home"
+    return st.radio(
+        "Section",
+        options=options,
+        horizontal=True,
+        key=NAV_KEY,
+        label_visibility="collapsed",
+    )
 
 
 def _hydrate_collect_job() -> None:
@@ -1137,6 +1182,8 @@ def _hydrate_collect_job() -> None:
         if loaded is not None:
             st.session_state[RUNDOWN_KEY] = rundown_to_json(loaded)
             st.session_state[PERSIST_KEY] = str(status.get("label") or "Background collect ready.")
+            if st.session_state.get(NAV_KEY) not in {"Home", "Match rundown"}:
+                _go_match()
         return
     if status.get("state") == "error":
         st.session_state[PERSIST_KEY] = str(status.get("error") or "Background collect failed.")
@@ -1158,6 +1205,7 @@ def _load_sample_match(base_url: str) -> str | None:
         st.session_state.pop("analyse_cleared", None)
         _persisted, message = asyncio.run(persist_rundown(base_url, rundown))
         st.session_state[PERSIST_KEY] = message
+        _go_match()
     except ValueError as exc:
         return str(exc)
     except Exception as exc:  # noqa: BLE001 — surface unexpected collect failures
@@ -1200,10 +1248,13 @@ def render_sidebar() -> str:
         st.session_state.pop(PERSIST_KEY, None)
         st.session_state.pop(JOB_KEY, None)
         st.session_state["analyse_cleared"] = True
+        _go_home()
 
     error: str | None = None
     if collect_sample:
         error = _load_sample_match(base_url)
+        if error is None:
+            _go_match()
     elif collect_json:
         if uploaded_json is None:
             error = "Choose a JSON or XML tag file first, or use Analyse Stats on the main page."
@@ -1213,6 +1264,7 @@ def render_sidebar() -> str:
                 st.session_state[RUNDOWN_KEY] = rundown_to_json(rundown)
                 _persisted, message = asyncio.run(persist_rundown(base_url, rundown))
                 st.session_state[PERSIST_KEY] = message
+                _go_match()
             except ValueError as exc:
                 error = str(exc)
     if error:
@@ -1313,6 +1365,7 @@ def render_official_tag_section(base_url: str) -> None:
         st.session_state.pop("analyse_cleared", None)
         _persisted, message = asyncio.run(persist_rundown(base_url, rundown))
         st.session_state[PERSIST_KEY] = message
+        _go_match()
         st.rerun()
     except ValueError as exc:
         st.error(str(exc))
@@ -1425,6 +1478,7 @@ def render_analyse_landing(base_url: str) -> None:
             st.session_state.pop("analyse_cleared", None)
             _persisted, message = asyncio.run(persist_rundown(base_url, rundown))
             st.session_state[PERSIST_KEY] = message
+            _go_match()
             st.rerun()
         else:
             update("Starting background analyse…", 0.2)
@@ -1437,6 +1491,7 @@ def render_analyse_landing(base_url: str) -> None:
                 "Walk away and refresh later. "
                 f"Status: {status_path.name}"
             )
+            st.session_state[NAV_KEY] = "Analysing"
             finish()
             st.rerun()
     except VideoCollectError as exc:
@@ -1530,21 +1585,26 @@ def main(*, fetch: FetchFn = _run_fetch) -> None:
     _hydrate_collect_job()
     base_url = render_sidebar()
     rundown = _stored_rundown()
-    if rundown is not None:
+    job_path_raw = str(st.session_state.get(JOB_KEY, "") or "")
+    job_status = read_job_status(Path(job_path_raw)) if job_path_raw else None
+    analysing = bool(job_status and job_status.get("state") in {"queued", "running"})
+    if rundown is not None or analysing:
+        section = render_app_nav(has_match=rundown is not None, analysing=analysing)
+    else:
+        section = "Home"
+
+    if section == "Match rundown" and rundown is not None:
         render_collective_rundown(rundown)
         return
 
-    job_path_raw = str(st.session_state.get(JOB_KEY, "") or "")
-    if job_path_raw:
-        status = read_job_status(Path(job_path_raw))
-        if status and status.get("state") in {"queued", "running"}:
-            render_job_progress(status)
-            time.sleep(8)
-            st.rerun()
-            return
-        if status and status.get("state") == "error":
-            st.title("EnjoyStats")
-            st.error(str(status.get("error") or "Background collect failed."))
+    if section == "Analysing" and analysing and job_status is not None:
+        render_job_progress(job_status)
+        time.sleep(8)
+        st.rerun()
+        return
+
+    if job_status and job_status.get("state") == "error":
+        st.error(str(job_status.get("error") or "Background collect failed."))
 
     render_analyse_landing(base_url)
     render_api_demo(base_url, fetch)
