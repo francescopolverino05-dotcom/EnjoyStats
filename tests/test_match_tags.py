@@ -6,6 +6,7 @@ from analytics.match_tags import (
     collect_from_tag_xml,
     find_official_tag_xml,
     infer_team_names,
+    rundown_to_csv,
     rundown_to_xml,
     write_sidecar_xml,
 )
@@ -41,6 +42,11 @@ def test_sample_game_xml_roundtrip_keeps_goals_and_passes() -> None:
     assert restored.summary.passes == rundown.summary.passes
     assert restored.summary.shots == rundown.summary.shots
     assert restored.summary.player_count == rundown.summary.player_count
+    csv_text = rundown_to_csv(rundown)
+    lines = [line for line in csv_text.splitlines() if line.strip()]
+    assert lines[0].startswith("Clock,Period,Minute,Second,Tag,")
+    assert len(lines) == rundown.summary.event_count + 1
+    assert any(",pass," in line or ",shot," in line or ",goal," in line for line in lines[1:])
 
 
 def test_sidecar_xml_recollects_from_path(tmp_path) -> None:
@@ -114,21 +120,35 @@ def test_synthetic_clip_tags_shots_or_passes(tmp_path) -> None:
     assert "type=" in xml
 
 
-_WYSCOUT_MINI = """<?xml version="1.0" encoding="utf-8"?>
-<analysis id="9f3a2dfe-78c8-48bf-8e94-7483348ffb45" title="Arsenal v Palace (1-1)">
-  <actions>
-    <action id="11111111-1111-1111-1111-111111111111" actionName=" / Inizio secondo tempo" startTime="00:46:27"/>
-    <action id="22222222-2222-2222-2222-222222222222" actionName="(4) M. Salmon / Passaggi" startTime="00:10:00"/>
-    <action id="33333333-3333-3333-3333-333333333333" actionName="(8) C. O''Neill / Falli" startTime="00:12:00"/>
-    <action id="44444444-4444-4444-4444-444444444444" actionName="(1) J. Porter / Parate" startTime="00:45:35"/>
-    <action id="55555555-5555-5555-5555-555555555555" actionName="(1) J. Porter / Tiro fuori dallo specchio" startTime="00:33:39"/>
-    <action id="66666666-6666-6666-6666-666666666666" actionName="(7) A. Stevens / Tiri" startTime="00:09:55"/>
-    <action id="77777777-7777-7777-7777-777777777777" actionName="(1) J. Porter / Goal subiti" startTime="00:50:27"/>
-    <action id="88888888-8888-8888-8888-888888888888" actionName="(11) A. Harriman-Annous / Goal di destro" startTime="01:04:53"/>
-    <action id="99999999-9999-9999-9999-999999999999" actionName="(2) T. Julienne / Coinvolgimento nell'azione del goal" startTime="01:04:54"/>
-  </actions>
-</analysis>
-"""
+_WYSCOUT_MINI = (
+    '<?xml version="1.0" encoding="utf-8"?>\n'
+    '<analysis id="9f3a2dfe-78c8-48bf-8e94-7483348ffb45" '
+    'title="Arsenal v Palace (1-1)">\n'
+    "  <actions>\n"
+    '    <action id="11111111-1111-1111-1111-111111111111" '
+    'actionName=" / Inizio secondo tempo" startTime="00:46:27"/>\n'
+    '    <action id="22222222-2222-2222-2222-222222222222" '
+    'actionName="(4) M. Salmon / Passaggi" startTime="00:10:00"/>\n'
+    '    <action id="33333333-3333-3333-3333-333333333333" '
+    'actionName="(8) C. O\'\'Neill / Falli" startTime="00:12:00"/>\n'
+    '    <action id="44444444-4444-4444-4444-444444444444" '
+    'actionName="(1) J. Porter / Parate" startTime="00:45:35"/>\n'
+    '    <action id="55555555-5555-5555-5555-555555555555" '
+    'actionName="(1) J. Porter / Tiro fuori dallo specchio" '
+    'startTime="00:33:39"/>\n'
+    '    <action id="66666666-6666-6666-6666-666666666666" '
+    'actionName="(7) A. Stevens / Tiri" startTime="00:09:55"/>\n'
+    '    <action id="77777777-7777-7777-7777-777777777777" '
+    'actionName="(1) J. Porter / Goal subiti" startTime="00:50:27"/>\n'
+    '    <action id="88888888-8888-8888-8888-888888888888" '
+    'actionName="(11) A. Harriman-Annous / Goal di destro" '
+    'startTime="01:04:53"/>\n'
+    '    <action id="99999999-9999-9999-9999-999999999999" '
+    'actionName="(2) T. Julienne / Coinvolgimento nell\'azione del goal" '
+    'startTime="01:04:54"/>\n'
+    "  </actions>\n"
+    "</analysis>\n"
+)
 
 
 def test_wyscout_analysis_xml_maps_italian_tags_to_one_one() -> None:
@@ -147,7 +167,9 @@ def test_wyscout_analysis_xml_maps_italian_tags_to_one_one() -> None:
     assert names["J. Porter"].offensive.total_shots == 0
     assert names["T. Julienne"].offensive.assists == 1
     assert any(name.endswith("Scorer") and "Palace" in name for name in names)
-    conceded = next(event for event in rundown.events if event.event_type is EventType.GOAL_CONCEDED)
+    conceded = next(
+        event for event in rundown.events if event.event_type is EventType.GOAL_CONCEDED
+    )
     assert conceded.period == 2
     assert conceded.minute == 5
     scored = next(
@@ -182,3 +204,54 @@ def test_find_official_tag_xml_pairs_film_with_wyscout_sheet(tmp_path) -> None:
     (tmp_path / "Arsenal_v_Palace__1-1_.tags.xml").write_text("<MatchTags/>", encoding="utf-8")
     found = find_official_tag_xml(film, tmp_path)
     assert found == sheet.resolve()
+
+
+def _palace_analysis_xml(*, actions: int = 40) -> str:
+    rows = [
+        '    <action id="a0000000-0000-0000-0000-000000000001" '
+        'actionName="(10) E. Eze / Goal di sinistro" startTime="00:50:27"/>',
+        '    <action id="a0000000-0000-0000-0000-000000000002" '
+        'actionName="(10) E. Eze / Tiri" startTime="00:50:20"/>',
+        '    <action id="a0000000-0000-0000-0000-000000000003" '
+        'actionName="(1) D. Henderson / Parate" startTime="00:20:00"/>',
+    ]
+    for index in range(actions):
+        rows.append(
+            f'    <action id="b{index:08d}-0000-0000-0000-000000000000" '
+            f'actionName="(10) E. Eze / Passaggi" startTime="00:{index:02d}:10"/>'
+        )
+    body = "\n".join(rows)
+    return (
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<analysis id="cccccccc-cccc-cccc-cccc-cccccccccccc" '
+        'title="Arsenal v Palace (1-1)">\n'
+        f"  <actions>\n{body}\n  </actions>\n</analysis>\n"
+    )
+
+
+def test_paired_home_away_analysis_is_official_two_team() -> None:
+    from pathlib import Path
+
+    from analytics.match_tags import collect_paired_analysis
+    from analytics.team_collect import is_one_sided_sheet, team_profiles_from_rundown
+    from app.ingest import collect_official_two_team
+
+    home = (Path(__file__).resolve().parent / "fixtures" / "arsenal_v_palace_1-1.xml").read_text(
+        encoding="utf-8"
+    )
+    away = _palace_analysis_xml()
+    rundown = collect_paired_analysis(home, away)
+    assert is_one_sided_sheet(rundown) is False
+    teams = team_profiles_from_rundown(rundown)
+    assert {row.player_name for row in teams} == {"Arsenal", "Palace"}
+    by_name = {row.player_name: row for row in teams}
+    assert by_name["Arsenal"].offensive.goals == 1
+    assert by_name["Palace"].offensive.goals == 1
+    assert by_name["Palace"].distribution.passes.total >= 40
+    assert by_name["Arsenal"].distribution.passes.total >= 300
+    names = {profile.player_name for profile in rundown.players}
+    assert "E. Eze" in names
+    assert "A. Harriman-Annous" in names
+    via_ingest = collect_official_two_team(home.encode("utf-8"), away.encode("utf-8"))
+    assert via_ingest.summary.goals == 2
+    assert is_one_sided_sheet(via_ingest) is False

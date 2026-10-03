@@ -17,7 +17,10 @@ from analytics.game_ingest import (
     parse_game_payload,
 )
 from analytics.sample_game import sample_game_payload
-from analytics.match_tags import collect_from_tag_xml, find_official_tag_xml
+from analytics.match_tags import (
+    collect_from_tag_xml,
+    collect_paired_analysis,
+)
 from analytics.video_auto_collect import (
     MAX_VIDEO_BYTES,
     VIDEO_SUFFIXES,
@@ -53,6 +56,34 @@ def ready_films() -> list[Path]:
     inbox.mkdir(parents=True, exist_ok=True)
     uploads.mkdir(parents=True, exist_ok=True)
     return list_ready_films(inbox, uploads)
+
+
+def actions_from_team(
+    events: Sequence[MatchEvent],
+    team_id: UUID,
+) -> tuple[PitchAction, ...]:
+    """Project every tagged event for one team onto the 2D pitch."""
+
+    actions: list[PitchAction] = []
+    for event in events:
+        if event.team_id != team_id:
+            continue
+        kind = event.event_type.value
+        if kind not in {"pass", "cross", "cutback", "assist", "shot", "goal"}:
+            continue
+        actions.append(
+            PitchAction(
+                event_type=kind,
+                x=event.x,
+                y=event.y,
+                end_x=event.end_x,
+                end_y=event.end_y,
+                successful=event.successful,
+                is_goal=event.is_goal or event.event_type is EventType.GOAL,
+                shot_outcome=event.shot_outcome.value if event.shot_outcome else None,
+            )
+        )
+    return tuple(actions)
 
 
 def actions_from_events(
@@ -102,10 +133,58 @@ def load_from_rundown(rundown: MatchRundown, player_id: UUID) -> ProfileLoad:
     )
 
 
+def load_from_team_profile(rundown: MatchRundown, profile: PlayerMatchProfile) -> ProfileLoad:
+    """Build the dashboard view from a collective Home / Away pillar row.
+
+    Team rows are folded from the tag sheet and are not looked up in
+    ``rundown.players`` (film collection invents individual names).
+    """
+
+    return ProfileLoad(
+        profile=profile,
+        directions=directions_from_distribution(profile.distribution),
+        source="collected",
+        message=(
+            f"Collective {profile.player_name} sheet from "
+            f"{rundown.summary.event_count} tagged events."
+        ),
+        api_online=True,
+        actions=actions_from_team(rundown.events, profile.team_id),
+    )
+
+
 def collect_sample_match() -> MatchRundown:
     """Collect the bundled sample game without an uploaded file."""
 
     return collect_game(sample_game_payload())
+
+
+def collect_official_two_team(
+    home_bytes: bytes,
+    away_bytes: bytes | None = None,
+) -> MatchRundown:
+    """Collect an official two-team sheet.
+
+    One file is a two-team export (JSON, MatchTags, or a two-club Wyscout
+    sheet). Two files are Home + Away one-team analysis XMLs that are
+    merged so both sides keep their real tags.
+    """
+
+    home_text = _decode_tag_bytes(home_bytes)
+    if away_bytes is None:
+        return collect_uploaded_bytes(home_bytes)
+    away_text = _decode_tag_bytes(away_bytes)
+    try:
+        return collect_paired_analysis(home_text, away_text)
+    except ValueError as exc:
+        raise ValueError(f"Official Home + Away sheets could not be merged ({exc}).") from exc
+
+
+def _decode_tag_bytes(raw_bytes: bytes) -> str:
+    try:
+        return raw_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise ValueError(f"Tag file is not valid UTF-8 ({exc}).") from exc
 
 
 def collect_uploaded_bytes(raw_bytes: bytes) -> MatchRundown:
@@ -134,7 +213,7 @@ def save_uploaded_film(
     *,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> Path:
-    """Write an uploaded film to disk in 8 MiB chunks (up to 3 GB)."""
+    """Write an uploaded film to disk in 8 MiB chunks (up to 5 GB)."""
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     total = int(getattr(uploaded, "size", 0) or 0)
@@ -165,10 +244,11 @@ def save_uploaded_film(
 
 
 def film_has_official_tags(path: str | Path) -> bool:
-    """Return whether collect can skip the hours-long film watch.
+    """Return whether ``path`` itself is an official tag sheet.
 
-    Official Wyscout / Nacsport XML (the file itself, or a sibling analysis
-    sheet) is the Impact-style source of truth and finishes in seconds.
+    Analyse Stats on a film always runs the automated both-team collect.
+    One-team Wyscout XML sitting next to the MP4 must not hijack that path —
+    analysts upload their own side's analysis separately under Official tags.
     """
 
     resolved = normalize_film_path(path)
@@ -176,9 +256,7 @@ def film_has_official_tags(path: str | Path) -> bool:
         resolved = resolved.resolve()
     except OSError:
         return False
-    if resolved.suffix.lower() == ".xml":
-        return resolved.is_file()
-    return find_official_tag_xml(resolved, film_inbox_dir(), film_upload_dir()) is not None
+    return resolved.suffix.lower() == ".xml" and resolved.is_file()
 
 
 def collect_from_film_path(
@@ -186,7 +264,13 @@ def collect_from_film_path(
     *,
     on_progress: ProgressFn | None = None,
 ) -> MatchRundown:
-    """Auto-tag a match film on disk and collect the four-pillar rundown."""
+    """Collect tags from a film (both teams) or from an explicit XML path.
+
+    Film paths always run computer-vision Analyse Stats for Home and Away.
+    Sibling one-team Wyscout sheets are ignored here so the automated
+    rundown is not replaced by a single-side analysis. Pass the XML path
+    itself (or use Official two-team tag sheet) for official tags.
+    """
 
     resolved = normalize_film_path(path)
     try:
@@ -204,12 +288,6 @@ def collect_from_film_path(
         raise ValueError("Choose a match film (mp4, mov, mkv, avi, m4v, webm) or a tag XML.")
     if not resolved.is_file():
         raise ValueError(f"Match film not found: {resolved}")
-    official = find_official_tag_xml(resolved, film_inbox_dir(), film_upload_dir())
-    if official is not None:
-        try:
-            return collect_from_tag_xml(official.read_text(encoding="utf-8-sig"))
-        except ValueError as exc:
-            raise ValueError(f"Tag XML could not be collected ({exc}).") from exc
     try:
         return collect_from_video(resolved, on_progress=on_progress)
     except VideoCollectError as exc:

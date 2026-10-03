@@ -1,7 +1,12 @@
 [server]
-maxUploadSize = 3072
-maxMessageSize = 3072
+address = "0.0.0.0"
+port = 8501
+maxUploadSize = 5120
+maxMessageSize = 5120
 headless = true
 enableXsrfProtection = false
 enableCORS = false
 enableWebsocketCompression = false
+
+[browser]
+gatherUsageStats = false

@@ -19,6 +19,7 @@ from analytics.video_auto_collect import (
     VIDEO_SUFFIXES,
     film_inbox_dir,
     safe_film_name,
+    video_limit_label,
 )
 from data_models.player_stats import StrictModel
 
@@ -33,27 +34,46 @@ def upload_page_html(api_origin: str = "") -> str:
     """
 
     origin = api_origin.rstrip("/")
+    limit = video_limit_label()
+    inbox = film_inbox_dir()
+    inbox.mkdir(parents=True, exist_ok=True)
+    inbox_path = str(inbox.resolve())
     return f"""<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>EnjoyStats · Upload match film</title>
   <style>
+    html {{ -webkit-text-size-adjust: 100%; }}
     body {{ font-family: ui-sans-serif, system-ui, sans-serif; background:#0f172a;
-           color:#e2e8f0; margin:0; padding:1.1rem; }}
+           color:#e2e8f0; margin:0;
+           padding: max(1.1rem, env(safe-area-inset-top))
+                    max(1.1rem, env(safe-area-inset-right))
+                    max(1.1rem, env(safe-area-inset-bottom))
+                    max(1.1rem, env(safe-area-inset-left)); }}
     .card {{ max-width: 640px; margin: 0 auto; background:#111827;
             border:1px solid #1e293b; border-radius:16px; padding:1.15rem 1.3rem; }}
     h1 {{ font-size:1.2rem; margin:0 0 .35rem; }}
     p {{ color:#94a3b8; font-size:.92rem; line-height:1.45; }}
-    input[type=file] {{ width:100%; margin:.75rem 0; color:#e2e8f0; }}
+    code {{ color:#93c5fd; word-break:break-all; font-size:.82rem; }}
+    input[type=file] {{ width:100%; margin:.75rem 0; color:#e2e8f0; min-height:44px;
+                        font-size:16px; }}
     button {{ background:#16a34a; color:#fff; border:0; border-radius:10px;
-             padding:.65rem 1rem; font-weight:700; cursor:pointer; }}
+             padding:.85rem 1rem; font-weight:700; cursor:pointer;
+             width:100%; min-height:48px; font-size:16px; }}
     button:disabled {{ opacity:.5; cursor:not-allowed; }}
+    @media (max-width: 640px) {{
+      .card {{ padding:.95rem 1rem; }}
+      h1 {{ font-size:1.1rem; }}
+    }}
+    @media (min-width: 641px) and (max-width: 1024px) {{
+      .card {{ max-width: 720px; }}
+    }}
     #bar {{ height:10px; background:#1e293b; border-radius:999px; overflow:hidden;
            margin-top:1rem; }}
     #bar > i {{ display:block; height:100%; width:0; background:#22c55e; }}
-    #msg {{ margin-top:.7rem; font-size:.9rem; min-height:1.2em; }}
+    #msg {{ margin-top:.7rem; font-size:.9rem; min-height:1.2em; white-space:pre-wrap; }}
     .ok {{ color:#86efac; }}
     .err {{ color:#fca5a5; }}
   </style>
@@ -61,9 +81,10 @@ def upload_page_html(api_origin: str = "") -> str:
 <body>
   <div class="card">
     <h1>Upload a match film</h1>
-    <p>Sends the file in 4&nbsp;MB chunks (up to 3&nbsp;GB). After it says
-    Saved, pick the film under <b>Films on this machine</b> and click
-    Collect stats from film.</p>
+    <p>Sends the file in 4&nbsp;MB chunks (up to {limit}), with automatic
+    retries if a chunk drops. After it says Saved, pick the film under
+    <b>Films on this machine</b> and click Analyse Stats.</p>
+    <p>Most reliable: copy the MP4 into<br><code>{inbox_path}</code></p>
     <input id="file" type="file" accept="video/*,.mp4,.mov,.mkv,.avi,.m4v,.webm">
     <button id="go" type="button">Save film to inbox</button>
     <div id="bar"><i id="fill"></i></div>
@@ -71,7 +92,9 @@ def upload_page_html(api_origin: str = "") -> str:
   </div>
   <script>
   const API = {origin!r};
+  const INBOX = {inbox_path!r};
   const CHUNK = 4 * 1024 * 1024;
+  const TRIES = 5;
   const fileInput = document.getElementById("file");
   const go = document.getElementById("go");
   const fill = document.getElementById("fill");
@@ -82,16 +105,53 @@ def upload_page_html(api_origin: str = "") -> str:
     if (n >= 1024) return (n / 1024).toFixed(0) + " KB";
     return n + " B";
   }}
+  function sleep(ms) {{ return new Promise((resolve) => setTimeout(resolve, ms)); }}
   function fail(text) {{
     go.disabled = false;
     msg.className = "err";
     msg.textContent = text;
   }}
+  async function postChunk(url, blob) {{
+    let lastDetail = "network error";
+    for (let attempt = 1; attempt <= TRIES; attempt++) {{
+      try {{
+        const res = await fetch(url, {{
+          method: "POST",
+          headers: {{
+            "Content-Type": "application/octet-stream",
+            "X-Filename": fileInput.files[0].name
+          }},
+          body: blob
+        }});
+        let body = {{}};
+        try {{ body = await res.json(); }} catch (err) {{ body = {{}}; }}
+        if (res.ok) return body;
+        lastDetail = body.message || body.detail
+          || ("HTTP " + res.status);
+        if (res.status >= 400 && res.status < 500 && res.status !== 408
+            && res.status !== 409 && res.status !== 429) {{
+          throw new Error(lastDetail);
+        }}
+      }} catch (err) {{
+        lastDetail = (err && err.message) ? err.message : String(err);
+        if (String(lastDetail).indexOf("HTTP 4") === 0
+            && String(lastDetail).indexOf("HTTP 408") < 0
+            && String(lastDetail).indexOf("HTTP 409") < 0
+            && String(lastDetail).indexOf("HTTP 429") < 0) {{
+          throw err;
+        }}
+      }}
+      msg.textContent = "Retry " + attempt + "/" + TRIES
+        + " after a drop… (" + lastDetail + ")";
+      await sleep(400 * attempt);
+    }}
+    throw new Error(lastDetail);
+  }}
   go.onclick = async () => {{
     const file = fileInput.files[0];
     if (!file) {{ fail("Choose a match film first."); return; }}
-    if (file.size > 3 * 1024 * 1024 * 1024) {{
-      fail("Film exceeds the 3 GB limit."); return;
+    if (file.size > {MAX_VIDEO_BYTES}) {{
+      fail("Film exceeds the {limit} limit."); return;
     }}
     go.disabled = true;
     msg.className = "";
@@ -110,32 +170,20 @@ def upload_page_html(api_origin: str = "") -> str:
           + "&offset=" + offset
           + "&total=" + file.size
           + "&final=" + (end >= file.size ? "true" : "false");
-        const res = await fetch(url, {{
-          method: "POST",
-          headers: {{
-            "Content-Type": "application/octet-stream",
-            "X-Filename": file.name
-          }},
-          body: blob
-        }});
-        let body = {{}};
-        try {{ body = await res.json(); }} catch (err) {{ body = {{}}; }}
-        if (!res.ok) {{
-          fail(body.message || body.detail || ("Upload failed (HTTP " + res.status + ")."));
-          return;
-        }}
+        const body = await postChunk(url, blob);
         if (body.filename) savedName = body.filename;
         offset = end;
         fill.style.width = (100 * offset / file.size).toFixed(1) + "%";
       }}
       msg.className = "ok";
       msg.textContent = "Saved " + savedName
-        + ". In the sidebar, pick it under Films on this machine, "
-        + "then click Collect stats from film.";
+        + ". On the main page, pick it under Films on this machine, "
+        + "then click Analyse Stats.";
       go.disabled = false;
     }} catch (err) {{
-      fail("The connection dropped while uploading. Copy the film "
-        + "into .local-run/inbox on this machine instead.");
+      fail("Upload kept dropping after retries.\\n"
+        + "Copy the MP4 into:\\n" + INBOX
+        + "\\nThen pick it under Films on this machine and Analyse Stats.");
     }}
   }};
   </script>
@@ -176,7 +224,7 @@ async def _read_limited_body(request: Request, *, already: int = 0) -> bytes:
         if written > MAX_VIDEO_BYTES:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail="Match film exceeds the 3 GB upload limit.",
+                detail=f"Match film exceeds the {video_limit_label()} upload limit.",
             )
         chunks.append(chunk)
     return b"".join(chunks)
@@ -207,7 +255,7 @@ async def upload_match_film_chunk(
     if total > MAX_VIDEO_BYTES:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="Match film exceeds the 3 GB upload limit.",
+            detail=f"Match film exceeds the {video_limit_label()} upload limit.",
         )
     chosen = x_filename or filename or "match.mp4"
     destination = _destination_for(chosen)
@@ -288,7 +336,7 @@ async def upload_match_film(
         if declared > MAX_VIDEO_BYTES:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail="Match film exceeds the 3 GB upload limit.",
+                detail=f"Match film exceeds the {video_limit_label()} upload limit.",
             )
 
     chosen = x_filename or filename or "match.mp4"

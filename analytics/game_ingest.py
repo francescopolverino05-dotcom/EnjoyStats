@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import Field, field_validator
@@ -18,6 +18,8 @@ from pydantic import Field, field_validator
 from analytics.stats_collector import PlayerStatsCollector, new_collector
 from data_models.events import EventType, MatchEvent
 from data_models.player_stats import PlayerMatchProfile, PossessionStats, StrictModel
+
+TagSource = Literal["film", "official", "sample"]
 
 
 class PlayerRosterEntry(StrictModel):
@@ -43,6 +45,9 @@ class GamePayload(StrictModel):
     match_id: UUID | None = None
     players: list[PlayerRosterEntry] = Field(default_factory=list)
     events: list[MatchEvent] = Field(min_length=1)
+    home_team_name: str = Field(default="Home", max_length=80)
+    away_team_name: str = Field(default="Away", max_length=80)
+    tag_source: TagSource = "official"
 
 
 class MatchSummary(StrictModel):
@@ -55,6 +60,9 @@ class MatchSummary(StrictModel):
     shots: int = Field(ge=0)
     passes: int = Field(ge=0)
     duration_minutes: float = Field(ge=0.0)
+    home_team_name: str = Field(default="Home", max_length=80)
+    away_team_name: str = Field(default="Away", max_length=80)
+    tag_source: TagSource = "official"
 
 
 class MatchRundown(StrictModel):
@@ -224,6 +232,9 @@ def collect_game(payload: GamePayload) -> MatchRundown:
         shots=sum(1 for event in ordered if event.event_type in shot_types),
         passes=sum(1 for event in ordered if event.event_type in pass_types),
         duration_minutes=round(match_minutes, 1),
+        home_team_name=payload.home_team_name or "Home",
+        away_team_name=payload.away_team_name or "Away",
+        tag_source=payload.tag_source,
     )
     return MatchRundown(
         match_id=match_id,

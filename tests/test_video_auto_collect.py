@@ -9,7 +9,9 @@ import pytest
 
 from analytics.video_auto_collect import (
     MAX_VIDEO_BYTES,
+    MAX_VIDEO_GIB,
     VIDEO_SUFFIXES,
+    video_limit_label,
     Track,
     VideoCollectError,
     collect_from_video,
@@ -51,9 +53,15 @@ def test_list_ready_films_ignores_empty_and_non_video(tmp_path: Path) -> None:
     assert found == {keep.resolve(), sheet.resolve()}
 
 
+def test_film_size_cap_is_five_gigabytes() -> None:
+    assert MAX_VIDEO_GIB == 5
+    assert MAX_VIDEO_BYTES == 5 * 1024 * 1024 * 1024
+    assert video_limit_label() == "5 GB"
+
+
 def test_write_film_chunks_rejects_oversize(tmp_path: Path) -> None:
     dest = tmp_path / "too-big.mp4"
-    with pytest.raises(VideoCollectError, match="3 GB"):
+    with pytest.raises(VideoCollectError, match="upload limit"):
         write_film_chunks(dest, [b"abc", b"def"], max_bytes=4)
 
 
@@ -273,14 +281,17 @@ def test_static_crowd_does_not_hide_a_full_possession_chain() -> None:
     )
 
 
-def test_collect_film_uses_sibling_wyscout_xml(tmp_path: Path) -> None:
+def test_analyse_stats_runs_film_even_with_sibling_wyscout(tmp_path: Path) -> None:
+    """One-team XML next to the film must not replace automated both-team collect."""
+
     clip = write_synthetic_match_clip(tmp_path / "Arsenal_v_Palace.avi", frames=24, fps=8)
     shutil.copy(
         Path(__file__).resolve().parent / "fixtures" / "arsenal_v_palace_1-1.xml",
         tmp_path / "Arsenal_v_Palace.xml",
     )
     rundown = collect_from_film_path(clip)
-    assert rundown.summary.goals == 2
-    assert rundown.summary.passes >= 300
+    assert rundown.summary.tag_source == "film"
+    # Sibling Wyscout sheet has 300+ passes and named players — film CV must win.
+    assert rundown.summary.passes < 100
     names = {profile.player_name for profile in rundown.players}
-    assert "A. Harriman-Annous" in names
+    assert "A. Harriman-Annous" not in names

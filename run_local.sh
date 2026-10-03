@@ -158,6 +158,17 @@ wait_for_http() {
     return 1
 }
 
+lan_address() {
+    _ip=""
+    if command -v hostname >/dev/null 2>&1; then
+        _ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
+    fi
+    if [ -z "$_ip" ] && command -v ip >/dev/null 2>&1; then
+        _ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i=="src") {print $(i+1); exit}}')"
+    fi
+    printf '%s' "${_ip:-}"
+}
+
 # ---------------------------------------------------------------------------
 # Cleanup on CTRL+C / TERM / EXIT
 # ---------------------------------------------------------------------------
@@ -372,11 +383,11 @@ fi
 
 log "Launching Streamlit visualization client on port ${UI_PORT}..."
 python -m streamlit run "$ROOT/app/dashboard.py" \
-    --server.address=127.0.0.1 \
+    --server.address=0.0.0.0 \
     --server.port="$UI_PORT" \
     --server.headless=true \
-    --server.maxUploadSize=3072 \
-    --server.maxMessageSize=3072 \
+    --server.maxUploadSize=5120 \
+    --server.maxMessageSize=5120 \
     --browser.gatherUsageStats=false \
     >"$UI_LOG" 2>&1 &
 UI_PID=$!
@@ -402,9 +413,15 @@ printf "%s" "$C_CYAN"
 printf "  ============================================================\n"
 printf "   %sEnjoyStats — local stack is ready%s\n" "$C_BOLD" "$C_RESET$C_CYAN"
 printf "  ============================================================\n"
+LAN_IP="$(lan_address)"
 printf "    API Docs : %shttp://localhost:8000/docs%s\n" "$C_BOLD$C_GREEN" "$C_RESET$C_CYAN"
 printf "    Film up  : %shttp://localhost:8000/upload-film%s\n" "$C_BOLD$C_GREEN" "$C_RESET$C_CYAN"
 printf "    UI       : %shttp://localhost:8501%s\n" "$C_BOLD$C_GREEN" "$C_RESET$C_CYAN"
+if [ -n "$LAN_IP" ]; then
+    printf "    Phone / tablet / other computer on this Wi-Fi:\n"
+    printf "               %shttp://%s:8501%s\n" "$C_BOLD$C_GREEN" "$LAN_IP" "$C_RESET$C_CYAN"
+    printf "    Film up    %shttp://%s:8000/upload-film%s\n" "$C_BOLD$C_GREEN" "$LAN_IP" "$C_RESET$C_CYAN"
+fi
 printf "    Inbox    : %s${LOG_DIR}/inbox%s\n" "$C_BOLD$C_GREEN" "$C_RESET$C_CYAN"
 printf "  ============================================================\n"
 printf "    Press CTRL+C to stop Uvicorn, Streamlit, and PostgreSQL\n"

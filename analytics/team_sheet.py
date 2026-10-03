@@ -31,6 +31,71 @@ HIGHLIGHT_TYPES = {
     EventType.CORNER,
 }
 
+# The actions an analyst would otherwise click one-by-one on a tagger.
+ANALYST_TAG_ORDER: tuple[EventType, ...] = (
+    EventType.GOAL,
+    EventType.SHOT,
+    EventType.PASS,
+    EventType.CROSS,
+    EventType.CUTBACK,
+    EventType.ASSIST,
+    EventType.CORNER,
+    EventType.THROW_IN,
+    EventType.FREE_KICK,
+    EventType.SAVE,
+    EventType.INTERCEPTION,
+    EventType.BALL_RECOVERY,
+    EventType.BALL_LOST,
+    EventType.AERIAL_DUEL,
+    EventType.GROUND_DUEL,
+    EventType.FOUL_COMMITTED,
+    EventType.FOUL_WON,
+    EventType.OFFSIDE,
+    EventType.BLOCK_SHOT,
+    EventType.BLOCK_CROSS,
+    EventType.BLOCK_PASS,
+    EventType.YELLOW_CARD,
+    EventType.RED_CARD,
+    EventType.GOAL_CONCEDED,
+)
+ANALYST_TAG_LABELS: dict[EventType, str] = {
+    EventType.GOAL: "Goals",
+    EventType.SHOT: "Shots",
+    EventType.PASS: "Passes",
+    EventType.CROSS: "Crosses",
+    EventType.CUTBACK: "Cutbacks",
+    EventType.ASSIST: "Assists",
+    EventType.CORNER: "Corners",
+    EventType.THROW_IN: "Throw-ins",
+    EventType.FREE_KICK: "Free kicks",
+    EventType.SAVE: "Saves",
+    EventType.INTERCEPTION: "Interceptions",
+    EventType.BALL_RECOVERY: "Recoveries",
+    EventType.BALL_LOST: "Balls lost",
+    EventType.AERIAL_DUEL: "Aerial duels",
+    EventType.GROUND_DUEL: "Ground duels",
+    EventType.FOUL_COMMITTED: "Fouls",
+    EventType.FOUL_WON: "Fouls won",
+    EventType.OFFSIDE: "Offsides",
+    EventType.BLOCK_SHOT: "Blocked shots",
+    EventType.BLOCK_CROSS: "Blocked crosses",
+    EventType.BLOCK_PASS: "Blocked passes",
+    EventType.YELLOW_CARD: "Yellow cards",
+    EventType.RED_CARD: "Red cards",
+    EventType.GOAL_CONCEDED: "Goals conceded",
+}
+CORE_ANALYST_TAGS: frozenset[EventType] = frozenset(
+    {
+        EventType.GOAL,
+        EventType.SHOT,
+        EventType.PASS,
+        EventType.CORNER,
+        EventType.THROW_IN,
+        EventType.FREE_KICK,
+        EventType.SAVE,
+    }
+)
+
 
 class TeamBasicStats(StrictModel):
     """One team's 15-stat Impact-style headline board."""
@@ -66,6 +131,8 @@ class HighlightMoment(StrictModel):
 
 
 def _team_name(rundown: MatchRundown, team_id: UUID, *, fallback: str) -> str:
+    if fallback and fallback not in {"Home", "Away"}:
+        return fallback
     members = [row for row in rundown.players if row.team_id == team_id]
     counts: dict[str, int] = defaultdict(int)
     for member in members:
@@ -101,7 +168,10 @@ def team_sheets_from_rundown(rundown: MatchRundown) -> list[TeamBasicStats]:
             seen.add(profile.team_id)
             team_ids.append(profile.team_id)
     team_ids.sort(key=lambda team_id: -sum(1 for row in rundown.players if row.team_id == team_id))
-    labels = ("Home", "Away")
+    labels = (
+        rundown.summary.home_team_name or "Home",
+        rundown.summary.away_team_name or "Away",
+    )
     total = max(len(events), 1)
     sheets: list[TeamBasicStats] = []
     for index, team_id in enumerate(team_ids):
@@ -109,9 +179,7 @@ def team_sheets_from_rundown(rundown: MatchRundown) -> list[TeamBasicStats]:
         passes = [event for event in owned if event.event_type in PASS_TYPES]
         shots = [event for event in owned if event.event_type in SHOT_TYPES]
         on_target = [
-            event
-            for event in shots
-            if event.shot_outcome is ShotOutcome.ON_TARGET or event.is_goal
+            event for event in shots if event.shot_outcome is ShotOutcome.ON_TARGET or event.is_goal
         ]
         successful_passes = sum(1 for event in passes if event.successful)
         sheets.append(
@@ -120,7 +188,9 @@ def team_sheets_from_rundown(rundown: MatchRundown) -> list[TeamBasicStats]:
                 team_name=_team_name(
                     rundown, team_id, fallback=labels[index] if index < 2 else f"Team {index + 1}"
                 ),
-                goals=sum(1 for event in owned if event.is_goal or event.event_type is EventType.GOAL),
+                goals=sum(
+                    1 for event in owned if event.is_goal or event.event_type is EventType.GOAL
+                ),
                 assists=sum(1 for event in owned if event.event_type is EventType.ASSIST),
                 possession_pct=round(100.0 * len(owned) / total, 1),
                 total_shots=len(shots),
@@ -154,7 +224,11 @@ def highlight_moments_from_rundown(rundown: MatchRundown) -> list[HighlightMomen
         moments.append(
             HighlightMoment(
                 clock=f"{event.period}' {event.minute:02d}:{event.second:02d}",
-                kind="goal" if event.is_goal or event.event_type is EventType.GOAL else event.event_type.value,
+                kind=(
+                    "goal"
+                    if event.is_goal or event.event_type is EventType.GOAL
+                    else event.event_type.value
+                ),
                 player=names.get(event.player_id, "—") if event.player_id else "—",
                 team_name=team_names.get(event.team_id, "Team"),
                 start_ms=start_ms,
@@ -162,6 +236,89 @@ def highlight_moments_from_rundown(rundown: MatchRundown) -> list[HighlightMomen
             )
         )
     return moments
+
+
+def tag_inventory_rows(
+    rundown: MatchRundown,
+    *,
+    analysed_team_id: UUID | None = None,
+    analysed_label: str | None = None,
+    opposition_label: str | None = None,
+    one_sided: bool = False,
+) -> list[dict[str, object]]:
+    """Count every tag type an analyst would otherwise click by hand.
+
+    Core actions (goals, shots, passes, corners, throw-ins, free kicks,
+    saves) always appear so a zero is visible. Other types appear only
+    when the sheet actually has them.
+
+    When ``one_sided`` is true, columns are the analysed side versus the
+    thin opposition tags on this export — not a fake full Home/Away board.
+    """
+
+    sheets = team_sheets_from_rundown(rundown)
+    if one_sided and analysed_team_id is not None:
+        primary_id = analysed_team_id
+        secondary_id = next(
+            (sheet.team_id for sheet in sheets if sheet.team_id != analysed_team_id),
+            None,
+        )
+        primary_name = analysed_label or next(
+            (sheet.team_name for sheet in sheets if sheet.team_id == analysed_team_id),
+            rundown.summary.home_team_name or "Analysed",
+        )
+        secondary_base = opposition_label or next(
+            (sheet.team_name for sheet in sheets if sheet.team_id == secondary_id),
+            rundown.summary.away_team_name or "Opposition",
+        )
+        secondary_name = f"{secondary_base} (this sheet only)"
+    else:
+        primary_id = sheets[0].team_id if sheets else None
+        secondary_id = sheets[1].team_id if len(sheets) > 1 else None
+        primary_name = sheets[0].team_name if sheets else (rundown.summary.home_team_name or "Home")
+        secondary_name = (
+            sheets[1].team_name if len(sheets) > 1 else (rundown.summary.away_team_name or "Away")
+        )
+    totals: dict[EventType, int] = defaultdict(int)
+    primary_counts: dict[EventType, int] = defaultdict(int)
+    secondary_counts: dict[EventType, int] = defaultdict(int)
+    for event in rundown.events:
+        kind = event.event_type
+        totals[kind] += 1
+        if primary_id is not None and event.team_id == primary_id:
+            primary_counts[kind] += 1
+        elif secondary_id is not None and event.team_id == secondary_id:
+            secondary_counts[kind] += 1
+
+    rows: list[dict[str, object]] = []
+    listed: set[EventType] = set()
+    for kind in ANALYST_TAG_ORDER:
+        listed.add(kind)
+        total = totals[kind]
+        if total == 0 and kind not in CORE_ANALYST_TAGS:
+            continue
+        row: dict[str, object] = {
+            "Tag": ANALYST_TAG_LABELS[kind],
+            "Total": total,
+            primary_name: primary_counts[kind],
+        }
+        if not one_sided or secondary_id is not None:
+            row[secondary_name] = secondary_counts[kind]
+        rows.append(row)
+    leftovers = sorted(
+        (kind for kind in totals if kind not in listed and totals[kind] > 0),
+        key=lambda kind: kind.value,
+    )
+    for kind in leftovers:
+        row = {
+            "Tag": ANALYST_TAG_LABELS.get(kind, kind.value.replace("_", " ").title()),
+            "Total": totals[kind],
+            primary_name: primary_counts[kind],
+        }
+        if not one_sided or secondary_id is not None:
+            row[secondary_name] = secondary_counts[kind]
+        rows.append(row)
+    return rows
 
 
 def team_sheet_rows(sheets: Sequence[TeamBasicStats]) -> list[dict[str, object]]:
