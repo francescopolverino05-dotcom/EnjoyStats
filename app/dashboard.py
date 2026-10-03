@@ -1133,18 +1133,25 @@ RUNDOWN_KEY = "collected_rundown"
 PERSIST_KEY = "ingest_persist_message"
 JOB_KEY = "collect_job_path"
 NAV_KEY = "app_nav"
+PENDING_NAV_KEY = "pending_app_nav"
+
+
+def _request_nav(section: str) -> None:
+    """Queue a tab change; applied before the nav radio is created next run."""
+
+    st.session_state[PENDING_NAV_KEY] = section
 
 
 def _go_home() -> None:
-    st.session_state[NAV_KEY] = "Home"
+    _request_nav("Home")
 
 
 def _go_match() -> None:
-    st.session_state[NAV_KEY] = "Match rundown"
+    _request_nav("Match rundown")
 
 
 def _go_history() -> None:
-    st.session_state[NAV_KEY] = "History"
+    _request_nav("History")
 
 
 def _remember_collection(rundown: MatchRundown) -> str:
@@ -1188,6 +1195,9 @@ def render_app_nav(*, has_match: bool, analysing: bool) -> str:
         options.insert(1, "Match rundown")
     if analysing:
         options.append("Analysing")
+    pending = st.session_state.pop(PENDING_NAV_KEY, None)
+    if isinstance(pending, str) and pending in options:
+        st.session_state[NAV_KEY] = pending
     current = str(st.session_state.get(NAV_KEY, "") or "")
     if current not in options:
         if analysing and not has_match:
@@ -1230,7 +1240,12 @@ def _hydrate_collect_job() -> None:
                 f"{status.get('label') or 'Background collect ready.'} · {history_msg}"
             )
             if st.session_state.get(NAV_KEY) not in {"Home", "Match rundown", "History"}:
-                _go_match()
+                if st.session_state.get(PENDING_NAV_KEY) not in {
+                    "Home",
+                    "Match rundown",
+                    "History",
+                }:
+                    _go_match()
         return
     if status.get("state") == "error":
         st.session_state[PERSIST_KEY] = str(status.get("error") or "Background collect failed.")
@@ -1523,7 +1538,7 @@ def render_analyse_landing(base_url: str) -> None:
                 "Walk away and refresh later. "
                 f"Status: {status_path.name}"
             )
-            st.session_state[NAV_KEY] = "Analysing"
+            _request_nav("Analysing")
             finish()
             st.rerun()
     except VideoCollectError as exc:
