@@ -237,9 +237,7 @@ def test_collected_rundown_shows_match_tags(tmp_path, monkeypatch) -> None:
     assert any("PDF" in label for label in downloads)
     # Home tab returns to Analyse Stats without clearing the match.
     nav = next(
-        radio
-        for radio in at.radio
-        if set(radio.options) >= {"Home", "Match rundown", "History"}
+        radio for radio in at.radio if set(radio.options) >= {"Home", "Match rundown", "History"}
     )
     assert nav.value == "Match rundown"
     nav.set_value("Home").run()
