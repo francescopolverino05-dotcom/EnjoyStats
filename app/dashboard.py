@@ -1321,83 +1321,32 @@ def render_film_uploader_panel(base_url: str) -> None:
     components.html(upload_page_html(base_url.rstrip("/")), height=480, scrolling=False)
 
 
-def render_official_tag_section(base_url: str) -> None:
-    """Upload a two-team export, or merge Home + Away one-team analyses."""
-
-    st.subheader("Official tag sheet (optional)")
-    st.caption(
-        "Use this when you already have Wyscout / Nacsport XML for the side "
-        "you analyse. A single one-team file is that team's perspective "
-        "(offensive = analysed team; defensive = their defending) and can "
-        "undercount the opposition score. You do not need the other team's "
-        "XML for day-to-day work — run Analyse Stats on the film for an "
-        "automated both-team rundown. Pair both analysis files only when "
-        "you want an official two-team scoresheet."
-    )
-    two_team = st.file_uploader(
-        "One two-team export (JSON, MatchTags, or Wyscout XML)",
-        type=["json", "xml"],
-        key="official_two_team",
-    )
-    home_xml = st.file_uploader(
-        "Or Home one-team analysis XML",
-        type=["xml"],
-        key="official_home_xml",
-    )
-    away_xml = st.file_uploader(
-        "And Away one-team analysis XML",
-        type=["xml"],
-        key="official_away_xml",
-    )
-    collect = st.button("Collect official tags", use_container_width=True)
-    if not collect:
-        return
-    try:
-        if two_team is not None:
-            rundown = collect_official_two_team(two_team.getvalue())
-        elif home_xml is not None and away_xml is not None:
-            rundown = collect_official_two_team(home_xml.getvalue(), away_xml.getvalue())
-        elif home_xml is not None:
-            rundown = collect_official_two_team(home_xml.getvalue())
-        else:
-            raise ValueError("Upload one two-team export, or both Home and Away analysis XMLs.")
-        st.session_state[RUNDOWN_KEY] = rundown_to_json(rundown)
-        st.session_state.pop("analyse_cleared", None)
-        _persisted, message = asyncio.run(persist_rundown(base_url, rundown))
-        st.session_state[PERSIST_KEY] = message
-        _go_match()
-        st.rerun()
-    except ValueError as exc:
-        st.error(str(exc))
-
-
 def render_analyse_landing(base_url: str) -> None:
-    """Impact concept: official tags, or register a film and Analyse Stats."""
+    """Simple Analyse home: film, home XML, optional away XML, sample draft."""
 
     inbox_dir = film_inbox_dir()
     upload_dir = film_upload_dir()
     st.title("EnjoyStats")
     st.caption(
-        "The job is to cut the hours an analyst spends tagging. "
-        "Analyse Stats watches the match film and auto-collects shots, "
-        "passes, corners, recoveries, and the rest for both teams — you "
-        "do not need the opposition's XML. Optional: drop your one-team "
-        "analysis XML below for that side's official perspective."
+        "Analyse Stats from a match film, or collect OnceSport XML for the "
+        "team you analyse. After collect you get collective team boards and "
+        "individual player sheets."
     )
-    if st.button("Load sample match", use_container_width=True, key="landing_sample"):
+    if st.button(
+        "Load sample · Napoleon Bot vs 80s Jeans",
+        use_container_width=True,
+        key="landing_sample",
+    ):
         sample_error = _load_sample_match(base_url)
         if sample_error:
             st.error(sample_error)
         else:
             st.rerun()
+
     st.subheader("Analyse Stats")
     st.caption(
-        f"Upload the match film (up to {video_limit_label()}). "
-        "Analyse Stats runs the match down automatically and tags both "
-        "teams so you are not limited to one-sided Wyscout XML. Walk away "
-        "— a full 90 minutes can take hours. Come back to a Home / Away "
-        "tag inventory plus collective pillars. This saves tagging time; "
-        "it is not a Wyscout scoresheet."
+        f"Upload the match MP4 (up to {video_limit_label()}). "
+        "Film is a both-team draft — not an official OnceSport scoresheet."
     )
     link = st.text_input(
         "Register a link",
@@ -1417,26 +1366,58 @@ def render_analyse_landing(base_url: str) -> None:
     for path in on_disk:
         disk_labels[f"{path.name}  ·  {_format_bytes(path.stat().st_size)}"] = path
     inbox_choice = st.selectbox(
-        "Films and tag sheets on this machine",
+        "Films on this machine",
         options=list(disk_labels.keys()),
     )
     inbox_path = disk_labels[inbox_choice]
     film = st.file_uploader(
-        "Or upload from this phone, tablet, or computer",
-        type=["mp4", "mov", "mkv", "avi", "m4v", "webm", "xml"],
-        help=(
-            "Clips and XML work here. For a full match (up to "
-            f"{video_limit_label()}) use the chunked uploader below."
-        ),
+        "Upload match MP4",
+        type=["mp4", "mov", "mkv", "avi", "m4v", "webm"],
+        help=f"Full match film up to {video_limit_label()}.",
+        key="analyse_film_upload",
     )
     with st.expander(
-        "Large film uploader (any phone, tablet, or computer)",
+        "Large film uploader (chunked, up to 5 GB)",
         expanded=vimeo_link,
     ):
         render_film_uploader_panel(base_url)
-    analyse = st.button("Analyse Stats", type="primary", use_container_width=True)
-    render_official_tag_section(base_url)
 
+    st.subheader("OnceSport XML")
+    st.caption(
+        "Your team's analysis XML is enough for collective + individual "
+        "sheets on that side. Away XML is optional for a full two-team board."
+    )
+    home_xml = st.file_uploader(
+        "Home / analysed-team XML",
+        type=["xml"],
+        key="official_home_xml",
+    )
+    away_xml = st.file_uploader(
+        "Away-team XML (optional)",
+        type=["xml"],
+        key="official_away_xml",
+    )
+    collect_xml = st.button("Collect XML tags", use_container_width=True, key="collect_xml")
+    if collect_xml:
+        try:
+            if home_xml is not None and away_xml is not None:
+                rundown = collect_official_two_team(home_xml.getvalue(), away_xml.getvalue())
+            elif home_xml is not None:
+                rundown = collect_official_two_team(home_xml.getvalue())
+            elif away_xml is not None:
+                raise ValueError("Upload the home / analysed-team XML first (away is optional).")
+            else:
+                raise ValueError("Upload a home / analysed-team OnceSport XML.")
+            st.session_state[RUNDOWN_KEY] = rundown_to_json(rundown)
+            st.session_state.pop("analyse_cleared", None)
+            _persisted, message = asyncio.run(persist_rundown(base_url, rundown))
+            st.session_state[PERSIST_KEY] = message
+            _go_match()
+            st.rerun()
+        except ValueError as exc:
+            st.error(str(exc))
+
+    analyse = st.button("Analyse Stats", type="primary", use_container_width=True)
     if not analyse:
         return
     try:
@@ -1459,7 +1440,7 @@ def render_analyse_landing(base_url: str) -> None:
             )
         else:
             raise ValueError(
-                "Register a link, pick a film on this machine, or upload a file first."
+                "Register a link, pick a film on this machine, or upload an MP4 first."
             )
         update, finish = render_upload_loader()
         update("Preparing the match…", 0.04)
@@ -1504,58 +1485,94 @@ def render_analyse_landing(base_url: str) -> None:
         st.error(f"{exc}. {UPLOAD_DISCONNECT_HINT}")
 
 
-def render_collective_rundown(rundown: MatchRundown) -> None:
-    """Spiideo pillars from the match tags — one analysed side when the sheet is one-team."""
+def _individual_player_rows(rundown: MatchRundown) -> list[dict[str, object]]:
+    """Compact roster table: minutes, goals, assists per named player."""
+
+    sheets = {sheet.team_id: sheet.team_name for sheet in team_sheets_from_rundown(rundown)}
+    rows: list[dict[str, object]] = []
+    for profile in named_player_profiles(rundown):
+        rows.append(
+            {
+                "Team": sheets.get(profile.team_id, rundown.summary.home_team_name),
+                "Player": profile.player_name or "Player",
+                "#": profile.jersey_number or "—",
+                "Pos": profile.position or "—",
+                "Minutes": round(profile.offensive.minutes, 1),
+                "Goals": profile.offensive.goals,
+                "Assists": profile.offensive.assists,
+                "Shots": profile.offensive.total_shots,
+                "Passes": profile.distribution.passes.total,
+            }
+        )
+    rows.sort(key=lambda row: (str(row["Team"]), row["#"] == "—", row["#"] or 99))
+    return rows
+
+
+def render_collective_section(rundown: MatchRundown) -> None:
+    """Team-level Impact / Spiideo boards."""
 
     perspective = analysis_perspective(rundown)
-    render_match_summary(rundown)
     tag_source = getattr(rundown.summary, "tag_source", "official") or "official"
     if perspective.one_sided and tag_source != "film":
         st.info(
             f"This XML is {perspective.analysed_team_name}'s analysis only. "
-            "For automated stats on both teams, upload the match film and click "
-            "Analyse Stats — you do not need the other side's XML. "
-            f"Optional: pair {perspective.opposition_team_name}'s analysis under "
-            "Official two-team tag sheet for an official scoresheet."
+            "Away XML is optional if you want a full two-team board."
         )
         profile = analysed_team_profile(rundown)
         if profile is not None:
             st.subheader(f"{perspective.analysed_team_name} collective stats")
             st.caption(
-                f"One sheet, one perspective. Offensive / construction = "
-                f"{perspective.analysed_team_name}. Defensive = "
-                f"{perspective.analysed_team_name} defending "
-                f"(including goals conceded against {perspective.opposition_team_name}). "
-                "Distribution and possession are from the same analysed-side tags."
+                "Offensive = analysed team. Defensive = analysed team defending. "
+                "Same four Spiideo pillars as the individual sheets."
             )
-            load = load_from_team_profile(rundown, profile)
-            render_dashboard(load, collective=True)
-    else:
-        teams = team_profiles_from_rundown(rundown)
-        if teams:
-            st.subheader("Collective team stats")
-            st.caption(
-                "Every tagged event for a side is folded into the same four "
-                "pillars Spiideo publishes (offensive / construction, defending, "
-                "distribution, possession). Substitutions do not split the sheet — "
-                "there are still two teams for the full match."
-            )
-            tabs = st.tabs([profile.player_name for profile in teams])
-            for tab, profile in zip(tabs, teams, strict=True):
-                with tab:
-                    load = load_from_team_profile(rundown, profile)
-                    render_dashboard(load, collective=True)
+            render_dashboard(load_from_team_profile(rundown, profile), collective=True)
+        return
+    teams = team_profiles_from_rundown(rundown)
+    if not teams:
+        return
+    st.subheader("Collective team stats")
+    st.caption(
+        "Every tagged event for a side folded into offensive, defensive, "
+        "distribution, and possession."
+    )
+    tabs = st.tabs([profile.player_name for profile in teams])
+    for tab, profile in zip(tabs, teams, strict=True):
+        with tab:
+            render_dashboard(load_from_team_profile(rundown, profile), collective=True)
+
+
+def render_individual_section(rundown: MatchRundown) -> None:
+    """Player list + full individual pillar sheet."""
+
     named = named_player_profiles(rundown)
-    if named:
-        with st.expander("Named player sheets (official tags)", expanded=False):
-            st.caption(
-                "Individual rows from a Wyscout / Nacsport sheet. "
-                "Film-only collects hide invented Home CM 4 identities."
-            )
-            player_map = {profile_label(profile): profile.player_id for profile in named}
-            player_label = st.selectbox("Named player", options=list(player_map.keys()))
-            load = load_from_rundown(rundown, player_map[player_label])
-            render_dashboard(load, collective=False, show_chrome=False)
+    if not named:
+        st.info(
+            "No named individual sheets on this collect. "
+            "Film drafts hide invented Home CM 4 rows — upload OnceSport XML "
+            "for real player pages."
+        )
+        return
+    st.subheader("Individual players")
+    st.caption(
+        "Everyone who was tagged in the match. Minutes are match-clock "
+        "minutes from tags (not true on/off unless you tag substitutions)."
+    )
+    st.dataframe(_individual_player_rows(rundown), hide_index=True, width="stretch")
+    player_map = {profile_label(profile): profile.player_id for profile in named}
+    player_label = st.selectbox("Open player sheet", options=list(player_map.keys()))
+    load = load_from_rundown(rundown, player_map[player_label])
+    render_dashboard(load, collective=False, show_chrome=False)
+
+
+def render_collective_rundown(rundown: MatchRundown) -> None:
+    """Match page: summary, then Collective / Individual views."""
+
+    render_match_summary(rundown)
+    collective_tab, individual_tab = st.tabs(["Collective", "Individual"])
+    with collective_tab:
+        render_collective_section(rundown)
+    with individual_tab:
+        render_individual_section(rundown)
 
 
 def render_api_demo(base_url: str, fetch: FetchFn) -> None:

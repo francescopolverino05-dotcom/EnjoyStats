@@ -123,22 +123,21 @@ def test_dashboard_renders_analyse_landing(tmp_path, monkeypatch) -> None:
     sidebar_headers = [str(element.value) for element in at.sidebar.header]
     assert any("EnjoyStats" in header for header in sidebar_headers)
     select_labels = [str(element.label) for element in at.selectbox]
-    assert any("Films and tag sheets on this machine" in label for label in select_labels)
+    assert any("Films on this machine" in label for label in select_labels)
     assert not any("Cookies from browser" in label for label in select_labels)
     input_labels = [str(element.label) for element in at.text_input]
     assert any("Register a link" in label for label in input_labels)
     captions = [str(element.value) for element in at.caption]
-    assert any("shot" in caption.lower() and "pass" in caption.lower() for caption in captions)
-    assert any("hand" in caption.lower() or "analyst" in caption.lower() for caption in captions)
+    assert any("oncesport" in caption.lower() or "xml" in caption.lower() for caption in captions)
     assert any(
-        "inbox" in caption.lower() or "mp4" in caption.lower() for caption in captions
-    ) or any("phone, tablet, or computer" in str(element.label).lower() for element in at.expander)
+        "mp4" in caption.lower() or "film" in caption.lower() for caption in captions
+    ) or any("5 gb" in str(element.label).lower() for element in at.expander)
     buttons = [str(element.label) for element in at.button]
     assert any("Analyse Stats" in label for label in buttons)
-    assert any("Load sample match" in label for label in buttons)
+    assert any("Napoleon Bot" in label for label in buttons)
     subheaders = [str(element.value) for element in at.subheader]
     assert any("Analyse Stats" in header for header in subheaders)
-    assert any("Official tag sheet" in header for header in subheaders)
+    assert any("OnceSport XML" in header for header in subheaders)
     analyse = next(button for button in at.button if "Analyse Stats" in str(button.label))
     analyse.click().run()
     assert not at.exception
@@ -180,12 +179,17 @@ def test_landing_sample_opens_tag_inventory(tmp_path, monkeypatch) -> None:
     at = AppTest.from_file(str(script), default_timeout=20)
     at.run()
     assert not at.exception
-    sample = next(button for button in at.button if "Load sample match" in str(button.label))
+    sample = next(button for button in at.button if "Napoleon Bot" in str(button.label))
     sample.click().run()
     assert not at.exception
     subheaders = [str(element.value) for element in at.subheader]
     assert "Match rundown" in subheaders
     assert "What you no longer have to tag" in subheaders
+    assert "Collective team stats" in subheaders or any(
+        "collective" in header.lower() for header in subheaders
+    )
+    body_bits = " ".join(subheaders)
+    assert "Collective" in body_bits or any("Napoleon Bot" in header for header in subheaders)
     downloads = [str(button.label) for button in at.download_button]
     assert any("CSV" in label for label in downloads)
     assert any("XML" in label for label in downloads)
@@ -211,9 +215,12 @@ def test_collected_rundown_shows_match_tags(tmp_path, monkeypatch) -> None:
     assert any(
         "team statistics" in header.lower() or "Team statistics" in header for header in subheaders
     )
-    assert any("collective stats" in header.lower() for header in subheaders)
+    assert any("collective" in header.lower() for header in subheaders)
     assert "Offensive" in subheaders
     assert "Defensive" in subheaders
+    assert any(
+        "Individual" in header or "Individual players" in header for header in subheaders
+    ) or any("Open player sheet" in str(box.label) for box in at.selectbox)
     # Home tab returns to Analyse Stats without clearing the match.
     nav = next(radio for radio in at.radio if set(radio.options) >= {"Home", "Match rundown"})
     assert nav.value == "Match rundown"

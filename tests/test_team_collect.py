@@ -18,20 +18,27 @@ from app.ingest import actions_from_team, load_from_team_profile
 from data_models.player_stats import PlayerMatchProfile
 
 
-def test_sample_match_folds_into_one_team_profile() -> None:
+def test_sample_match_folds_into_two_team_profiles() -> None:
+    from analytics.sample_game import AWAY_TEAM_ID, HOME_NAME, AWAY_NAME
+
     rundown = collect_game(sample_game_payload())
     teams = team_profiles_from_rundown(rundown)
-    assert len(teams) == 1
-    team = teams[0]
-    assert team.player_id == TEAM_ID
-    assert team.position == "TEAM"
-    assert team.offensive.goals == rundown.summary.goals
-    assert team.distribution.passes.total >= rundown.summary.passes
-    load = load_from_team_profile(rundown, team)
+    assert len(teams) == 2
+    by_name = {team.player_name: team for team in teams}
+    assert set(by_name) == {HOME_NAME, AWAY_NAME}
+    home = by_name[HOME_NAME]
+    assert home.player_id == TEAM_ID
+    assert home.position == "TEAM"
+    assert home.offensive.goals == 3
+    assert by_name[AWAY_NAME].offensive.goals == 2
+    assert sum(team.offensive.goals for team in teams) == rundown.summary.goals
+    assert sum(team.distribution.passes.total for team in teams) >= rundown.summary.passes
+    load = load_from_team_profile(rundown, home)
     assert load.source == "collected"
     assert load.profile.player_id == TEAM_ID
     assert any(action.is_goal for action in load.actions)
     assert actions_from_team(rundown.events, TEAM_ID)
+    assert actions_from_team(rundown.events, AWAY_TEAM_ID)
 
 
 def test_arsenal_palace_xml_has_two_collective_sheets() -> None:
