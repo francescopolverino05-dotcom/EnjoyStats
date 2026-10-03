@@ -149,7 +149,7 @@ def create_app(
         """Open and close the asyncpg aggregator with the application."""
 
         injected = aggregator is not None
-        store: PlayerProfileStore
+        store: PlayerProfileStore | None
         if aggregator is not None:
             store = aggregator
         else:
@@ -157,10 +157,14 @@ def create_app(
             try:
                 await engine.connect()
                 await engine.apply_schema()
+                store = engine
             except StorageError:
-                LOGGER.exception("PostgreSQL aggregator failed to start.")
-                raise
-            store = engine
+                # Film upload and the Streamlit portal still work without Postgres.
+                LOGGER.warning(
+                    "PostgreSQL unavailable — serving film upload only "
+                    "(player-profile routes return 503 until the DB is up)."
+                )
+                store = None
         app.state.aggregator = store
         app.state.settings = resolved_settings
         try:
@@ -313,9 +317,12 @@ def _register_routes(application: FastAPI) -> None:
         summary="Liveness and database readiness",
         responses={503: {"description": "Database aggregator is unavailable."}},
     )
-    async def health(store: PlayerProfileStore = Depends(get_aggregator)) -> dict[str, str]:
-        """Return ``ok`` once the aggregator can answer a trivial query."""
+    async def health(request: Request) -> dict[str, str]:
+        """Return ``ok`` when the API is up; note film-only mode without Postgres."""
 
+        store = getattr(request.app.state, "aggregator", None)
+        if store is None:
+            return {"status": "ok", "mode": "film_upload_only"}
         ping = getattr(store, "ping", None)
         if callable(ping):
             result = ping()

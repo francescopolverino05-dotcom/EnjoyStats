@@ -15,7 +15,7 @@ from analytics.game_ingest import (
     rundown_from_mapping,
     rundown_to_json,
 )
-from analytics.sample_game import PLAYMAKER_ID, STRIKER_ID, sample_game_payload
+from analytics.sample_game import DEFENDER_ID, PLAYMAKER_ID, STRIKER_ID, sample_game_payload
 from api.main import create_app
 from app.ingest import actions_from_events, collect_sample_match, load_from_rundown
 from data_models.events import EventType
@@ -28,35 +28,43 @@ def test_parse_event_array_and_collect_profiles() -> None:
     parsed = parse_game_payload(raw)
     rundown = collect_game(parsed)
     assert rundown.summary.event_count == len(payload.events)
-    assert rundown.summary.player_count == 3
-    assert rundown.summary.goals == 1
-    assert rundown.summary.shots >= 1
+    assert rundown.summary.player_count >= 20
+    assert rundown.summary.goals == 5
+    assert rundown.summary.shots >= 5
     names = {profile.player_id: profile for profile in rundown.players}
     playmaker = names[PLAYMAKER_ID]
     striker = names[STRIKER_ID]
     assert playmaker.distribution.passes.total >= 3
-    assert playmaker.offensive.assists == 1
+    assert playmaker.offensive.assists == 2
     assert striker.offensive.goals == 1
     assert striker.offensive.shots_on_target >= 1
-    assert striker.defensive.ground_duels.success == 1
+    assert rundown.summary.home_team_name in {"Home", "Napoleon Bot"}
 
 
 def test_sample_match_rundown_covers_four_pillars() -> None:
     rundown = collect_sample_match()
     assert rundown.summary.duration_minutes > 40
+    assert rundown.summary.home_team_name == "Napoleon Bot"
+    assert rundown.summary.away_team_name == "80s Jeans"
     by_id = {profile.player_id: profile for profile in rundown.players}
     playmaker = by_id[PLAYMAKER_ID]
     striker = by_id[STRIKER_ID]
     assert playmaker.player_name == "Alex Playmaker"
-    assert playmaker.offensive.throw_ins == 1
-    assert playmaker.distribution.crosses.total == 1
+    assert playmaker.offensive.corners == 1
+    assert playmaker.offensive.assists == 2
     assert playmaker.possession.percentage > 0
     assert striker.offensive.offsides == 1
-    assert striker.offensive.blocked_shots == 1
-    defender = next(profile for profile in rundown.players if profile.position == "CB")
-    assert defender.defensive.yellow_cards == 1
-    assert defender.defensive.blocks.shots == 1
-    assert defender.defensive.interceptions.total == 1
+    assert striker.offensive.total_shots >= 2
+    laggy = next(profile for profile in rundown.players if profile.player_name == "Laggy Left")
+    assert laggy.offensive.blocked_shots == 1
+    stopper = by_id[DEFENDER_ID]
+    assert stopper.player_name == "Chris Stopper"
+    assert stopper.defensive.interceptions.total >= 1
+    assert stopper.defensive.blocks.shots == 1
+    midfielder = next(
+        profile for profile in rundown.players if profile.player_name == "Cache Control"
+    )
+    assert midfielder.defensive.yellow_cards == 1
     load = load_from_rundown(rundown, STRIKER_ID)
     assert load.source == "collected"
     assert load.profile.offensive.goals == 1
@@ -93,8 +101,8 @@ def test_ingest_api_collects_and_persists() -> None:
     assert response.status_code == 200, response.text
     data = response.json()
     assert data["upserted_events"] == len(payload.events)
-    assert data["upserted_profiles"] == 3
-    assert data["summary"]["goals"] == 1
+    assert data["upserted_profiles"] >= 20
+    assert data["summary"]["goals"] == 5
     striker = next(row for row in data["players"] if row["player_id"] == str(STRIKER_ID))
     assert striker["offensive"]["goals"] == 1
     assert (STRIKER_ID, payload.match_id) in store.rows
@@ -122,6 +130,11 @@ def test_film_stream_upload_writes_inbox(tmp_path: Path, monkeypatch) -> None:
         page = client.get("/upload-film")
         assert page.status_code == 200
         assert "Save film to inbox" in page.text
+        assert "Analyse Stats" in page.text
+        assert "width=device-width" in page.text
+        assert "5 GB" in page.text or "5&nbsp;GB" in page.text
+        assert "Retry" in page.text
+        assert str(inbox.resolve()) in page.text
         response = client.post(
             "/api/v1/matches/film?filename=derby.mp4",
             content=payload,
@@ -161,6 +174,47 @@ def test_film_chunk_upload_assembles_inbox_file(tmp_path: Path, monkeypatch) -> 
     assert Path(body["path"]).read_bytes() == payload
 
 
+def test_api_starts_film_upload_when_postgres_is_down(tmp_path: Path, monkeypatch) -> None:
+    from unittest.mock import patch
+
+    from storage.db_aggregator import StorageError
+
+    inbox = tmp_path / "inbox"
+    monkeypatch.setenv("ENJOYSTATS_FILM_INBOX", str(inbox))
+
+    class _BoomAggregator:
+        def __init__(self, _url: str) -> None:
+            pass
+
+        async def connect(self) -> None:
+            raise StorageError("no database")
+
+        async def apply_schema(self) -> None:
+            return None
+
+        async def close(self) -> None:
+            return None
+
+    with patch("api.main.DatabaseAggregator", _BoomAggregator):
+        application = create_app()
+        with TestClient(application) as client:
+            health = client.get("/health")
+            assert health.status_code == 200
+            assert health.json()["mode"] == "film_upload_only"
+            page = client.get("/upload-film")
+            assert page.status_code == 200
+            saved = client.post(
+                "/api/v1/matches/film?filename=clip.mp4",
+                content=b"bytes",
+                headers={
+                    "Content-Type": "application/octet-stream",
+                    "X-Filename": "clip.mp4",
+                },
+            )
+    assert saved.status_code == 200, saved.text
+    assert (inbox / "clip.mp4").read_bytes() == b"bytes"
+
+
 def test_film_stream_upload_rejects_multipart(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("ENJOYSTATS_FILM_INBOX", str(tmp_path / "inbox"))
     application = create_app(aggregator=InMemoryProfileStore())
@@ -177,8 +231,10 @@ def test_bundled_sample_game_file_collects() -> None:
 
     sample = Path(__file__).resolve().parents[1] / "data" / "sample_game.json"
     rundown = parse_and_collect(json.loads(sample.read_text(encoding="utf-8")))
-    assert rundown.summary.player_count == 3
-    assert rundown.summary.goals == 1
+    assert rundown.summary.player_count == 30
+    assert rundown.summary.goals == 5
+    assert rundown.summary.home_team_name == "Napoleon Bot"
+    assert rundown.summary.away_team_name == "80s Jeans"
     payload = sample_game_payload()
     dumped = json.dumps(payload.model_dump(mode="json"))
     rundown = parse_and_collect(json.loads(dumped))
