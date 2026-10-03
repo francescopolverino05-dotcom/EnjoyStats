@@ -114,6 +114,7 @@ def test_dashboard_renders_analyse_landing(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("ENJOYSTATS_JOBS_DIR", str(tmp_path / "jobs"))
     monkeypatch.setenv("ENJOYSTATS_FILM_INBOX", str(tmp_path / "inbox"))
     monkeypatch.setenv("ENJOYSTATS_FILM_UPLOADS", str(tmp_path / "uploads"))
+    monkeypatch.setenv("ENJOYSTATS_HISTORY_DIR", str(tmp_path / "history"))
     script = Path(__file__).resolve().parents[1] / "app" / "dashboard.py"
     at = AppTest.from_file(str(script), default_timeout=15)
     at.run()
@@ -122,6 +123,8 @@ def test_dashboard_renders_analyse_landing(tmp_path, monkeypatch) -> None:
     assert any("EnjoyStats" in title for title in titles)
     sidebar_headers = [str(element.value) for element in at.sidebar.header]
     assert any("EnjoyStats" in header for header in sidebar_headers)
+    nav = next(radio for radio in at.radio if set(radio.options) >= {"Home", "History"})
+    assert nav.value == "Home"
     select_labels = [str(element.label) for element in at.selectbox]
     assert any("Films on this machine" in label for label in select_labels)
     assert not any("Cookies from browser" in label for label in select_labels)
@@ -151,6 +154,7 @@ def test_vimeo_paste_prompts_upload_not_hard_error(tmp_path, monkeypatch) -> Non
     monkeypatch.setenv("ENJOYSTATS_JOBS_DIR", str(tmp_path / "jobs"))
     monkeypatch.setenv("ENJOYSTATS_FILM_INBOX", str(tmp_path / "inbox"))
     monkeypatch.setenv("ENJOYSTATS_FILM_UPLOADS", str(tmp_path / "uploads"))
+    monkeypatch.setenv("ENJOYSTATS_HISTORY_DIR", str(tmp_path / "history"))
     script = Path(__file__).resolve().parents[1] / "app" / "dashboard.py"
     at = AppTest.from_file(str(script), default_timeout=15)
     at.run()
@@ -172,9 +176,12 @@ def test_vimeo_paste_prompts_upload_not_hard_error(tmp_path, monkeypatch) -> Non
 def test_landing_sample_opens_tag_inventory(tmp_path, monkeypatch) -> None:
     from streamlit.testing.v1 import AppTest
 
+    from analytics.collection_history import list_history
+
     monkeypatch.setenv("ENJOYSTATS_JOBS_DIR", str(tmp_path / "jobs"))
     monkeypatch.setenv("ENJOYSTATS_FILM_INBOX", str(tmp_path / "inbox"))
     monkeypatch.setenv("ENJOYSTATS_FILM_UPLOADS", str(tmp_path / "uploads"))
+    monkeypatch.setenv("ENJOYSTATS_HISTORY_DIR", str(tmp_path / "history"))
     script = Path(__file__).resolve().parents[1] / "app" / "dashboard.py"
     at = AppTest.from_file(str(script), default_timeout=20)
     at.run()
@@ -193,6 +200,10 @@ def test_landing_sample_opens_tag_inventory(tmp_path, monkeypatch) -> None:
     downloads = [str(button.label) for button in at.download_button]
     assert any("CSV" in label for label in downloads)
     assert any("XML" in label for label in downloads)
+    assert any("PDF" in label for label in downloads)
+    history = list_history()
+    assert len(history) == 1
+    assert "Napoleon" in history[0].label or "Jeans" in history[0].label
 
 
 def test_collected_rundown_shows_match_tags(tmp_path, monkeypatch) -> None:
@@ -203,6 +214,7 @@ def test_collected_rundown_shows_match_tags(tmp_path, monkeypatch) -> None:
     from analytics.game_ingest import collect_game
 
     monkeypatch.setenv("ENJOYSTATS_JOBS_DIR", str(tmp_path / "jobs"))
+    monkeypatch.setenv("ENJOYSTATS_HISTORY_DIR", str(tmp_path / "history"))
     script = Path(__file__).resolve().parents[1] / "app" / "dashboard.py"
     at = AppTest.from_file(str(script), default_timeout=20)
     at.session_state["collected_rundown"] = rundown_to_json(collect_game(sample_game_payload()))
@@ -221,8 +233,14 @@ def test_collected_rundown_shows_match_tags(tmp_path, monkeypatch) -> None:
     assert any(
         "Individual" in header or "Individual players" in header for header in subheaders
     ) or any("Open player sheet" in str(box.label) for box in at.selectbox)
+    downloads = [str(button.label) for button in at.download_button]
+    assert any("PDF" in label for label in downloads)
     # Home tab returns to Analyse Stats without clearing the match.
-    nav = next(radio for radio in at.radio if set(radio.options) >= {"Home", "Match rundown"})
+    nav = next(
+        radio
+        for radio in at.radio
+        if set(radio.options) >= {"Home", "Match rundown", "History"}
+    )
     assert nav.value == "Match rundown"
     nav.set_value("Home").run()
     assert not at.exception
@@ -230,6 +248,38 @@ def test_collected_rundown_shows_match_tags(tmp_path, monkeypatch) -> None:
     assert any("Analyse Stats" in label for label in buttons)
     subheaders_home = [str(element.value) for element in at.subheader]
     assert any("Analyse Stats" in header for header in subheaders_home)
+
+
+def test_history_tab_lists_saved_collect_and_opens_match(tmp_path, monkeypatch) -> None:
+    from streamlit.testing.v1 import AppTest
+
+    from analytics.collection_history import save_rundown_to_history
+    from analytics.game_ingest import collect_game
+    from analytics.sample_game import sample_game_payload
+
+    monkeypatch.setenv("ENJOYSTATS_JOBS_DIR", str(tmp_path / "jobs"))
+    monkeypatch.setenv("ENJOYSTATS_FILM_INBOX", str(tmp_path / "inbox"))
+    monkeypatch.setenv("ENJOYSTATS_FILM_UPLOADS", str(tmp_path / "uploads"))
+    monkeypatch.setenv("ENJOYSTATS_HISTORY_DIR", str(tmp_path / "history"))
+    entry = save_rundown_to_history(collect_game(sample_game_payload()))
+    script = Path(__file__).resolve().parents[1] / "app" / "dashboard.py"
+    at = AppTest.from_file(str(script), default_timeout=20)
+    at.run()
+    assert not at.exception
+    nav = next(radio for radio in at.radio if set(radio.options) >= {"Home", "History"})
+    nav.set_value("History").run()
+    assert not at.exception
+    subheaders = [str(element.value) for element in at.subheader]
+    assert "Collection history" in subheaders
+    markdowns = [str(element.value) for element in at.markdown]
+    assert any(entry.label in text for text in markdowns)
+    downloads = [str(button.label) for button in at.download_button]
+    assert any("PDF" in label for label in downloads)
+    open_btn = next(button for button in at.button if "Open match" in str(button.label))
+    open_btn.click().run()
+    assert not at.exception
+    subheaders_match = [str(element.value) for element in at.subheader]
+    assert "Match rundown" in subheaders_match
 
 
 def test_unknown_fallback_actions_include_a_missing_coordinate() -> None:

@@ -77,7 +77,14 @@ from analytics.video_auto_collect import (
     video_limit_label,
 )
 from api.film_upload import upload_page_html
+from analytics.collection_history import (
+    delete_history_entry,
+    list_history,
+    load_history_rundown,
+    save_rundown_to_history,
+)
 from analytics.game_ingest import MatchRundown, rundown_from_mapping, rundown_to_json
+from analytics.match_report_pdf import build_match_report_pdf
 from analytics.team_sheet import (
     highlight_moments_from_rundown,
     tag_inventory_rows,
@@ -1136,12 +1143,49 @@ def _go_match() -> None:
     st.session_state[NAV_KEY] = "Match rundown"
 
 
-def render_app_nav(*, has_match: bool, analysing: bool) -> str:
-    """Top Home / Match tabs so the landing stays one click away."""
+def _go_history() -> None:
+    st.session_state[NAV_KEY] = "History"
 
-    options = ["Home"]
+
+def _remember_collection(rundown: MatchRundown) -> str:
+    """Auto-save every finished collect into Analyse history."""
+
+    entry = save_rundown_to_history(rundown)
+    return f"Saved to History · {entry.label}"
+
+
+def _pdf_filename(label: str) -> str:
+    safe = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in label)
+    return f"enjoystats_{safe[:80] or 'match'}.pdf"
+
+
+def render_pdf_download(rundown: MatchRundown, *, key: str, label: str | None = None) -> None:
+    """Download button for the full match statistics PDF."""
+
+    home = rundown.summary.home_team_name or "Home"
+    away = rundown.summary.away_team_name or "Away"
+    report_label = label or f"{home}_vs_{away}"
+    try:
+        pdf_bytes = build_match_report_pdf(rundown)
+    except Exception as exc:  # noqa: BLE001 — keep the match page usable if PDF fails
+        st.caption(f"PDF report unavailable ({exc}).")
+        return
+    st.download_button(
+        "Download full report (PDF)",
+        data=pdf_bytes,
+        file_name=_pdf_filename(report_label),
+        mime="application/pdf",
+        use_container_width=True,
+        key=key,
+    )
+
+
+def render_app_nav(*, has_match: bool, analysing: bool) -> str:
+    """Top Home / Match / History tabs."""
+
+    options = ["Home", "History"]
     if has_match:
-        options.append("Match rundown")
+        options.insert(1, "Match rundown")
     if analysing:
         options.append("Analysing")
     current = str(st.session_state.get(NAV_KEY, "") or "")
@@ -1181,8 +1225,11 @@ def _hydrate_collect_job() -> None:
         loaded = load_job_rundown(status)
         if loaded is not None:
             st.session_state[RUNDOWN_KEY] = rundown_to_json(loaded)
-            st.session_state[PERSIST_KEY] = str(status.get("label") or "Background collect ready.")
-            if st.session_state.get(NAV_KEY) not in {"Home", "Match rundown"}:
+            history_msg = _remember_collection(loaded)
+            st.session_state[PERSIST_KEY] = (
+                f"{status.get('label') or 'Background collect ready.'} · {history_msg}"
+            )
+            if st.session_state.get(NAV_KEY) not in {"Home", "Match rundown", "History"}:
                 _go_match()
         return
     if status.get("state") == "error":
@@ -1204,7 +1251,8 @@ def _load_sample_match(base_url: str) -> str | None:
         st.session_state[RUNDOWN_KEY] = rundown_to_json(rundown)
         st.session_state.pop("analyse_cleared", None)
         _persisted, message = asyncio.run(persist_rundown(base_url, rundown))
-        st.session_state[PERSIST_KEY] = message
+        history_msg = _remember_collection(rundown)
+        st.session_state[PERSIST_KEY] = f"{message} · {history_msg}"
         _go_match()
     except ValueError as exc:
         return str(exc)
@@ -1263,7 +1311,8 @@ def render_sidebar() -> str:
                 rundown = collect_uploaded_bytes(uploaded_json.getvalue())
                 st.session_state[RUNDOWN_KEY] = rundown_to_json(rundown)
                 _persisted, message = asyncio.run(persist_rundown(base_url, rundown))
-                st.session_state[PERSIST_KEY] = message
+                history_msg = _remember_collection(rundown)
+                st.session_state[PERSIST_KEY] = f"{message} · {history_msg}"
                 _go_match()
             except ValueError as exc:
                 error = str(exc)
@@ -1411,7 +1460,8 @@ def render_analyse_landing(base_url: str) -> None:
             st.session_state[RUNDOWN_KEY] = rundown_to_json(rundown)
             st.session_state.pop("analyse_cleared", None)
             _persisted, message = asyncio.run(persist_rundown(base_url, rundown))
-            st.session_state[PERSIST_KEY] = message
+            history_msg = _remember_collection(rundown)
+            st.session_state[PERSIST_KEY] = f"{message} · {history_msg}"
             _go_match()
             st.rerun()
         except ValueError as exc:
@@ -1458,7 +1508,8 @@ def render_analyse_landing(base_url: str) -> None:
             st.session_state[RUNDOWN_KEY] = rundown_to_json(rundown)
             st.session_state.pop("analyse_cleared", None)
             _persisted, message = asyncio.run(persist_rundown(base_url, rundown))
-            st.session_state[PERSIST_KEY] = message
+            history_msg = _remember_collection(rundown)
+            st.session_state[PERSIST_KEY] = f"{message} · {history_msg}"
             _go_match()
             st.rerun()
         else:
@@ -1568,11 +1619,80 @@ def render_collective_rundown(rundown: MatchRundown) -> None:
     """Match page: summary, then Collective / Individual views."""
 
     render_match_summary(rundown)
+    render_pdf_download(rundown, key="match_pdf_report")
     collective_tab, individual_tab = st.tabs(["Collective", "Individual"])
     with collective_tab:
         render_collective_section(rundown)
     with individual_tab:
         render_individual_section(rundown)
+
+
+def render_history() -> None:
+    """Browse auto-saved collection history; reopen matches or download PDFs."""
+
+    st.title("EnjoyStats")
+    st.subheader("Collection history")
+    st.caption(
+        "Every finished collect is saved automatically. Open a past match to "
+        "review collective and individual sheets, or download the full PDF report."
+    )
+    entries = list_history()
+    if not entries:
+        st.info(
+            "No collections saved yet. Analyse a match or load the sample — "
+            "it will appear here as soon as collect finishes."
+        )
+        return
+    for entry in entries:
+        with st.container(border=True):
+            left, mid, right = st.columns([3, 1, 1])
+            with left:
+                st.markdown(f"**{entry.label}**")
+                st.caption(
+                    f"Saved {entry.saved_at}  ·  "
+                    f"{entry.event_count} events  ·  "
+                    f"{entry.player_count} players  ·  "
+                    f"source `{entry.tag_source}`"
+                )
+            with mid:
+                if st.button(
+                    "Open match",
+                    key=f"history_open_{entry.history_id}",
+                    use_container_width=True,
+                ):
+                    loaded = load_history_rundown(entry.history_id)
+                    if loaded is None:
+                        st.error("Could not load this saved collect.")
+                    else:
+                        st.session_state[RUNDOWN_KEY] = rundown_to_json(loaded)
+                        st.session_state.pop("analyse_cleared", None)
+                        _go_match()
+                        st.rerun()
+                if st.button(
+                    "Delete",
+                    key=f"history_delete_{entry.history_id}",
+                    use_container_width=True,
+                ):
+                    delete_history_entry(entry.history_id)
+                    st.rerun()
+            with right:
+                loaded = load_history_rundown(entry.history_id)
+                if loaded is not None:
+                    try:
+                        pdf_bytes = build_match_report_pdf(loaded, history=entry)
+                    except Exception as exc:  # noqa: BLE001
+                        st.caption(f"PDF unavailable ({exc}).")
+                    else:
+                        st.download_button(
+                            "PDF report",
+                            data=pdf_bytes,
+                            file_name=_pdf_filename(entry.label),
+                            mime="application/pdf",
+                            use_container_width=True,
+                            key=f"history_pdf_{entry.history_id}",
+                        )
+                else:
+                    st.caption("File missing")
 
 
 def render_api_demo(base_url: str, fetch: FetchFn) -> None:
@@ -1605,13 +1725,14 @@ def main(*, fetch: FetchFn = _run_fetch) -> None:
     job_path_raw = str(st.session_state.get(JOB_KEY, "") or "")
     job_status = read_job_status(Path(job_path_raw)) if job_path_raw else None
     analysing = bool(job_status and job_status.get("state") in {"queued", "running"})
-    if rundown is not None or analysing:
-        section = render_app_nav(has_match=rundown is not None, analysing=analysing)
-    else:
-        section = "Home"
+    section = render_app_nav(has_match=rundown is not None, analysing=analysing)
 
     if section == "Match rundown" and rundown is not None:
         render_collective_rundown(rundown)
+        return
+
+    if section == "History":
+        render_history()
         return
 
     if section == "Analysing" and analysing and job_status is not None:
