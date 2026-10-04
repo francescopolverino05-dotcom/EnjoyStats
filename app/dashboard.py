@@ -1464,10 +1464,22 @@ def render_analyse_landing(base_url: str) -> None:
     collect_xml = st.button("Collect XML tags", use_container_width=True, key="collect_xml")
     if collect_xml:
         try:
+            upload_dir = film_upload_dir()
+            upload_dir.mkdir(parents=True, exist_ok=True)
+            if home_xml is not None:
+                home_bytes = home_xml.getvalue()
+                (upload_dir / "official_home.xml").write_bytes(home_bytes)
+            else:
+                home_bytes = b""
+            if away_xml is not None:
+                away_bytes = away_xml.getvalue()
+                (upload_dir / "official_away.xml").write_bytes(away_bytes)
+            else:
+                away_bytes = None
             if home_xml is not None and away_xml is not None:
-                rundown = collect_official_two_team(home_xml.getvalue(), away_xml.getvalue())
+                rundown = collect_official_two_team(home_bytes, away_bytes)
             elif home_xml is not None:
-                rundown = collect_official_two_team(home_xml.getvalue())
+                rundown = collect_official_two_team(home_bytes)
             elif away_xml is not None:
                 raise ValueError("Upload the home / analysed-team XML first (away is optional).")
             else:
