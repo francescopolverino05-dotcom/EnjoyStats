@@ -42,19 +42,32 @@ _AWAY_TRIM = re.compile(
     r").*$",
     re.IGNORECASE,
 )
-_ACTION_NAME = re.compile(r"^(?:\((?P<jersey>\d+)\)\s*)?(?P<player>.*?)\s*/\s*(?P<kind>.+)$")
+_ACTION_NAME_SLASH = re.compile(r"^(?:\((?P<jersey>\d+)\)\s*)?(?P<player>.*?)\s*/\s*(?P<kind>.+)$")
+# Spaced dash/pipe only — do not split hyphenated surnames like Harriman-Annous.
+_ACTION_NAME_ALT = re.compile(
+    r"^(?:\((?P<jersey>\d+)\)\s*)?(?P<player>.*?)\s+(?:-|–|\|)\s+(?P<kind>.+)$"
+)
 _HALF_KICKOFF = {
     "inizio primo tempo": 1,
     "inizio secondo tempo": 2,
     "fine primo tempo": 1,
     "fine secondo tempo": 2,
+    "kick off": 1,
+    "second half": 2,
+    "half time": 1,
+    "full time": 2,
 }
 _SKIP_KINDS = {
     "inizio primo tempo",
     "inizio secondo tempo",
     "fine primo tempo",
     "fine secondo tempo",
+    "kick off",
+    "second half",
+    "half time",
+    "full time",
     "goal_kick",
+    "goal kick",
     "spazzate",
     "palle vaganti",
     "aggressività",
@@ -64,34 +77,120 @@ _SKIP_KINDS = {
     "uscita",
     "movimento incontro alla palla",
 }
-_KEEPER_KINDS = {"parate", "goal subiti", "riflessi", "uscita"}
+_KEEPER_KINDS = {
+    "parate",
+    "goal subiti",
+    "riflessi",
+    "uscita",
+    "save",
+    "saves",
+    "goal conceded",
+    "goals conceded",
+}
 _KIND_TO_EVENT: dict[str, EventType] = {
+    # Italian OnceSport / Wyscout button labels
     "passaggi": EventType.PASS,
+    "passaggio": EventType.PASS,
     "passaggi filtranti": EventType.PASS,
+    "passaggio filtrante": EventType.PASS,
     "distribuzione palla": EventType.PASS,
     "lanci lunghi": EventType.PASS,
+    "lancio lungo": EventType.PASS,
     "cross": EventType.CROSS,
+    "crosses": EventType.CROSS,
     "tiri": EventType.SHOT,
+    "tiro": EventType.SHOT,
+    "tiri in porta": EventType.SHOT,
+    "tiro in porta": EventType.SHOT,
     "tiro - testa": EventType.SHOT,
+    "tiro di testa": EventType.SHOT,
     "tiro fuori dallo specchio": EventType.SHOT,
     "occasione da goal": EventType.SHOT,
     "goal subiti": EventType.GOAL_CONCEDED,
+    "gol subiti": EventType.GOAL_CONCEDED,
     "intercetti palla": EventType.INTERCEPTION,
+    "intercetti": EventType.INTERCEPTION,
+    "intercetto": EventType.INTERCEPTION,
     "recupero": EventType.BALL_RECOVERY,
+    "recupero palla": EventType.BALL_RECOVERY,
+    "recuperi": EventType.BALL_RECOVERY,
     "palle perse": EventType.BALL_LOST,
+    "palla persa": EventType.BALL_LOST,
     "duelli aerei": EventType.AERIAL_DUEL,
+    "duello aereo": EventType.AERIAL_DUEL,
     "duelli offensivi": EventType.GROUND_DUEL,
     "duelli difensivi": EventType.GROUND_DUEL,
     "1 contro 1 difesa": EventType.GROUND_DUEL,
     "1 contro 1 e dribbling": EventType.GROUND_DUEL,
     "falli": EventType.FOUL_COMMITTED,
+    "fallo": EventType.FOUL_COMMITTED,
     "falli subiti": EventType.FOUL_WON,
+    "fallo subito": EventType.FOUL_WON,
     "rimesse laterali": EventType.THROW_IN,
+    "rimessa laterale": EventType.THROW_IN,
     "calcio di punizione": EventType.FREE_KICK,
+    "calci di punizione": EventType.FREE_KICK,
     "calcio d'angolo": EventType.CORNER,
+    "calcio d angolo": EventType.CORNER,
+    "calci d'angolo": EventType.CORNER,
+    "corner": EventType.CORNER,
+    "corners": EventType.CORNER,
     "fuorigioco": EventType.OFFSIDE,
     "coinvolgimento nell'azione del goal": EventType.ASSIST,
+    "assist": EventType.ASSIST,
     "parate": EventType.SAVE,
+    "parata": EventType.SAVE,
+    # English OnceSport / export aliases
+    "pass": EventType.PASS,
+    "passes": EventType.PASS,
+    "completed pass": EventType.PASS,
+    "progressive pass": EventType.PASS,
+    "progressive passes": EventType.PASS,
+    "long ball": EventType.PASS,
+    "long balls": EventType.PASS,
+    "through ball": EventType.PASS,
+    "through balls": EventType.PASS,
+    "shot": EventType.SHOT,
+    "shots": EventType.SHOT,
+    "shot on target": EventType.SHOT,
+    "header": EventType.SHOT,
+    "headed shot": EventType.SHOT,
+    "goal": EventType.GOAL,
+    "goals": EventType.GOAL,
+    "goal conceded": EventType.GOAL_CONCEDED,
+    "goals conceded": EventType.GOAL_CONCEDED,
+    "interception": EventType.INTERCEPTION,
+    "interceptions": EventType.INTERCEPTION,
+    "recovery": EventType.BALL_RECOVERY,
+    "recoveries": EventType.BALL_RECOVERY,
+    "ball recovery": EventType.BALL_RECOVERY,
+    "ball lost": EventType.BALL_LOST,
+    "balls lost": EventType.BALL_LOST,
+    "turnover": EventType.BALL_LOST,
+    "aerial duel": EventType.AERIAL_DUEL,
+    "aerial duels": EventType.AERIAL_DUEL,
+    "ground duel": EventType.GROUND_DUEL,
+    "ground duels": EventType.GROUND_DUEL,
+    "duel": EventType.GROUND_DUEL,
+    "duels": EventType.GROUND_DUEL,
+    "foul": EventType.FOUL_COMMITTED,
+    "fouls": EventType.FOUL_COMMITTED,
+    "foul won": EventType.FOUL_WON,
+    "fouls won": EventType.FOUL_WON,
+    "throw in": EventType.THROW_IN,
+    "throw-in": EventType.THROW_IN,
+    "throw ins": EventType.THROW_IN,
+    "throw-ins": EventType.THROW_IN,
+    "free kick": EventType.FREE_KICK,
+    "free-kick": EventType.FREE_KICK,
+    "free kicks": EventType.FREE_KICK,
+    "offside": EventType.OFFSIDE,
+    "offsides": EventType.OFFSIDE,
+    "save": EventType.SAVE,
+    "saves": EventType.SAVE,
+    "block": EventType.BLOCK_SHOT,
+    "blocks": EventType.BLOCK_SHOT,
+    "blocked shot": EventType.BLOCK_SHOT,
 }
 
 
@@ -596,9 +695,10 @@ def _period_clock(total_seconds: int, *, second_half_start_s: int) -> tuple[int,
 def _split_action_name(action_name: str) -> tuple[int | None, str, str]:
     """Read ``(4) M. Salmon / Passaggi`` into jersey, player, kind."""
 
-    match = _ACTION_NAME.match(action_name.strip())
+    stripped = action_name.strip()
+    match = _ACTION_NAME_SLASH.match(stripped) or _ACTION_NAME_ALT.match(stripped)
     if match is None:
-        return None, "", _unescape_label(action_name)
+        return None, "", _unescape_label(stripped)
     jersey_raw = match.group("jersey")
     jersey = int(jersey_raw) if jersey_raw and jersey_raw.isdigit() else None
     if jersey is not None and not 1 <= jersey <= 99:
@@ -608,17 +708,120 @@ def _split_action_name(action_name: str) -> tuple[int | None, str, str]:
     return jersey, player, kind
 
 
+def _action_label(action: Element) -> str:
+    """Best-effort label from OnceSport / Wyscout / Nacsport attributes."""
+
+    for key in (
+        "actionName",
+        "name",
+        "label",
+        "code",
+        "action",
+        "category",
+        "button",
+        "tag",
+    ):
+        value = action.attrib.get(key, "").strip()
+        if value:
+            return value
+    return (action.text or "").strip()
+
+
+def _action_player_hint(action: Element) -> tuple[int | None, str]:
+    """Optional player/jersey when the export keeps them off ``actionName``."""
+
+    jersey: int | None = None
+    for key in ("jersey", "number", "shirtNumber", "playerNumber"):
+        raw = action.attrib.get(key, "").strip()
+        if raw.isdigit() and 1 <= int(raw) <= 99:
+            jersey = int(raw)
+            break
+    player = ""
+    for key in ("playerName", "player", "athlete", "player_name", "athleteName"):
+        value = _unescape_label(action.attrib.get(key, ""))
+        if value:
+            player = value
+            break
+    return jersey, player
+
+
 def _normalize_kind(kind: str) -> str:
-    return " ".join(kind.strip().lower().replace("’", "'").split())
+    cleaned = (
+        kind.strip().lower().replace("’", "'").replace("`", "'").replace("_", " ").replace("/", " ")
+    )
+    return " ".join(cleaned.split())
 
 
 def _event_type_for_kind(kind: str) -> EventType | None:
     normalized = _normalize_kind(kind)
+    if not normalized:
+        return None
     if normalized in _SKIP_KINDS or normalized in _HALF_KICKOFF:
         return None
-    if normalized.startswith("goal di") or normalized == "goal":
+    if normalized.startswith("goal di") or normalized.startswith("gol di"):
         return EventType.GOAL
-    return _KIND_TO_EVENT.get(normalized)
+    if normalized in {"goal", "goals", "gol"}:
+        return EventType.GOAL
+    mapped = _KIND_TO_EVENT.get(normalized)
+    if mapped is not None:
+        return mapped
+    # Soft match longer aliases first so "goal subiti" wins over "goal".
+    for alias, event_type in sorted(
+        _KIND_TO_EVENT.items(), key=lambda item: len(item[0]), reverse=True
+    ):
+        if len(alias) < 4:
+            continue
+        if normalized.startswith(alias + " ") or normalized.endswith(" " + alias):
+            return event_type
+    return None
+
+
+def _unmapped_analysis_report(actions: Sequence[Element]) -> str:
+    """Explain why an analysis XML produced zero collectable events."""
+
+    if not actions:
+        return (
+            "Analysis XML has no <action> rows. Export the full OnceSport / "
+            "Wyscout analysis (with tagged actions), not an empty project."
+        )
+    kinds: Counter[str] = Counter()
+    samples: list[str] = []
+    mapped_without_player = 0
+    for action in actions:
+        label = _action_label(action)
+        jersey, player, kind = _split_action_name(label)
+        hint_jersey, hint_player = _action_player_hint(action)
+        if not player:
+            player = hint_player
+        if jersey is None:
+            jersey = hint_jersey
+        if not kind:
+            kind = label
+        event_type = _event_type_for_kind(kind)
+        if event_type is None:
+            kinds[_normalize_kind(kind) or "(blank)"] += 1
+            if len(samples) < 6 and label:
+                samples.append(label)
+        elif not player and jersey is None:
+            mapped_without_player += 1
+    top = ", ".join(f"{name!r}×{count}" for name, count in kinds.most_common(8))
+    sample_txt = "; ".join(samples) if samples else "(none)"
+    bits = [
+        f"Analysis XML has {len(actions)} actions but none mapped to on-ball tags.",
+    ]
+    if top:
+        bits.append(f"Unmapped labels: {top}.")
+    if mapped_without_player:
+        bits.append(
+            f"{mapped_without_player} mapped kinds had no player/jersey "
+            "(need `(#) Name / Passaggi` or player attributes)."
+        )
+    bits.append(f"Examples: {sample_txt}.")
+    bits.append(
+        "Expected OnceSport/Wyscout rows like `(9) Rossi / Passaggi` "
+        "or English `(9) Rossi / Pass`."
+    )
+    return " ".join(bits)
 
 
 def _analysis_coords(
@@ -673,17 +876,38 @@ def _parse_analysis_xml(root: Element) -> GamePayload:
     away_team = uuid5(match_id, "team:away")
 
     actions_el = root.find("actions")
+    if actions_el is None:
+        actions_el = root.find("Actions")
     actions = list(actions_el) if actions_el is not None else []
+    # Some OnceSport exports nest instances one level deeper.
+    if not actions:
+        actions = [
+            node for node in root.iter() if node.tag.lower() in {"action", "instance", "tag"}
+        ]
+        actions = [node for node in actions if node is not root]
     second_half_start_s = 45 * 60
     keeper_keys: set[tuple[int | None, str]] = set()
     parsed_rows: list[tuple[Element, int | None, str, str, int]] = []
     for action in actions:
-        action_name = action.attrib.get("actionName", "")
-        jersey, player, kind = _split_action_name(action_name)
-        clock_s = _clock_seconds(action.attrib.get("startTime", "00:00:00"))
+        label = _action_label(action)
+        jersey, player, kind = _split_action_name(label)
+        hint_jersey, hint_player = _action_player_hint(action)
+        if not player:
+            player = hint_player
+        if jersey is None:
+            jersey = hint_jersey
+        if not kind:
+            kind = label
+        clock_raw = (
+            action.attrib.get("startTime")
+            or action.attrib.get("time")
+            or action.attrib.get("start")
+            or "00:00:00"
+        )
+        clock_s = _clock_seconds(clock_raw)
         parsed_rows.append((action, jersey, player, kind, clock_s))
         normalized = _normalize_kind(kind)
-        if normalized == "inizio secondo tempo":
+        if normalized in {"inizio secondo tempo", "second half"}:
             second_half_start_s = clock_s
         if normalized in _KEEPER_KINDS and player:
             keeper_keys.add((jersey, player.casefold()))
@@ -703,7 +927,7 @@ def _parse_analysis_xml(root: Element) -> GamePayload:
         ):
             continue
         if not player:
-            continue
+            player = f"#{jersey}" if jersey is not None else "Unknown"
         player_id = uuid5(match_id, f"player:{jersey or 0}:{player.casefold()}")
         period, minute, second = _period_clock(clock_s, second_half_start_s=second_half_start_s)
         start_x, start_y, end_x, end_y = _analysis_coords(event_type, kind=kind)
@@ -797,7 +1021,7 @@ def _parse_analysis_xml(root: Element) -> GamePayload:
             )
 
     if not events:
-        raise ValueError("Analysis XML has no mapped on-ball actions to collect.")
+        raise ValueError(_unmapped_analysis_report(actions))
     return GamePayload(
         match_id=match_id,
         players=list(roster.values()),

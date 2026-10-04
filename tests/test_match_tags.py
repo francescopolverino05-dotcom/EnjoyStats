@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from analytics.match_tags import (
     collect_from_tag_xml,
     find_official_tag_xml,
@@ -227,6 +229,47 @@ def _palace_analysis_xml(*, actions: int = 40) -> str:
         'title="Arsenal v Palace (1-1)">\n'
         f"  <actions>\n{body}\n  </actions>\n</analysis>\n"
     )
+
+
+def test_english_oncesport_labels_collect() -> None:
+    raw = (
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<analysis id="dddddddd-dddd-dddd-dddd-dddddddddddd" '
+        'title="Pisa v Perugia (2-3)">\n'
+        "  <actions>\n"
+        '    <action id="e0000000-0000-0000-0000-000000000001" '
+        'actionName="(9) Rossi / Pass" startTime="00:10:00"/>\n'
+        '    <action id="e0000000-0000-0000-0000-000000000002" '
+        'actionName="(9) Rossi / Shot" startTime="00:12:00"/>\n'
+        '    <action id="e0000000-0000-0000-0000-000000000003" '
+        'actionName="(9) Rossi / Goal" startTime="00:12:05"/>\n'
+        '    <action id="e0000000-0000-0000-0000-000000000004" '
+        'name="Corner" playerName="Bianchi" jersey="7" '
+        'startTime="00:20:00"/>\n'
+        "  </actions>\n"
+        "</analysis>\n"
+    )
+    rundown = collect_from_tag_xml(raw)
+    assert rundown.summary.event_count >= 4
+    assert rundown.summary.goals >= 1
+    assert rundown.summary.shots >= 1
+    names = {profile.player_name for profile in rundown.players}
+    assert "Rossi" in names
+    assert "Bianchi" in names
+
+
+def test_unmapped_analysis_error_lists_examples() -> None:
+    raw = (
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<analysis id="eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee" title="Demo">\n'
+        "  <actions>\n"
+        '    <action actionName="Warm-up drill" startTime="00:01:00"/>\n'
+        '    <action actionName="Camera cut" startTime="00:02:00"/>\n'
+        "  </actions>\n"
+        "</analysis>\n"
+    )
+    with pytest.raises(ValueError, match="Unmapped labels"):
+        collect_from_tag_xml(raw)
 
 
 def test_paired_home_away_analysis_is_official_two_team() -> None:
