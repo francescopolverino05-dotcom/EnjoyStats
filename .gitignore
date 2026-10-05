@@ -38,3 +38,7 @@ node_modules/
 apps/web/.next/
 *.sqlite
 .turbo/
+
+# ML weights (downloaded locally)
+*.pt
+yolov8*.pt
