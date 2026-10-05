@@ -39,7 +39,9 @@ const setup: MatchSetup = {
   lineups: [homePlayer, awayPlayer],
 };
 
-function event(partial: Partial<MatchEvent> & Pick<MatchEvent, "id" | "tagId" | "side" | "player">): MatchEvent {
+function event(
+  partial: Partial<MatchEvent> & Pick<MatchEvent, "id" | "tagId" | "side" | "player">,
+): MatchEvent {
   const clockSeconds = partial.clockSeconds ?? 100;
   return {
     matchId: setup.id,
@@ -55,23 +57,81 @@ function event(partial: Partial<MatchEvent> & Pick<MatchEvent, "id" | "tagId" | 
 }
 
 describe("default tags", () => {
-  it("keeps exact Once Sport names", () => {
+  it("keeps Francesco's exact Once Sport button names", () => {
     const tags = loadDefaultTags();
-    expect(tags.find((t) => t.id === "pass")?.onceSportName).toBe("Passaggi");
-    expect(onceSportNameForTagId("corner")).toBe("Calcio d'angolo");
+    expect(tags.find((t) => t.id === "home_passaggi")?.onceSportName).toBe("Passaggi");
+    expect(tags.find((t) => t.id === "away_passaggi")?.onceSportName).toBe("passaggi");
+    expect(tags.find((t) => t.id === "home_duelli_aeree")?.onceSportName).toBe("Duelli aeree");
+    expect(tags.find((t) => t.id === "away_duelli_difensive")?.onceSportName).toBe(
+      "Duelli difensive",
+    );
+    expect(tags.find((t) => t.id === "home_fuori_gioco")?.onceSportName).toBe("Fuori gioco");
+    expect(tags.find((t) => t.id === "shared_inizio_tempo")?.onceSportName).toBe("Inizio tempo");
+    expect(onceSportNameForTagId("home_calcio_angolo")).toBe("Calcio d'angolo");
+    expect(tags.filter((t) => t.panel === "home_attacking")).toHaveLength(18);
+    expect(tags.filter((t) => t.panel === "away_defending")).toHaveLength(16);
+    expect(tags.filter((t) => t.panel === "shared")).toHaveLength(3);
   });
 });
 
 describe("stats engine", () => {
   it("computes goals, xG estimate, pass accuracy, PPDA", () => {
     const events: MatchEvent[] = [
-      event({ id: "1", tagId: "goal", side: "home", player: homePlayer, isGoal: true, shotOnTarget: true, insideBox: true }),
-      event({ id: "2", tagId: "shot_on_target", side: "home", player: homePlayer, shotOnTarget: true, insideBox: true, clockSeconds: 120 }),
-      event({ id: "3", tagId: "pass", side: "home", player: homePlayer, successful: true, clockSeconds: 130 }),
-      event({ id: "4", tagId: "pass", side: "home", player: homePlayer, successful: false, clockSeconds: 140 }),
-      event({ id: "5", tagId: "pass", side: "away", player: awayPlayer, clockSeconds: 150 }),
-      event({ id: "6", tagId: "pass", side: "away", player: awayPlayer, clockSeconds: 160 }),
-      event({ id: "7", tagId: "interception", side: "home", player: homePlayer, clockSeconds: 170 }),
+      event({
+        id: "1",
+        tagId: "home_tiri",
+        side: "home",
+        player: homePlayer,
+        isGoal: true,
+        shotOnTarget: true,
+        insideBox: true,
+      }),
+      event({
+        id: "2",
+        tagId: "home_tiri",
+        side: "home",
+        player: homePlayer,
+        shotOnTarget: true,
+        insideBox: true,
+        clockSeconds: 120,
+      }),
+      event({
+        id: "3",
+        tagId: "home_passaggi",
+        side: "home",
+        player: homePlayer,
+        successful: true,
+        clockSeconds: 130,
+      }),
+      event({
+        id: "4",
+        tagId: "home_passaggi",
+        side: "home",
+        player: homePlayer,
+        successful: false,
+        clockSeconds: 140,
+      }),
+      event({
+        id: "5",
+        tagId: "away_passaggi",
+        side: "away",
+        player: awayPlayer,
+        clockSeconds: 150,
+      }),
+      event({
+        id: "6",
+        tagId: "away_passaggi",
+        side: "away",
+        player: awayPlayer,
+        clockSeconds: 160,
+      }),
+      event({
+        id: "7",
+        tagId: "home_palle_intercettate",
+        side: "home",
+        player: homePlayer,
+        clockSeconds: 170,
+      }),
     ];
     const home = computeTeamStats(setup, events, "home");
     expect(home.goals).toBe(1);
@@ -86,7 +146,7 @@ describe("stats engine", () => {
 describe("coverage", () => {
   it("flags sparse 5-minute blocks for re-pass", () => {
     const events: MatchEvent[] = [
-      event({ id: "1", tagId: "pass", side: "home", player: homePlayer, clockSeconds: 10 }),
+      event({ id: "1", tagId: "home_passaggi", side: "home", player: homePlayer, clockSeconds: 10 }),
     ];
     const report = buildCoverageReport(events, 10);
     expect(report).toHaveLength(2);
@@ -98,15 +158,28 @@ describe("coverage", () => {
 describe("Once Sport XML export", () => {
   it("writes exact onceSportName and one file per team", () => {
     const events: MatchEvent[] = [
-      event({ id: "a1", tagId: "pass", side: "home", player: homePlayer, clockSeconds: 65 }),
-      event({ id: "a2", tagId: "goal", side: "away", player: awayPlayer, isGoal: true, clockSeconds: 200 }),
+      event({
+        id: "a1",
+        tagId: "home_passaggi",
+        side: "home",
+        player: homePlayer,
+        clockSeconds: 65,
+      }),
+      event({
+        id: "a2",
+        tagId: "away_tiri",
+        side: "away",
+        player: awayPlayer,
+        isGoal: true,
+        clockSeconds: 200,
+      }),
     ];
     const { home, away } = exportBothOnceSportXml(setup, events);
     expect(home).toContain("<analysis");
     expect(home).toContain("Passaggi");
     expect(home).toContain("(9) Rossi / Passaggi");
     expect(home).not.toContain("Bianchi");
-    expect(away).toContain("Goal");
+    expect(away).toContain("Tiri");
     expect(away).toContain("(10) Bianchi");
     expect(away).toContain('analysedTeam="Perugia"');
   });

@@ -1,30 +1,300 @@
 [
-  { "id": "goal", "label": "Goal", "onceSportName": "Goal" },
-  { "id": "assist", "label": "Assist", "onceSportName": "Assist" },
-  { "id": "shot_on_target", "label": "Shot on target", "onceSportName": "Tiri in porta" },
-  { "id": "shot_off_target", "label": "Shot off target", "onceSportName": "Tiro fuori dallo specchio" },
-  { "id": "shot_blocked", "label": "Shot blocked", "onceSportName": "Tiro bloccato" },
-  { "id": "shot_header", "label": "Headed shot", "onceSportName": "Tiro - testa" },
-  { "id": "save", "label": "Save", "onceSportName": "Parate" },
-  { "id": "pass", "label": "Pass", "onceSportName": "Passaggi" },
-  { "id": "key_pass", "label": "Key pass", "onceSportName": "Passaggio chiave" },
-  { "id": "progressive_pass", "label": "Progressive pass", "onceSportName": "Passaggi filtranti" },
-  { "id": "through_ball", "label": "Through ball", "onceSportName": "Passaggio filtrante" },
-  { "id": "long_ball", "label": "Long ball", "onceSportName": "Lanci lunghi" },
-  { "id": "cross", "label": "Cross", "onceSportName": "Cross" },
-  { "id": "corner", "label": "Corner", "onceSportName": "Calcio d'angolo" },
-  { "id": "free_kick", "label": "Free kick", "onceSportName": "Calcio di punizione" },
-  { "id": "throw_in", "label": "Throw-in", "onceSportName": "Rimesse laterali" },
-  { "id": "offside", "label": "Offside", "onceSportName": "Fuorigioco" },
-  { "id": "foul", "label": "Foul", "onceSportName": "Falli" },
-  { "id": "foul_won", "label": "Foul won", "onceSportName": "Falli subiti" },
-  { "id": "ground_duel", "label": "Ground duel", "onceSportName": "Duelli difensivi" },
-  { "id": "aerial_duel", "label": "Aerial duel", "onceSportName": "Duelli aerei" },
-  { "id": "interception", "label": "Interception", "onceSportName": "Intercetti palla" },
-  { "id": "recovery", "label": "Recovery", "onceSportName": "Recupero" },
-  { "id": "ball_lost", "label": "Ball lost", "onceSportName": "Palle perse" },
-  { "id": "yellow_card", "label": "Yellow card", "onceSportName": "Cartellino giallo" },
-  { "id": "red_card", "label": "Red card", "onceSportName": "Cartellino rosso" },
-  { "id": "substitution", "label": "Substitution", "onceSportName": "Sostituzione" },
-  { "id": "goal_conceded", "label": "Goal conceded", "onceSportName": "Goal subiti" }
+  {
+    "id": "home_passaggi",
+    "label": "Passaggi",
+    "onceSportName": "Passaggi",
+    "panel": "home_attacking",
+    "color": "green",
+    "statKind": "pass"
+  },
+  {
+    "id": "home_passaggi_filtranti",
+    "label": "Passaggi filtranti",
+    "onceSportName": "Passaggi filtranti",
+    "panel": "home_attacking",
+    "color": "green",
+    "statKind": "progressive_pass"
+  },
+  {
+    "id": "home_lanci_lunghi",
+    "label": "Lanci lunghi",
+    "onceSportName": "Lanci lunghi",
+    "panel": "home_attacking",
+    "color": "green",
+    "statKind": "long_ball"
+  },
+  {
+    "id": "home_cross",
+    "label": "Cross",
+    "onceSportName": "Cross",
+    "panel": "home_attacking",
+    "color": "green",
+    "statKind": "cross"
+  },
+  {
+    "id": "home_tiri",
+    "label": "Tiri",
+    "onceSportName": "Tiri",
+    "panel": "home_attacking",
+    "color": "green",
+    "statKind": "shot"
+  },
+  {
+    "id": "home_parate_portiere",
+    "label": "Parate portiere",
+    "onceSportName": "Parate portiere",
+    "panel": "home_attacking",
+    "color": "green",
+    "statKind": "save"
+  },
+  {
+    "id": "home_calcio_angolo",
+    "label": "Calcio d'angolo",
+    "onceSportName": "Calcio d'angolo",
+    "panel": "home_attacking",
+    "color": "green",
+    "statKind": "corner"
+  },
+  {
+    "id": "home_calcio_punizione",
+    "label": "Calcio di punizione",
+    "onceSportName": "Calcio di punizione",
+    "panel": "home_attacking",
+    "color": "green",
+    "statKind": "free_kick"
+  },
+  {
+    "id": "home_rimesse_laterali",
+    "label": "Rimesse laterali",
+    "onceSportName": "Rimesse laterali",
+    "panel": "home_attacking",
+    "color": "green",
+    "statKind": "throw_in"
+  },
+  {
+    "id": "home_fuori_gioco",
+    "label": "Fuori gioco",
+    "onceSportName": "Fuori gioco",
+    "panel": "home_attacking",
+    "color": "green",
+    "statKind": "offside"
+  },
+  {
+    "id": "home_falli",
+    "label": "Falli",
+    "onceSportName": "Falli",
+    "panel": "home_attacking",
+    "color": "green",
+    "statKind": "foul"
+  },
+  {
+    "id": "home_falli_subiti",
+    "label": "Falli subiti",
+    "onceSportName": "Falli subiti",
+    "panel": "home_attacking",
+    "color": "green",
+    "statKind": "foul_won"
+  },
+  {
+    "id": "home_duelli_aeree",
+    "label": "Duelli aeree",
+    "onceSportName": "Duelli aeree",
+    "panel": "home_attacking",
+    "color": "green",
+    "statKind": "aerial_duel"
+  },
+  {
+    "id": "home_duelli_difensivi",
+    "label": "Duelli difensivi",
+    "onceSportName": "Duelli difensivi",
+    "panel": "home_attacking",
+    "color": "green",
+    "statKind": "ground_duel"
+  },
+  {
+    "id": "home_duelli_offensivi",
+    "label": "Duelli offensivi",
+    "onceSportName": "Duelli offensivi",
+    "panel": "home_attacking",
+    "color": "green",
+    "statKind": "ground_duel"
+  },
+  {
+    "id": "home_palle_intercettate",
+    "label": "Palle intercettate",
+    "onceSportName": "Palle intercettate",
+    "panel": "home_attacking",
+    "color": "green",
+    "statKind": "interception"
+  },
+  {
+    "id": "home_recupero_blocco_alto",
+    "label": "Recupero palla nel blocco alto",
+    "onceSportName": "Recupero palla nel blocco alto",
+    "panel": "home_attacking",
+    "color": "green",
+    "statKind": "recovery_high"
+  },
+  {
+    "id": "home_palle_perse",
+    "label": "Palle perse",
+    "onceSportName": "Palle perse",
+    "panel": "home_attacking",
+    "color": "green",
+    "statKind": "ball_lost"
+  },
+
+  {
+    "id": "away_passaggi",
+    "label": "passaggi",
+    "onceSportName": "passaggi",
+    "panel": "away_defending",
+    "color": "orange",
+    "statKind": "pass"
+  },
+  {
+    "id": "away_passaggi_filtranti",
+    "label": "Passaggi filtranti",
+    "onceSportName": "Passaggi filtranti",
+    "panel": "away_defending",
+    "color": "orange",
+    "statKind": "progressive_pass"
+  },
+  {
+    "id": "away_lanci_lunghi",
+    "label": "Lanci lunghi",
+    "onceSportName": "Lanci lunghi",
+    "panel": "away_defending",
+    "color": "orange",
+    "statKind": "long_ball"
+  },
+  {
+    "id": "away_cross",
+    "label": "Cross",
+    "onceSportName": "Cross",
+    "panel": "away_defending",
+    "color": "orange",
+    "statKind": "cross"
+  },
+  {
+    "id": "away_tiri",
+    "label": "Tiri",
+    "onceSportName": "Tiri",
+    "panel": "away_defending",
+    "color": "orange",
+    "statKind": "shot"
+  },
+  {
+    "id": "away_parate_portiere",
+    "label": "Parate portiere",
+    "onceSportName": "Parate portiere",
+    "panel": "away_defending",
+    "color": "orange",
+    "statKind": "save"
+  },
+  {
+    "id": "away_calcio_angolo",
+    "label": "Calcio d'angolo",
+    "onceSportName": "Calcio d'angolo",
+    "panel": "away_defending",
+    "color": "orange",
+    "statKind": "corner"
+  },
+  {
+    "id": "away_calcio_punizione",
+    "label": "Calcio di punizione",
+    "onceSportName": "Calcio di punizione",
+    "panel": "away_defending",
+    "color": "orange",
+    "statKind": "free_kick"
+  },
+  {
+    "id": "away_rimessa_laterale",
+    "label": "Rimessa laterale",
+    "onceSportName": "Rimessa laterale",
+    "panel": "away_defending",
+    "color": "orange",
+    "statKind": "throw_in"
+  },
+  {
+    "id": "away_falli",
+    "label": "falli",
+    "onceSportName": "falli",
+    "panel": "away_defending",
+    "color": "orange",
+    "statKind": "foul"
+  },
+  {
+    "id": "away_falli_subiti",
+    "label": "Falli subiti",
+    "onceSportName": "Falli subiti",
+    "panel": "away_defending",
+    "color": "orange",
+    "statKind": "foul_won"
+  },
+  {
+    "id": "away_duelli_aerei",
+    "label": "Duelli aerei",
+    "onceSportName": "Duelli aerei",
+    "panel": "away_defending",
+    "color": "orange",
+    "statKind": "aerial_duel"
+  },
+  {
+    "id": "away_duelli_difensive",
+    "label": "Duelli difensive",
+    "onceSportName": "Duelli difensive",
+    "panel": "away_defending",
+    "color": "orange",
+    "statKind": "ground_duel"
+  },
+  {
+    "id": "away_duelli_offensivi",
+    "label": "Duelli offensivi",
+    "onceSportName": "Duelli offensivi",
+    "panel": "away_defending",
+    "color": "orange",
+    "statKind": "ground_duel"
+  },
+  {
+    "id": "away_recupero_blocco_alto",
+    "label": "Recupero palla nel blocco alto",
+    "onceSportName": "Recupero palla nel blocco alto",
+    "panel": "away_defending",
+    "color": "orange",
+    "statKind": "recovery_high"
+  },
+  {
+    "id": "away_palle_perse",
+    "label": "Palle perse",
+    "onceSportName": "Palle perse",
+    "panel": "away_defending",
+    "color": "orange",
+    "statKind": "ball_lost"
+  },
+
+  {
+    "id": "shared_inizio_tempo",
+    "label": "Inizio tempo",
+    "onceSportName": "Inizio tempo",
+    "panel": "shared",
+    "color": "neutral",
+    "statKind": "period_marker"
+  },
+  {
+    "id": "shared_fine_tempo",
+    "label": "Fine tempo",
+    "onceSportName": "Fine tempo",
+    "panel": "shared",
+    "color": "neutral",
+    "statKind": "period_marker"
+  },
+  {
+    "id": "shared_sostituzione",
+    "label": "Sostituzione",
+    "onceSportName": "Sostituzione",
+    "panel": "shared",
+    "color": "neutral",
+    "statKind": "substitution"
+  }
 ]

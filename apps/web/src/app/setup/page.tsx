@@ -2,6 +2,9 @@ import { demoSetup, demoTags } from "@/lib/demo-match";
 
 export default function SetupPage() {
   const tags = demoTags();
+  const home = tags.filter((t) => t.panel === "home_attacking");
+  const away = tags.filter((t) => t.panel === "away_defending");
+  const shared = tags.filter((t) => t.panel === "shared");
   return (
     <>
       <h1>Match setup</h1>
@@ -51,19 +54,37 @@ export default function SetupPage() {
             </tbody>
           </table>
         </section>
+      </div>
+
+      <div className="grid" style={{ marginTop: "1rem" }}>
         <section className="card">
-          <h2>Tag panel ({tags.length})</h2>
-          <p className="muted">
-            Exact Once Sport names — configurable via{" "}
-            <code>packages/core/src/tags/default-tags.json</code>.
-          </p>
+          <h2>Home / Attacking (green) · {home.length}</h2>
           <ul className="muted">
-            {tags.slice(0, 12).map((t) => (
+            {home.map((t) => (
               <li key={t.id}>
-                {t.label} → <strong>{t.onceSportName}</strong>
+                <strong>{t.onceSportName}</strong>
               </li>
             ))}
-            <li>…</li>
+          </ul>
+        </section>
+        <section className="card">
+          <h2>Away / Defending (orange) · {away.length}</h2>
+          <ul className="muted">
+            {away.map((t) => (
+              <li key={t.id}>
+                <strong>{t.onceSportName}</strong>
+              </li>
+            ))}
+          </ul>
+        </section>
+        <section className="card">
+          <h2>Other (shared) · {shared.length}</h2>
+          <ul className="muted">
+            {shared.map((t) => (
+              <li key={t.id}>
+                <strong>{t.onceSportName}</strong>
+              </li>
+            ))}
           </ul>
         </section>
       </div>

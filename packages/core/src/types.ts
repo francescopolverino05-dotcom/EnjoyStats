@@ -3,6 +3,33 @@
 export type TeamSide = "home" | "away";
 export type PitchThird = "defensive" | "middle" | "final";
 export type Confidence = "high" | "low";
+export type TagPanel = "home_attacking" | "away_defending" | "shared";
+export type TagColor = "green" | "orange" | "neutral";
+export type StatKind =
+  | "pass"
+  | "progressive_pass"
+  | "long_ball"
+  | "cross"
+  | "shot"
+  | "save"
+  | "corner"
+  | "free_kick"
+  | "throw_in"
+  | "offside"
+  | "foul"
+  | "foul_won"
+  | "aerial_duel"
+  | "ground_duel"
+  | "interception"
+  | "recovery_high"
+  | "ball_lost"
+  | "period_marker"
+  | "substitution"
+  | "goal"
+  | "assist"
+  | "key_pass"
+  | "through_ball"
+  | "recovery";
 
 export interface TagDefinition {
   id: string;
@@ -10,6 +37,10 @@ export interface TagDefinition {
   label: string;
   /** Exact Once Sport Analyser button label — never renamed on export */
   onceSportName: string;
+  panel: TagPanel;
+  color: TagColor;
+  /** How the stats engine classifies this button */
+  statKind: StatKind;
 }
 
 export interface PlayerRef {
