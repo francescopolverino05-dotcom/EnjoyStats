@@ -33,6 +33,18 @@ from uuid import UUID, uuid5
 import cv2
 import numpy as np
 
+from analytics.block_coverage import (
+    BLOCK_MIN_EVENTS,
+    BLOCK_SECONDS,
+    MAX_REPASS_ROUNDS,
+    block_index_for_clock,
+    blocks_needing_repass,
+    build_coverage_report,
+    coverage_as_dicts,
+    event_clock_seconds,
+    expected_block_count,
+    filter_events_outside_block,
+)
 from analytics.game_ingest import GamePayload, MatchRundown, PlayerRosterEntry, collect_game
 from analytics.match_tags import infer_team_names, write_sidecar_xml
 from analytics.oncesport_export import write_oncesport_pair
@@ -48,13 +60,13 @@ AUTO_NAMESPACE: UUID = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
 MAX_VIDEO_GIB: int = 5
 MAX_VIDEO_BYTES: int = MAX_VIDEO_GIB * 1024 * 1024 * 1024
 STREAMLIT_MAX_UPLOAD_MB: int = MAX_VIDEO_GIB * 1024
-DEFAULT_SAMPLE_HZ: float = 5.0
-DEFAULT_MAX_SIDE: int = 640
-DEFAULT_MAX_SAMPLE_FRAMES: int = 48_000
+DEFAULT_SAMPLE_HZ: float = 8.0
+DEFAULT_MAX_SIDE: int = 960
+DEFAULT_MAX_SAMPLE_FRAMES: int = 72_000
 # Arsenal v Palace (1-1) Wyscout analysis: 736 actions over 97.5 minutes.
 WYSCOUT_ACTIONS_PER_MINUTE: float = 7.55
 TARGET_EVENT_GAP_S: float = 60.0 / WYSCOUT_ACTIONS_PER_MINUTE
-MIN_EVENT_GAP_S: float = 1.6
+MIN_EVENT_GAP_S: float = 1.2
 VIDEO_SUFFIXES: tuple[str, ...] = (".mp4", ".mov", ".mkv", ".avi", ".m4v", ".webm")
 TAG_SUFFIXES: tuple[str, ...] = (".xml",)
 
@@ -1101,19 +1113,26 @@ def sample_and_track(
     max_side: int = DEFAULT_MAX_SIDE,
     max_sample_frames: int = DEFAULT_MAX_SAMPLE_FRAMES,
     on_progress: ProgressFn | None = None,
+    start_seconds: float = 0.0,
+    end_seconds: float | None = None,
 ) -> list[Track]:
-    """Decode the full match at ``sample_hz`` and build centroid tracks.
+    """Decode match film at ``sample_hz`` and build centroid tracks.
 
-    Skipped frames use ``grab()`` so we do not fully decode them. A bad
-    packet is skipped instead of aborting the rest of the 90 minutes.
+    Optional ``start_seconds`` / ``end_seconds`` limit the window (Step C
+    re-pass). Skipped frames use ``grab()`` so we do not fully decode them.
     """
 
-    step = max(1, int(round(info.fps / max(sample_hz, 0.1))))
-    duration_samples = (
-        int(info.duration_seconds * max(sample_hz, 0.1)) if info.duration_seconds else 0
+    window_end = (
+        float(end_seconds)
+        if end_seconds is not None
+        else (info.duration_seconds or float(max_sample_frames) / max(sample_hz, 0.1))
     )
-    from_frames = info.frame_count // step if info.frame_count > 0 else 0
-    planned = from_frames or duration_samples or max_sample_frames
+    window_start = max(0.0, float(start_seconds))
+    window_end = max(window_start + 0.5, window_end)
+    window_duration = max(0.5, window_end - window_start)
+
+    step = max(1, int(round(info.fps / max(sample_hz, 0.1))))
+    planned = int(window_duration * max(sample_hz, 0.1)) + 2
     planned = max(1, min(planned, max_sample_frames))
     capture = cv2.VideoCapture(str(info.path))
     if not capture.isOpened():
@@ -1121,13 +1140,17 @@ def sample_and_track(
     tracks: list[Track] = []
     next_id = 1
     sampled = 0
-    frame_index = 0
     consecutive_fail = 0
     max_missing = max(12, int(sample_hz * 3))
-    match_minutes = max(info.duration_seconds / 60.0, planned / max(sample_hz, 0.1) / 60.0)
+    start_frame = int(round(window_start * max(info.fps, 0.01)))
+    end_frame = int(round(window_end * max(info.fps, 0.01)))
+    frame_index = start_frame
+    if start_frame > 0:
+        capture.set(cv2.CAP_PROP_POS_FRAMES, float(start_frame))
+    match_minutes = max(window_duration / 60.0, planned / max(sample_hz, 0.1) / 60.0)
     try:
-        while sampled < max_sample_frames:
-            if step > 1 and frame_index % step != 0:
+        while sampled < max_sample_frames and frame_index < end_frame:
+            if step > 1 and (frame_index - start_frame) % step != 0:
                 grabbed = capture.grab()
                 if not grabbed:
                     consecutive_fail += 1
@@ -1162,13 +1185,10 @@ def sample_and_track(
             sampled += 1
             frame_index += 1
             if sampled == 1 or sampled % 10 == 0 or sampled >= planned:
-                watched_min = sampled / max(sample_hz, 0.1) / 60.0
+                watched_min = (frame_index / max(info.fps, 0.01)) / 60.0
                 _emit(
                     on_progress,
-                    (
-                        f"Watching minute {watched_min:.1f} / {match_minutes:.1f} "
-                        f"· sampled {sampled}/{planned}"
-                    ),
+                    (f"Watching minute {watched_min:.1f} " f"· sampled {sampled}/{planned}"),
                     0.08 + 0.82 * (sampled / planned),
                 )
             if sampled >= planned:
@@ -1247,6 +1267,89 @@ def collect_from_video(
         home_kit_bgr=home_kit_bgr,
         away_kit_bgr=away_kit_bgr,
     )
+    duration_minutes = max(minutes, rundown_minutes_from_events(events), 0.1)
+    home_team_id = uuid5(AUTO_NAMESPACE, f"{match_id}-team-{home_name}")
+    coverage = build_coverage_report(
+        events,
+        duration_minutes,
+        home_team_ids={home_team_id},
+    )
+    # Step C: re-watch thin 5-minute windows (up to MAX_REPASS_ROUNDS) denser.
+    if info.duration_seconds >= BLOCK_SECONDS * 0.5:
+        for round_no in range(1, MAX_REPASS_ROUNDS + 1):
+            sparse = blocks_needing_repass(coverage)
+            if not sparse:
+                break
+            denser_hz = min(sample_hz * (1.0 + round_no), 16.0)
+            total_sparse = len(sparse)
+            for order, block_index in enumerate(sparse):
+                start_s = float(block_index * BLOCK_SECONDS)
+                end_s = start_s + float(BLOCK_SECONDS)
+                if start_s >= info.duration_seconds:
+                    continue
+                end_s = min(end_s, info.duration_seconds)
+                _emit(
+                    on_progress,
+                    (
+                        f"Re-pass round {round_no}/{MAX_REPASS_ROUNDS} · "
+                        f"block {block_index + 1}/"
+                        f"{expected_block_count(duration_minutes)} "
+                        f"({order + 1}/{total_sparse}) at {denser_hz:.0f} Hz"
+                    ),
+                    0.82
+                    + 0.12
+                    * (
+                        ((round_no - 1) + (order + 1) / max(total_sparse, 1))
+                        / max(MAX_REPASS_ROUNDS, 1)
+                    ),
+                )
+                try:
+                    block_tracks = sample_and_track(
+                        info,
+                        sample_hz=denser_hz,
+                        max_side=max_side,
+                        max_sample_frames=min(
+                            frame_budget,
+                            int(BLOCK_SECONDS * denser_hz) + 16,
+                        ),
+                        start_seconds=start_s,
+                        end_seconds=end_s,
+                    )
+                    block_events, block_roster = events_from_tracks(
+                        block_tracks,
+                        fps=info.fps,
+                        match_id=match_id,
+                        team_id=team_id,
+                        clip_url=clip_url,
+                        home_name=home_name,
+                        away_name=away_name,
+                        home_kit_bgr=home_kit_bgr,
+                        away_kit_bgr=away_kit_bgr,
+                    )
+                except VideoCollectError:
+                    continue
+                kept = filter_events_outside_block(events, block_index)
+                fresh = [
+                    event
+                    for event in block_events
+                    if block_index_for_clock(event_clock_seconds(event)) == block_index
+                ]
+                if not fresh:
+                    fresh = block_events
+                # Keep denser result only when it improves density.
+                old_n = len(events) - len(kept)
+                if len(fresh) >= old_n:
+                    events = kept + fresh
+                    roster_by_id = {entry.player_id: entry for entry in roster}
+                    for entry in block_roster:
+                        roster_by_id.setdefault(entry.player_id, entry)
+                    roster = list(roster_by_id.values())
+            coverage = build_coverage_report(
+                events,
+                duration_minutes,
+                home_team_ids={home_team_id},
+            )
+
     rundown = collect_game(
         GamePayload(
             match_id=match_id,
@@ -1262,7 +1365,6 @@ def collect_from_video(
     except OSError:
         pass
     try:
-        # Independent OnceSport Home/Away XMLs — same shape as StatMan, no Grokbot.
         write_oncesport_pair(
             rundown,
             info.path.parent,
@@ -1271,8 +1373,43 @@ def collect_from_video(
         )
     except OSError:
         pass
-    _emit(on_progress, "Rundown ready · Home/Away OnceSport XML written", 1.0)
+    try:
+        import json
+
+        coverage_path = info.path.with_name(f"{info.path.stem}.coverage.json")
+        coverage_path.write_text(
+            json.dumps(
+                {
+                    "block_seconds": BLOCK_SECONDS,
+                    "min_events": BLOCK_MIN_EVENTS,
+                    "blocks": coverage_as_dicts(coverage),
+                    "repass_blocks": [row.block_index + 1 for row in coverage if row.needs_repass],
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+    still_thin = sum(1 for row in coverage if row.needs_repass)
+    _emit(
+        on_progress,
+        (
+            f"Rundown ready · {len(coverage)}×5-min blocks · "
+            f"{still_thin} still thin after re-pass · Home/Away XML written"
+        ),
+        1.0,
+    )
     return rundown
+
+
+def rundown_minutes_from_events(events: Sequence[MatchEvent]) -> float:
+    """Best-effort match length from the last tagged clock."""
+
+    if not events:
+        return 0.0
+    last = max(((event.period - 1) * 45 + event.minute + event.second / 60.0) for event in events)
+    return float(last)
 
 
 def write_synthetic_match_clip(path: Path, *, frames: int = 24, fps: int = 8) -> Path:

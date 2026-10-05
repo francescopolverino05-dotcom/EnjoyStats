@@ -11,8 +11,9 @@ export default function ReviewPage() {
     <>
       <h1>Review</h1>
       <p className="lead">
-        Timeline of tagged events. Edit / delete / add controls hook up to the DB
-        API next — demo list is read-only.
+        The computer already tagged the match. Fix only wrong rows — do not
+        re-tag the whole game. Live edit/delete is on EnjoyStats → Match →
+        <strong> Review tags</strong>. Demo list below is read-only.
       </p>
       <section className="card" style={{ overflowX: "auto" }}>
         <table>
