@@ -8,6 +8,8 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-enjoystats}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-enjoystats}
       POSTGRES_DB: ${POSTGRES_DB:-enjoystats}
+    ports:
+      - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./storage/postgres_tables.sql:/docker-entrypoint-initdb.d/01-postgres_tables.sql:ro

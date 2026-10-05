@@ -1,0 +1,14 @@
+{
+  "name": "statman",
+  "private": true,
+  "packageManager": "pnpm@9.15.0",
+  "scripts": {
+    "dev": "pnpm --filter @statman/web dev",
+    "build": "pnpm -r build",
+    "test": "pnpm --filter @statman/core test",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
