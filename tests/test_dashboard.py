@@ -140,9 +140,10 @@ def test_dashboard_renders_analyse_landing(tmp_path, monkeypatch) -> None:
     assert any("Napoleon Bot" in label for label in buttons)
     subheaders = [str(element.value) for element in at.subheader]
     assert any("Analyse Stats" in header for header in subheaders)
-    assert any("OnceSport XML" in header for header in subheaders)
-    assert any("StatMan" in header for header in subheaders)
-    analyse = next(button for button in at.button if "Analyse Stats" in str(button.label))
+    expanders = [str(element.label) for element in at.expander]
+    assert any("OnceSport" in label or "XML" in label for label in expanders)
+    assert any("StatMan" in label or "Grok" in label for label in expanders)
+    analyse = next(button for button in at.button if str(button.label) == "Analyse Stats")
     analyse.click().run()
     assert not at.exception
     errors = [str(element.value) for element in at.error]
