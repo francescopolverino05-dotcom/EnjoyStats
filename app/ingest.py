@@ -267,6 +267,7 @@ def collect_from_film_path(
     away_kit_hex: str | None = None,
     home_team_name: str | None = None,
     away_team_name: str | None = None,
+    lineup_json: str | None = None,
 ) -> MatchRundown:
     """Collect tags from a film (both teams) or from an explicit XML path.
 
@@ -275,6 +276,8 @@ def collect_from_film_path(
     rundown is not replaced by a single-side analysis. Pass the XML path
     itself (or use Official two-team tag sheet) for official tags.
     """
+
+    from analytics.lineups import parse_lineup_json
 
     resolved = normalize_film_path(path)
     try:
@@ -292,6 +295,12 @@ def collect_from_film_path(
         raise ValueError("Choose a match film (mp4, mov, mkv, avi, m4v, webm) or a tag XML.")
     if not resolved.is_file():
         raise ValueError(f"Match film not found: {resolved}")
+    lineups = None
+    if lineup_json and lineup_json.strip():
+        try:
+            lineups = parse_lineup_json(lineup_json)
+        except (ValueError, TypeError) as exc:
+            raise ValueError(f"Line-up JSON is invalid ({exc}).") from exc
     try:
         return collect_from_video(
             resolved,
@@ -300,6 +309,7 @@ def collect_from_film_path(
             away_kit_hex=away_kit_hex,
             home_team_name=home_team_name,
             away_team_name=away_team_name,
+            lineups=lineups,
         )
     except VideoCollectError as exc:
         raise ValueError(str(exc)) from exc

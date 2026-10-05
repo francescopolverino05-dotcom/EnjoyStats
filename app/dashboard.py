@@ -99,6 +99,8 @@ from analytics.team_sheet import (
     team_sheet_rows,
     team_sheets_from_rundown,
 )
+from analytics.batch_collect import list_inbox_films, start_batch_collect, summarize_batch
+from analytics.lineups import example_lineup_csv, parse_lineup_bytes
 from analytics.match_tags import attacks_from_events, rundown_to_csv, rundown_to_xml
 from analytics.oncesport_export import export_both_oncesport_xml
 from analytics.review_edits import (
@@ -1528,6 +1530,61 @@ def render_analyse_landing(base_url: str) -> None:
         home_kit_hex = st.color_picker("Home kit colour", value="#1e3a8a", key="analyse_home_kit")
     with kit_cols[1]:
         away_kit_hex = st.color_picker("Away kit colour", value="#dc2626", key="analyse_away_kit")
+    with st.expander("Line-ups (names + shirt numbers) — strongly recommended", expanded=True):
+        st.caption(
+            "Upload a CSV or JSON with real players. "
+            "This is how tags get real names instead of “Home CM 4”. "
+            "Columns: side, jersey, name, position."
+        )
+        st.download_button(
+            "Download sample line-up CSV",
+            data=example_lineup_csv(),
+            file_name="lineup_sample.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key="dl_lineup_sample",
+        )
+        lineup_file = st.file_uploader(
+            "Upload Home+Away line-up (CSV or JSON)",
+            type=["csv", "json"],
+            key="analyse_lineup_file",
+        )
+        lineup_json_text = ""
+        if lineup_file is not None:
+            try:
+                parsed = parse_lineup_bytes(
+                    lineup_file.getvalue(),
+                    filename=getattr(lineup_file, "name", ""),
+                    home_team=home_team_name or "Home",
+                    away_team=away_team_name or "Away",
+                )
+                import json as _json
+
+                lineup_json_text = _json.dumps(
+                    {
+                        "home_team": parsed.home_team,
+                        "away_team": parsed.away_team,
+                        "home": [
+                            {
+                                "jersey": p.jersey,
+                                "name": p.name,
+                                "position": p.position,
+                            }
+                            for p in parsed.home
+                        ],
+                        "away": [
+                            {
+                                "jersey": p.jersey,
+                                "name": p.name,
+                                "position": p.position,
+                            }
+                            for p in parsed.away
+                        ],
+                    }
+                )
+                st.success(f"Line-up loaded · Home {len(parsed.home)} · Away {len(parsed.away)}")
+            except ValueError as exc:
+                st.error(str(exc))
     link = st.text_input(
         "Register a link",
         value="",
@@ -1568,6 +1625,44 @@ def render_analyse_landing(base_url: str) -> None:
         type="primary",
         key="analyse_film_primary",
     )
+    inbox_films = list_inbox_films()
+    batch = st.button(
+        f"Collect ALL inbox films ({len(inbox_films)}) — game week batch",
+        use_container_width=True,
+        key="analyse_batch_inbox",
+        disabled=not inbox_films,
+    )
+    if batch:
+        try:
+            batch_path = start_batch_collect(
+                inbox_films,
+                home_kit_hex=home_kit_hex,
+                away_kit_hex=away_kit_hex,
+                home_team_name=home_team_name or None,
+                away_team_name=away_team_name or None,
+                lineup_json=lineup_json_text or None,
+            )
+            st.session_state["batch_status_path"] = str(batch_path)
+            st.session_state[PERSIST_KEY] = (
+                f"Queued {len(inbox_films)} films for game-week collect. "
+                "Open Analysing to watch progress. "
+                f"Batch: {batch_path.name}"
+            )
+            _request_nav("Analysing")
+            st.rerun()
+        except ValueError as exc:
+            st.error(str(exc))
+    if st.session_state.get("batch_status_path"):
+        from pathlib import Path as _Path
+        from analytics.batch_collect import read_batch_status
+
+        batch_doc = read_batch_status(_Path(str(st.session_state["batch_status_path"])))
+        if batch_doc:
+            summary = summarize_batch(batch_doc)
+            st.info(
+                f"Batch {summary['state']}: {summary['done']}/{summary['total']} done · "
+                f"{summary['running']} running · {summary['error']} errors"
+            )
 
     with st.expander("Or import an existing OnceSport / Wyscout XML", expanded=False):
         st.caption(
@@ -1667,6 +1762,7 @@ def render_analyse_landing(base_url: str) -> None:
                 away_kit_hex=away_kit_hex,
                 home_team_name=home_team_name or None,
                 away_team_name=away_team_name or None,
+                lineup_json=lineup_json_text or None,
             )
             finish()
             st.session_state[RUNDOWN_KEY] = rundown_to_json(rundown)
@@ -1684,6 +1780,7 @@ def render_analyse_landing(base_url: str) -> None:
                 away_kit_hex=away_kit_hex,
                 home_team_name=home_team_name or None,
                 away_team_name=away_team_name or None,
+                lineup_json=lineup_json_text or None,
             )
             st.session_state[JOB_KEY] = str(status_path)
             st.session_state.pop(RUNDOWN_KEY, None)

@@ -4,46 +4,42 @@ Football match auto-tagger and Once Sport Analyser exporter.
 
 **Collect in-house** (no Grokbot): film → smart watch → 5-min re-pass → Review → Home/Away XML.
 
-### How collect works (simple)
-1. **Watch** the film (YOLO person finder when installed, else HOG + pitch blobs; kit colours)
-2. Split into **5-minute chunks**; thin chunks (< 30 tags) are watched again (up to 2 denser rounds)
-3. Open **Review tags** — fix only wrong rows
-4. Download Home.xml / Away.xml with your exact OnceSport buttons
+## Tomorrow night — game week batch (simple)
+
+1. Drop every match MP4 into the **inbox** folder  
+2. Upload the **line-up CSV** (names + shirt numbers)  
+3. Set Home / Away **kit colours**  
+4. Click **Collect ALL inbox films**  
+5. When a match finishes → **Review tags** (fix only wrong rows) → download Home.xml / Away.xml  
+
+### How collect works
+1. **Watch** (YOLO people finder + kit colours + jersey OCR when readable)
+2. Use your **line-ups** for real player names
+3. Split into **5-minute chunks**; thin chunks get denser re-pass
+4. **Review tags** — fix only mistakes
+5. Export OnceSport Home/Away XMLs
 
 ### Accuracy (honest)
-Broadcast film alone cannot be 100% perfect. The path to board-ready is:
-**dense computer watch + re-pass + human Review of mistakes**.  
-Review is how you push accuracy to the top before public release.
+Computer watch + line-ups + Review is how you get board-ready sheets.  
+Always upload line-ups before a game-week batch.
+
+## Quick start
+
+```bash
+pip install -r requirements.txt
+# system package: tesseract-ocr (for shirt numbers)
+streamlit run app/dashboard.py
+```
 
 ## Monorepo
 
 | Path | Role |
 |------|------|
-| `apps/web` | Next.js dark UI (setup, progress, review, export, stats) |
-| `packages/core` | Types, stats engine, xG estimate, OnceSport XML codec |
-| `packages/db` | Drizzle schema (SQLite locally, Postgres-ready) |
-| `services/tagger` | Block tagging worker (coverage + re-pass) |
+| `analytics/lineups.py` | CSV/JSON line-up import |
+| `analytics/jersey_ocr.py` | Shirt-number OCR (Tesseract) |
+| `analytics/batch_collect.py` | Queue all inbox films |
 | `analytics/smart_detect.py` | YOLO / HOG people finder |
-| `analytics/block_coverage.py` | 5-minute coverage + re-pass flags |
-| `analytics/review_edits.py` | Apply Review fixes before export |
+| `analytics/block_coverage.py` | 5-minute coverage + re-pass |
+| `analytics/review_edits.py` | Review fixes before export |
 | `analytics/oncesport_export.py` | Home/Away OnceSport XML |
-| `analytics/video_auto_collect.py` | Full-match film → events → XML |
-
-## Quick start (EnjoyStats collect)
-
-```bash
-pip install -r requirements.txt   # includes ultralytics (YOLO)
-streamlit run app/dashboard.py
-```
-
-1. Set Home / Away kit colours
-2. Upload match MP4 → **Analyse Stats**
-3. Open match → **Review tags** → fix wrong rows → Apply
-4. Download Home / Away OnceSport XMLs
-
-## Environment
-
-Optional:
-
-- `STATMAN_BOT_URL` — external import only (not required)
-- `DATABASE_URL` — SQLite / Postgres for the TS app
+| `analytics/video_auto_collect.py` | Film → events → XML |

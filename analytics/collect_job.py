@@ -108,6 +108,7 @@ def run_collect_job(film: Path, status_path: Path) -> MatchRundown:
     away_kit = str(prior.get("away_kit_hex") or "").strip() or None
     home_name = str(prior.get("home_team_name") or "").strip() or None
     away_name = str(prior.get("away_team_name") or "").strip() or None
+    lineup_json = str(prior.get("lineup_json") or "").strip() or None
 
     status: dict[str, Any] = {
         "job_id": status_path.stem.replace(".status", "") if status_path.stem else uuid4().hex[:12],
@@ -122,6 +123,7 @@ def run_collect_job(film: Path, status_path: Path) -> MatchRundown:
         "away_kit_hex": away_kit or "",
         "home_team_name": home_name or "",
         "away_team_name": away_name or "",
+        "lineup_json": lineup_json or "",
         "started_at": str(prior.get("started_at") or _now()),
         "updated_at": _now(),
     }
@@ -142,6 +144,7 @@ def run_collect_job(film: Path, status_path: Path) -> MatchRundown:
             away_kit_hex=away_kit,
             home_team_name=home_name,
             away_team_name=away_name,
+            lineup_json=lineup_json,
         )
     except (ValueError, OSError) as exc:
         status["state"] = "error"
@@ -174,6 +177,7 @@ def start_collect_job(
     away_kit_hex: str | None = None,
     home_team_name: str | None = None,
     away_team_name: str | None = None,
+    lineup_json: str | None = None,
 ) -> Path:
     """Spawn a detached process that collects ``film``. Returns the status path."""
 
@@ -198,6 +202,7 @@ def start_collect_job(
             "away_kit_hex": (away_kit_hex or "").strip(),
             "home_team_name": (home_team_name or "").strip(),
             "away_team_name": (away_team_name or "").strip(),
+            "lineup_json": (lineup_json or "").strip(),
             "started_at": _now(),
             "updated_at": _now(),
         },
