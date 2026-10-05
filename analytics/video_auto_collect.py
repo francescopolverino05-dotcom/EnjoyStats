@@ -35,6 +35,7 @@ import numpy as np
 
 from analytics.game_ingest import GamePayload, MatchRundown, PlayerRosterEntry, collect_game
 from analytics.match_tags import infer_team_names, write_sidecar_xml
+from analytics.oncesport_export import write_oncesport_pair
 from data_models.events import EventType, MatchEvent, ShotOutcome
 
 AUTO_NAMESPACE: UUID = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
@@ -1207,7 +1208,17 @@ def collect_from_video(
         write_sidecar_xml(rundown, info.path)
     except OSError:
         pass
-    _emit(on_progress, "Rundown ready", 1.0)
+    try:
+        # Independent OnceSport Home/Away XMLs — same shape as StatMan, no Grokbot.
+        write_oncesport_pair(
+            rundown,
+            info.path.parent,
+            stem=info.path.stem,
+            video_path=str(info.path),
+        )
+    except OSError:
+        pass
+    _emit(on_progress, "Rundown ready · Home/Away OnceSport XML written", 1.0)
     return rundown
 
 
