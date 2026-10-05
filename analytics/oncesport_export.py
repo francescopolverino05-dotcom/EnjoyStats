@@ -61,7 +61,24 @@ SHARED_BUTTONS: tuple[str, ...] = ("Inizio tempo", "Fine tempo", "Sostituzione")
 
 
 def _team_ids(rundown: MatchRundown) -> tuple[UUID | None, UUID | None]:
-    """Infer (home, away) team UUIDs from profiles then events."""
+    """Infer (home, away) team UUIDs from names, then profile/event order."""
+
+    home_name = (rundown.summary.home_team_name or "Home").strip().lower()
+    away_name = (rundown.summary.away_team_name or "Away").strip().lower()
+    by_name: dict[UUID, str] = {}
+    for profile in rundown.players:
+        label = (profile.player_name or "").strip().lower()
+        if profile.team_id in by_name:
+            continue
+        if label.startswith(home_name):
+            by_name[profile.team_id] = "home"
+        elif label.startswith(away_name):
+            by_name[profile.team_id] = "away"
+
+    home = next((tid for tid, side in by_name.items() if side == "home"), None)
+    away = next((tid for tid, side in by_name.items() if side == "away"), None)
+    if home is not None and away is not None:
+        return home, away
 
     order: list[UUID] = []
     for profile in rundown.players:
@@ -70,8 +87,10 @@ def _team_ids(rundown: MatchRundown) -> tuple[UUID | None, UUID | None]:
     for event in rundown.events:
         if event.team_id not in order:
             order.append(event.team_id)
-    home = order[0] if order else None
-    away = order[1] if len(order) > 1 else None
+    if home is None and order:
+        home = order[0]
+    if away is None and len(order) > 1:
+        away = next((tid for tid in order if tid != home), None)
     return home, away
 
 
