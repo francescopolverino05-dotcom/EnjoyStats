@@ -46,6 +46,7 @@ from analytics.block_coverage import (
     filter_events_outside_block,
 )
 from analytics.game_ingest import GamePayload, MatchRundown, PlayerRosterEntry, collect_game
+from analytics.lineups import MatchLineups, LineupPlayer
 from analytics.match_tags import infer_team_names, write_sidecar_xml
 from analytics.oncesport_export import write_oncesport_pair
 from analytics.smart_detect import (
@@ -305,6 +306,7 @@ class Detection:
     area: float
     kind: str
     bgr: tuple[float, float, float] = (0.0, 0.0, 0.0)
+    jersey: int | None = None
 
 
 @dataclass(slots=True)
@@ -321,6 +323,8 @@ class Track:
     missing: int = 0
     bgr: tuple[float, float, float] = (0.0, 0.0, 0.0)
     team: int = 0
+    jersey: int | None = None
+    jersey_votes: list[int] = field(default_factory=list)
 
 
 def probe_video(path: Path) -> VideoInfo:
@@ -435,7 +439,17 @@ def detect_objects(frame: np.ndarray) -> list[Detection]:
     """Find players/ball — smart HOG/YOLO first, pitch-blob fallback."""
 
     smart = detect_objects_smart(frame, blob_fallback=_detect_objects_blob)
-    return [Detection(x=hit.x, y=hit.y, area=hit.area, kind=hit.kind, bgr=hit.bgr) for hit in smart]
+    return [
+        Detection(
+            x=hit.x,
+            y=hit.y,
+            area=hit.area,
+            kind=hit.kind,
+            bgr=hit.bgr,
+            jersey=hit.jersey,
+        )
+        for hit in smart
+    ]
 
 
 def _detect_objects_blob(frame: np.ndarray) -> list[Detection]:
@@ -522,6 +536,11 @@ def _match_tracks(
         track.last_y = detection.y
         track.missing = 0
         track.bgr = detection.bgr
+        if detection.jersey is not None:
+            track.jersey_votes.append(detection.jersey)
+            # Majority vote keeps a stable shirt number.
+            votes = track.jersey_votes[-12:]
+            track.jersey = max(set(votes), key=votes.count)
     for detection in unused:
         tracks.append(
             Track(
@@ -534,6 +553,8 @@ def _match_tracks(
                 last_y=detection.y,
                 missing=0,
                 bgr=detection.bgr,
+                jersey=detection.jersey,
+                jersey_votes=[detection.jersey] if detection.jersey is not None else [],
             )
         )
         next_id += 1
@@ -712,6 +733,8 @@ def _clone_track(track: Track) -> Track:
         missing=track.missing,
         bgr=track.bgr,
         team=track.team,
+        jersey=track.jersey,
+        jersey_votes=list(track.jersey_votes),
     )
 
 
@@ -753,6 +776,10 @@ def stitch_tracks(
         best.last_x = track.last_x
         best.last_y = track.last_y
         best.bgr = track.bgr
+        if track.jersey is not None:
+            best.jersey_votes.extend(track.jersey_votes or [track.jersey])
+            votes = best.jersey_votes[-12:]
+            best.jersey = max(set(votes), key=votes.count)
     return identities
 
 
@@ -781,6 +808,92 @@ def _same_actor(
     return math.hypot(a[0] - b[0], a[1] - b[1]) <= 10.0
 
 
+def _position_from_depth(depth: float) -> str:
+    if depth < 20:
+        return "GK"
+    if depth < 40:
+        return "CB"
+    if depth < 66:
+        return "CM"
+    return "ST"
+
+
+def _assign_lineup_roster(
+    players: list[Track],
+    *,
+    match_id: UUID,
+    team_ids: tuple[UUID, UUID],
+    home_name: str,
+    away_name: str,
+    goal_x: tuple[float, float],
+    lineups: MatchLineups | None,
+) -> tuple[list[PlayerRosterEntry], dict[int, UUID]]:
+    """Build roster from OCR jersey + line-up sheet, else invented labels."""
+
+    roster: list[PlayerRosterEntry] = []
+    player_ids: dict[int, UUID] = {}
+    used: dict[int, set[int]] = {0: set(), 1: set()}
+
+    def _claim_lineup(
+        side: str, team: int, preferred_pos: str, jersey_hint: int | None
+    ) -> LineupPlayer | None:
+        if lineups is None:
+            return None
+        sheet = lineups.for_side(side)
+        if jersey_hint is not None:
+            hit = lineups.by_jersey(side, jersey_hint)
+            if hit is not None and hit.jersey not in used[team]:
+                used[team].add(hit.jersey)
+                return hit
+        # Prefer matching position, then first unused.
+        for player in sheet:
+            if player.jersey in used[team]:
+                continue
+            if player.position and player.position == preferred_pos:
+                used[team].add(player.jersey)
+                return player
+        for player in sheet:
+            if player.jersey not in used[team]:
+                used[team].add(player.jersey)
+                return player
+        return None
+
+    fallback_jersey = {0: 1, 1: 1}
+    for track in players:
+        mean_x = sum(track.xs) / len(track.xs)
+        attack_x = goal_x[track.team]
+        depth = mean_x if attack_x >= 50 else 100.0 - mean_x
+        position = _position_from_depth(depth)
+        side = "home" if track.team == 0 else "away"
+        team_name = home_name if track.team == 0 else away_name
+        claimed = _claim_lineup(side, track.team, position, track.jersey)
+        if claimed is not None:
+            jersey = claimed.jersey
+            name = claimed.name
+            position = claimed.position or position
+        else:
+            jersey = (
+                track.jersey if track.jersey is not None else min(fallback_jersey[track.team], 99)
+            )
+            fallback_jersey[track.team] = max(fallback_jersey[track.team], jersey) + 1
+            while jersey in used[track.team] and jersey < 99:
+                jersey += 1
+            used[track.team].add(jersey)
+            name = f"{team_name} {position} {jersey}"
+        player_id = uuid5(AUTO_NAMESPACE, f"{match_id}-player-{track.track_id}")
+        player_ids[track.track_id] = player_id
+        roster.append(
+            PlayerRosterEntry(
+                player_id=player_id,
+                team_id=team_ids[track.team],
+                jersey_number=jersey,
+                player_name=name,
+                position=position,
+            )
+        )
+    return roster, player_ids
+
+
 def events_from_tracks(
     tracks: Sequence[Track],
     *,
@@ -792,6 +905,7 @@ def events_from_tracks(
     away_name: str = "Away",
     home_kit_bgr: tuple[float, float, float] | None = None,
     away_kit_bgr: tuple[float, float, float] | None = None,
+    lineups: MatchLineups | None = None,
 ) -> tuple[list[MatchEvent], list[PlayerRosterEntry]]:
     """Turn tracked play into a full-match tag sheet plus a two-team roster.
 
@@ -841,33 +955,15 @@ def events_from_tracks(
             frame: (x, y) for frame, x, y in zip(track.frames, track.xs, track.ys, strict=True)
         }
 
-    roster: list[PlayerRosterEntry] = []
-    player_ids: dict[int, UUID] = {}
-    jersey_by_team = {0: 1, 1: 1}
-    for track in players:
-        mean_x = sum(track.xs) / len(track.xs)
-        attack_x = goal_x[track.team]
-        depth = mean_x if attack_x >= 50 else 100.0 - mean_x
-        if depth < 34:
-            position = "CB"
-        elif depth < 66:
-            position = "CM"
-        else:
-            position = "ST"
-        jersey = min(jersey_by_team[track.team], 99)
-        jersey_by_team[track.team] += 1
-        team_name = home_name if track.team == 0 else away_name
-        player_id = uuid5(AUTO_NAMESPACE, f"{match_id}-player-{track.track_id}")
-        player_ids[track.track_id] = player_id
-        roster.append(
-            PlayerRosterEntry(
-                player_id=player_id,
-                team_id=team_ids[track.team],
-                jersey_number=jersey,
-                player_name=f"{team_name} {position} {jersey}",
-                position=position,
-            )
-        )
+    roster, player_ids = _assign_lineup_roster(
+        players,
+        match_id=match_id,
+        team_ids=team_ids,
+        home_name=home_name,
+        away_name=away_name,
+        goal_x=goal_x,
+        lineups=lineups,
+    )
 
     frame_indexes = sorted({frame for track in players for frame in track.frames})
     if ball is not None:
@@ -1043,7 +1139,11 @@ def events_from_tracks(
                     kind = EventType.THROW_IN
                 elif wide and in_box:
                     kind = EventType.CROSS
-                elif travel >= 25.0:
+                elif travel >= 30.0:
+                    # Long diagonal / switch — OnceSport "Lanci lunghi".
+                    kind = EventType.PASS
+                    payload["is_progressive"] = True
+                elif travel >= 18.0 and toward_goal:
                     kind = EventType.PASS
                     payload["is_progressive"] = True
                 else:
@@ -1209,20 +1309,21 @@ def collect_from_video(
     away_kit_hex: str | None = None,
     home_team_name: str | None = None,
     away_team_name: str | None = None,
+    lineups: MatchLineups | None = None,
 ) -> MatchRundown:
     """Watch a match film and return the collected four-pillar rundown.
 
     Args:
         path: Local path to an mp4/mov/mkv/avi file, at most 5 GB.
-        sample_hz: Decoded frames per second of match time (default 5 Hz
-            so a 90-minute game is sampled ~27,000 times).
+        sample_hz: Decoded frames per second of match time.
         max_side: Longest resized edge in pixels.
-        max_sample_frames: Safety cap (default 48,000 ≈ 160 minutes at 5 Hz).
+        max_sample_frames: Safety cap.
         on_progress: Optional ``(label, fraction)`` callback for a loading bar.
         home_kit_hex: Optional ``#RRGGBB`` home shirt colour for team split.
         away_kit_hex: Optional ``#RRGGBB`` away shirt colour for team split.
         home_team_name: Optional home display name (else inferred from filename).
         away_team_name: Optional away display name.
+        lineups: Optional real Home/Away sheets (names + shirt numbers).
     """
 
     home_kit_bgr = parse_kit_hex(home_kit_hex)
@@ -1239,6 +1340,7 @@ def collect_from_video(
         (
             f"Opened {info.path.name} · {minutes:.1f} min · {size_gb:.2f} GB · "
             f"watching with {detector_label()} at {sample_hz:.0f} Hz"
+            + (" · line-ups loaded" if lineups is not None else "")
         ),
         0.06,
     )
@@ -1254,8 +1356,12 @@ def collect_from_video(
     team_id = uuid5(AUTO_NAMESPACE, f"team:{match_id}")
     clip_url = info.path.as_uri()
     inferred_home, inferred_away = infer_team_names(info.path.name)
-    home_name = (home_team_name or "").strip() or inferred_home
-    away_name = (away_team_name or "").strip() or inferred_away
+    if lineups is not None:
+        home_name = (home_team_name or "").strip() or lineups.home_team or inferred_home
+        away_name = (away_team_name or "").strip() or lineups.away_team or inferred_away
+    else:
+        home_name = (home_team_name or "").strip() or inferred_home
+        away_name = (away_team_name or "").strip() or inferred_away
     events, roster = events_from_tracks(
         tracks,
         fps=info.fps,
@@ -1266,6 +1372,7 @@ def collect_from_video(
         away_name=away_name,
         home_kit_bgr=home_kit_bgr,
         away_kit_bgr=away_kit_bgr,
+        lineups=lineups,
     )
     duration_minutes = max(minutes, rundown_minutes_from_events(events), 0.1)
     home_team_id = uuid5(AUTO_NAMESPACE, f"{match_id}-team-{home_name}")
@@ -1325,6 +1432,7 @@ def collect_from_video(
                         away_name=away_name,
                         home_kit_bgr=home_kit_bgr,
                         away_kit_bgr=away_kit_bgr,
+                        lineups=lineups,
                     )
                 except VideoCollectError:
                     continue

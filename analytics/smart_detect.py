@@ -21,6 +21,26 @@ _YOLO_PERSON = 0
 _YOLO_SPORTS_BALL = 32
 
 
+from analytics.jersey_ocr import read_jersey_number
+
+# OCR is slow — only try a few crops per process lifetime window.
+_OCR_BUDGET = {"left": 40}
+
+
+def _sparse_jersey(frame: np.ndarray, x1: int, y1: int, x2: int, y2: int) -> int | None:
+    """Read a shirt number occasionally (not every detection)."""
+
+    if _OCR_BUDGET["left"] <= 0:
+        return None
+    if (y2 - y1) < 32 or (x2 - x1) < 16:
+        return None
+    # Sample ~1 in 8 player boxes.
+    if hash((x1, y1, x2, y2)) % 8 != 0:
+        return None
+    _OCR_BUDGET["left"] -= 1
+    return read_jersey_number(frame[y1:y2, x1:x2])
+
+
 @dataclass(frozen=True, slots=True)
 class SmartDetection:
     """One body or ball on a frame, in 0–100 pitch coords."""
@@ -31,6 +51,7 @@ class SmartDetection:
     kind: str  # "player" | "ball"
     bgr: tuple[float, float, float]
     source: str = "blob"  # hog | yolo | blob
+    jersey: int | None = None
 
 
 def parse_kit_hex(raw: str | None) -> tuple[float, float, float] | None:
@@ -141,7 +162,10 @@ def detect_people_hog(frame: np.ndarray) -> list[SmartDetection]:
         x, y = _to_pitch(cx, cy, width, height)
         area = float(bw * bh)
         bgr = _mean_bgr_box(frame, int(bx), int(by), int(bx + bw), int(by + bh))
-        found.append(SmartDetection(x=x, y=y, area=area, kind="player", bgr=bgr, source="hog"))
+        jersey = _sparse_jersey(frame, int(bx), int(by), int(bx + bw), int(by + bh))
+        found.append(
+            SmartDetection(x=x, y=y, area=area, kind="player", bgr=bgr, source="hog", jersey=jersey)
+        )
     return found[:22]
 
 
@@ -191,7 +215,12 @@ def detect_people_yolo(frame: np.ndarray) -> list[SmartDetection]:
             area = float(max(1, (x2 - x1) * (y2 - y1)))
             kind = "ball" if cls_id == _YOLO_SPORTS_BALL else "player"
             bgr = _mean_bgr_box(frame, x1, y1, x2, y2)
-            found.append(SmartDetection(x=x, y=y, area=area, kind=kind, bgr=bgr, source="yolo"))
+            jersey = _sparse_jersey(frame, x1, y1, x2, y2) if kind == "player" else None
+            found.append(
+                SmartDetection(
+                    x=x, y=y, area=area, kind=kind, bgr=bgr, source="yolo", jersey=jersey
+                )
+            )
     players = [row for row in found if row.kind == "player"][:22]
     balls = [row for row in found if row.kind == "ball"]
     if balls:
@@ -241,6 +270,7 @@ def detect_objects_smart(
             kind=str(item.kind),
             bgr=tuple(float(v) for v in item.bgr),
             source="blob",
+            jersey=getattr(item, "jersey", None),
         )
         for item in blob_raw
     ]
