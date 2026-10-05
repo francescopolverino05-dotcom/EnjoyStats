@@ -12,7 +12,7 @@ import type {
 
 export const BLOCK_SECONDS = 5 * 60;
 /** Re-pass if a processed block has fewer than this many events total. */
-export const BLOCK_MIN_EVENTS = 8;
+export const BLOCK_MIN_EVENTS = 30;
 
 const TAGS = defaultTags as TagDefinition[];
 const TAG_KIND = new Map(TAGS.map((t) => [t.id, t.statKind]));

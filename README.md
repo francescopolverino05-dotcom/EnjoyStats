@@ -2,9 +2,18 @@
 
 Football match auto-tagger and Once Sport Analyser exporter.
 
-**Collect in-house** (no Grokbot required): upload a match film → Analyse Stats →
-download **Home** and **Away** OnceSport XMLs using your exact button labels
-(Passaggi, Duelli aeree, …).
+**Collect in-house** (no Grokbot): film → smart watch → 5-min re-pass → Review → Home/Away XML.
+
+### How collect works (simple)
+1. **Watch** the film (YOLO person finder when installed, else HOG + pitch blobs; kit colours)
+2. Split into **5-minute chunks**; thin chunks (< 30 tags) are watched again (up to 2 denser rounds)
+3. Open **Review tags** — fix only wrong rows
+4. Download Home.xml / Away.xml with your exact OnceSport buttons
+
+### Accuracy (honest)
+Broadcast film alone cannot be 100% perfect. The path to board-ready is:
+**dense computer watch + re-pass + human Review of mistakes**.  
+Review is how you push accuracy to the top before public release.
 
 ## Monorepo
 
@@ -14,43 +23,27 @@ download **Home** and **Away** OnceSport XMLs using your exact button labels
 | `packages/core` | Types, stats engine, xG estimate, OnceSport XML codec |
 | `packages/db` | Drizzle schema (SQLite locally, Postgres-ready) |
 | `services/tagger` | Block tagging worker (coverage + re-pass) |
-| `analytics/oncesport_export.py` | Independent Home/Away OnceSport XML from collected events |
-| `analytics/video_auto_collect.py` | Full-match film CV → events → rundown + OnceSport XMLs |
-
-Legacy Python EnjoyStats (`app/dashboard.py`) remains the live Analyse UI during migration.
+| `analytics/smart_detect.py` | YOLO / HOG people finder |
+| `analytics/block_coverage.py` | 5-minute coverage + re-pass flags |
+| `analytics/review_edits.py` | Apply Review fixes before export |
+| `analytics/oncesport_export.py` | Home/Away OnceSport XML |
+| `analytics/video_auto_collect.py` | Full-match film → events → XML |
 
 ## Quick start (EnjoyStats collect)
 
 ```bash
+pip install -r requirements.txt   # includes ultralytics (YOLO)
 streamlit run app/dashboard.py
 ```
 
-1. Drop or upload a match MP4
-2. Click **Analyse Stats**
-3. Download `{team}_Home.xml` / `{team}_Away.xml` — labels match your OnceSport panel exactly
-
-## Quick start (TypeScript UI)
-
-```bash
-pnpm install
-pnpm --filter @statman/core test
-pnpm dev
-```
-
-Open http://localhost:3000
-
-## Tag names
-
-Exact Once Sport button labels live in:
-- `packages/core/src/tags/default-tags.json` (TypeScript)
-- `analytics/oncesport_export.py` (Python film → XML)
-
-Never renamed on export.
+1. Set Home / Away kit colours
+2. Upload match MP4 → **Analyse Stats**
+3. Open match → **Review tags** → fix wrong rows → Apply
+4. Download Home / Away OnceSport XMLs
 
 ## Environment
 
-Optional (not required for collect):
+Optional:
 
-- `STATMAN_BOT_URL` — external Grok Bot link (import-only)
-- `STATMAN_WEBHOOK_URL` / `STATMAN_WEBHOOK_KEY` — optional external webhook
-- `DATABASE_URL` — SQLite file or Postgres DSN
+- `STATMAN_BOT_URL` — external import only (not required)
+- `DATABASE_URL` — SQLite / Postgres for the TS app

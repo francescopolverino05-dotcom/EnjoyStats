@@ -19,7 +19,8 @@ export interface TagBlockInput {
 }
 
 /**
- * Walk every 5-minute block in order. Empty/sparse blocks are flagged for re-pass.
+ * Walk every 5-minute block in order. Empty/sparse blocks are flagged and
+ * re-tagged once (Step C re-pass) before the final coverage report.
  */
 export async function runBlockPipeline(input: TagBlockInput): Promise<{
   events: MatchEvent[];
@@ -36,14 +37,39 @@ export async function runBlockPipeline(input: TagBlockInput): Promise<{
       events.push({ ...event, blockIndex, matchId: input.matchId });
     }
   }
-  const coverage = buildCoverageReport(events, input.durationMinutes).map((row) => ({
+
+  let coverage = buildCoverageReport(events, input.durationMinutes).map((row) => ({
     ...row,
     processed: true,
     needsRepass: row.homeEvents + row.awayEvents < BLOCK_MIN_EVENTS,
   }));
+  let repassBlocks = coverage.filter((b) => b.needsRepass).map((b) => b.blockIndex);
+
+  // Step C: watch sparse windows again and replace that block's events.
+  if (repassBlocks.length > 0) {
+    const kept = events.filter((event) => !repassBlocks.includes(event.blockIndex));
+    const refreshed: MatchEvent[] = [...kept];
+    for (const blockIndex of repassBlocks) {
+      const startSeconds = blockIndex * BLOCK_SECONDS;
+      const endSeconds = startSeconds + BLOCK_SECONDS;
+      const batch = await input.tagBlock(blockIndex, startSeconds, endSeconds);
+      for (const event of batch) {
+        refreshed.push({ ...event, blockIndex, matchId: input.matchId });
+      }
+    }
+    events.length = 0;
+    events.push(...refreshed);
+    coverage = buildCoverageReport(events, input.durationMinutes).map((row) => ({
+      ...row,
+      processed: true,
+      needsRepass: row.homeEvents + row.awayEvents < BLOCK_MIN_EVENTS,
+    }));
+    repassBlocks = coverage.filter((b) => b.needsRepass).map((b) => b.blockIndex);
+  }
+
   return {
     events,
     coverage,
-    repassBlocks: coverage.filter((b) => b.needsRepass).map((b) => b.blockIndex),
+    repassBlocks,
   };
 }

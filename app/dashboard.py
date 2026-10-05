@@ -101,6 +101,13 @@ from analytics.team_sheet import (
 )
 from analytics.match_tags import attacks_from_events, rundown_to_csv, rundown_to_xml
 from analytics.oncesport_export import export_both_oncesport_xml
+from analytics.review_edits import (
+    apply_review_edits,
+    coverage_rows_for_rundown,
+    event_type_choices,
+    player_label_map,
+    review_rows,
+)
 from config.pitch_config import (
     CENTRE_CIRCLE_RADIUS_M,
     FIFA_PITCH,
@@ -1488,9 +1495,10 @@ def render_analyse_landing(base_url: str) -> None:
     upload_dir = film_upload_dir()
     st.title("EnjoyStats")
     st.caption(
-        "Collect in-house: upload a match film → Analyse Stats → download "
-        "Home / Away OnceSport XMLs with your exact button labels. "
-        "No Grokbot required."
+        "Collect in-house: upload a match film → Analyse Stats → "
+        "Review tags (fix only wrong rows) → download Home / Away XMLs. "
+        "No Grokbot required. Film watch aims for dense OnceSport-level "
+        "tagging; Review is how you push accuracy to board-ready."
     )
     if st.button(
         "Load sample · Napoleon Bot vs 80s Jeans",
@@ -1777,16 +1785,75 @@ def render_individual_section(rundown: MatchRundown) -> None:
     render_dashboard(load, collective=False, show_chrome=False)
 
 
+def render_review_section(rundown: MatchRundown) -> None:
+    """Step D: fix only wrong tags, then export uses the cleaned sheet."""
+
+    st.subheader("Review tags")
+    st.caption(
+        "The computer already tagged the match. "
+        "Only change rows that look wrong — untick Keep to delete, "
+        "or change Tag / Player. Then press Apply. "
+        "You do **not** re-tag the whole game by hand."
+    )
+    labels = list(player_label_map(rundown).keys()) or ["—"]
+    tag_choices = event_type_choices()
+    base_rows = review_rows(rundown)
+    edited = st.data_editor(
+        base_rows,
+        hide_index=True,
+        width="stretch",
+        num_rows="fixed",
+        column_config={
+            "keep": st.column_config.CheckboxColumn("Keep", default=True),
+            "event_id": None,
+            "clock": st.column_config.TextColumn("Clock", disabled=True),
+            "tag": st.column_config.SelectboxColumn("Tag", options=tag_choices),
+            "player": st.column_config.SelectboxColumn("Player", options=labels),
+            "x": st.column_config.NumberColumn("X", disabled=True),
+            "y": st.column_config.NumberColumn("Y", disabled=True),
+            "goal": st.column_config.CheckboxColumn("Goal", disabled=True),
+        },
+        key="review_tags_editor",
+    )
+    apply = st.button("Apply review fixes", type="primary", use_container_width=True)
+    if apply:
+        try:
+            updated = apply_review_edits(rundown, edited)
+        except ValueError as exc:
+            st.error(str(exc))
+            return
+        st.session_state[RUNDOWN_KEY] = rundown_to_json(updated)
+        history_msg = _remember_collection(updated)
+        st.session_state[PERSIST_KEY] = f"Review saved · {history_msg}"
+        st.success(
+            f"Saved {updated.summary.event_count} tags "
+            f"(was {rundown.summary.event_count}). Export buttons use this sheet."
+        )
+        st.rerun()
+
+    st.subheader("5-minute coverage")
+    st.caption(
+        "Each row is a 5-minute chunk. "
+        "“re-pass” means the computer already watched that chunk twice "
+        "because it looked thin."
+    )
+    st.dataframe(coverage_rows_for_rundown(rundown), hide_index=True, width="stretch")
+
+
 def render_collective_rundown(rundown: MatchRundown) -> None:
-    """Match page: summary, then Collective / Individual views."""
+    """Match page: summary, then Collective / Individual / Review views."""
 
     render_match_summary(rundown)
     render_pdf_download(rundown, key="match_pdf_report")
-    collective_tab, individual_tab = st.tabs(["Collective", "Individual"])
+    collective_tab, individual_tab, review_tab = st.tabs(
+        ["Collective", "Individual", "Review tags"]
+    )
     with collective_tab:
         render_collective_section(rundown)
     with individual_tab:
         render_individual_section(rundown)
+    with review_tab:
+        render_review_section(rundown)
 
 
 def render_history() -> None:
