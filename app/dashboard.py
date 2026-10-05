@@ -83,6 +83,13 @@ from analytics.collection_history import (
     load_history_rundown,
     save_rundown_to_history,
 )
+from analytics.statman import (
+    statman_bot_url,
+    statman_webhook_key,
+    statman_webhook_url,
+    trigger_statman_analyse,
+    webhook_configured,
+)
 from analytics.game_ingest import MatchRundown, rundown_from_mapping, rundown_to_json
 from analytics.match_report_pdf import build_match_report_pdf
 from analytics.team_sheet import (
@@ -1364,6 +1371,76 @@ def render_job_progress(status: dict[str, object]) -> None:
         st.caption(f"Film: `{Path(film).name}`")
 
 
+def render_statman_panel() -> None:
+    """Bridge to StatMan (Grok Bot) — high-accuracy tags → EnjoyStats collect."""
+
+    bot_url = statman_bot_url()
+    st.subheader("StatMan · Grok Bot")
+    st.caption(
+        "StatMan tags football matches from video (~full OnceSport density), "
+        "computes team/player stats (including PPDA and xG), and returns "
+        "OnceSport XMLs. EnjoyStats collects those XMLs into History, "
+        "Collective / Individual sheets, and PDF reports."
+    )
+    st.link_button("Open StatMan", bot_url, use_container_width=True)
+    st.markdown(
+        "1. Send StatMan the match film (or ask it to tag a game).\n"
+        "2. Download the **OnceSport analysis XML(s)** it returns.\n"
+        "3. Upload them under **OnceSport XML (from StatMan)** below and collect.\n\n"
+        "Optional: ask StatMan to add a **webhook routine**, then paste the "
+        "URL + key here so EnjoyStats can start a run with one click."
+    )
+    with st.expander("StatMan webhook (optional)", expanded=False):
+        default_url = str(st.session_state.get("statman_webhook_url") or statman_webhook_url())
+        default_key = str(st.session_state.get("statman_webhook_key") or statman_webhook_key())
+        hook_url = st.text_input(
+            "Webhook URL",
+            value=default_url,
+            placeholder="https://… (from StatMan routine → Webhook → POST to)",
+            key="statman_webhook_url_input",
+        ).strip()
+        hook_key = st.text_input(
+            "Webhook key",
+            value=default_key,
+            type="password",
+            placeholder="Bearer key from the routine",
+            key="statman_webhook_key_input",
+        ).strip()
+        film_hint = st.text_input(
+            "Film path or URL for StatMan",
+            value="",
+            placeholder="https://… or /path/to/match.mp4",
+            key="statman_film_hint",
+        ).strip()
+        home_hint = st.text_input("Home team (optional)", value="", key="statman_home_hint").strip()
+        away_hint = st.text_input("Away team (optional)", value="", key="statman_away_hint").strip()
+        if st.button(
+            "Ask StatMan to analyse",
+            use_container_width=True,
+            key="statman_trigger",
+            disabled=not webhook_configured(url=hook_url, key=hook_key),
+        ):
+            try:
+                st.session_state["statman_webhook_url"] = hook_url
+                st.session_state["statman_webhook_key"] = hook_key
+                result = trigger_statman_analyse(
+                    webhook_url=hook_url,
+                    webhook_key=hook_key,
+                    film=film_hint,
+                    home_team=home_hint,
+                    away_team=away_hint,
+                )
+                st.success(str(result["message"]))
+            except ValueError as exc:
+                st.error(str(exc))
+        if not webhook_configured(url=hook_url, key=hook_key):
+            st.caption(
+                "No webhook yet — open StatMan and ask: "
+                "“Add a webhook routine that tags a match from the JSON body "
+                "and returns OnceSport XMLs.” Then paste POST to + key here."
+            )
+
+
 def render_film_uploader_panel(base_url: str) -> None:
     """Chunked FastAPI uploader for large films on any device."""
 
@@ -1392,9 +1469,8 @@ def render_analyse_landing(base_url: str) -> None:
     upload_dir = film_upload_dir()
     st.title("EnjoyStats")
     st.caption(
-        "Analyse Stats from a match film, or collect OnceSport XML for the "
-        "team you analyse. After collect you get collective team boards and "
-        "individual player sheets."
+        "Preferred: StatMan (Grok Bot) tags the match and you collect its "
+        "OnceSport XMLs here. Film Analyse Stats is only a draft fallback."
     )
     if st.button(
         "Load sample · Napoleon Bot vs 80s Jeans",
@@ -1407,10 +1483,13 @@ def render_analyse_landing(base_url: str) -> None:
         else:
             st.rerun()
 
+    render_statman_panel()
+
     st.subheader("Analyse Stats")
     st.caption(
         f"Upload the match MP4 (up to {video_limit_label()}). "
-        "Film is a both-team draft — not an official OnceSport scoresheet."
+        "Film is a both-team draft — not an official OnceSport scoresheet. "
+        "Prefer StatMan XML above when you need accurate tags."
     )
     link = st.text_input(
         "Register a link",
@@ -1446,10 +1525,11 @@ def render_analyse_landing(base_url: str) -> None:
     ):
         render_film_uploader_panel(base_url)
 
-    st.subheader("OnceSport XML")
+    st.subheader("OnceSport XML (from StatMan)")
     st.caption(
-        "Your team's analysis XML is enough for collective + individual "
-        "sheets on that side. Away XML is optional for a full two-team board."
+        "Drop the Home / Away analysis XMLs StatMan returns. "
+        "Your team's XML alone is enough for that side; Away XML completes "
+        "the two-team board."
     )
     home_xml = st.file_uploader(
         "Home / analysed-team XML",
@@ -1461,7 +1541,12 @@ def render_analyse_landing(base_url: str) -> None:
         type=["xml"],
         key="official_away_xml",
     )
-    collect_xml = st.button("Collect XML tags", use_container_width=True, key="collect_xml")
+    collect_xml = st.button(
+        "Collect StatMan / OnceSport XML",
+        use_container_width=True,
+        key="collect_xml",
+        type="primary",
+    )
     if collect_xml:
         try:
             upload_dir = film_upload_dir()
@@ -1494,7 +1579,7 @@ def render_analyse_landing(base_url: str) -> None:
         except ValueError as exc:
             st.error(str(exc))
 
-    analyse = st.button("Analyse Stats", type="primary", use_container_width=True)
+    analyse = st.button("Analyse Stats (film draft)", use_container_width=True)
     if not analyse:
         return
     try:
