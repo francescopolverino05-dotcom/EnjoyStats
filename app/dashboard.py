@@ -83,6 +83,7 @@ from analytics.collection_history import (
     load_history_rundown,
     save_rundown_to_history,
 )
+from analytics.smart_detect import detector_label
 from analytics.statman import (
     statman_bot_url,
     statman_webhook_key,
@@ -1505,9 +1506,20 @@ def render_analyse_landing(base_url: str) -> None:
     st.subheader("Analyse Stats")
     st.caption(
         f"Upload the match MP4 (up to {video_limit_label()}). "
-        "EnjoyStats watches the full film, tags play onto your OnceSport "
-        "buttons (Passaggi, Tiri, Duelli aeree, …), and writes Home.xml + Away.xml."
+        f"Watcher: **{detector_label()}**. "
+        "Set kit colours so Home and Away stay separate. "
+        "Then download Home.xml + Away.xml with your OnceSport buttons."
     )
+    name_cols = st.columns(2)
+    with name_cols[0]:
+        home_team_name = st.text_input("Home team", value="Home", key="analyse_home_name").strip()
+    with name_cols[1]:
+        away_team_name = st.text_input("Away team", value="Away", key="analyse_away_name").strip()
+    kit_cols = st.columns(2)
+    with kit_cols[0]:
+        home_kit_hex = st.color_picker("Home kit colour", value="#1e3a8a", key="analyse_home_kit")
+    with kit_cols[1]:
+        away_kit_hex = st.color_picker("Away kit colour", value="#dc2626", key="analyse_away_kit")
     link = st.text_input(
         "Register a link",
         value="",
@@ -1640,7 +1652,14 @@ def render_analyse_landing(base_url: str) -> None:
             def _on_collect(label: str, fraction: float) -> None:
                 update(label, 0.36 + 0.64 * fraction)
 
-            rundown = collect_from_film_path(source_path, on_progress=_on_collect)
+            rundown = collect_from_film_path(
+                source_path,
+                on_progress=_on_collect,
+                home_kit_hex=home_kit_hex,
+                away_kit_hex=away_kit_hex,
+                home_team_name=home_team_name or None,
+                away_team_name=away_team_name or None,
+            )
             finish()
             st.session_state[RUNDOWN_KEY] = rundown_to_json(rundown)
             st.session_state.pop("analyse_cleared", None)
@@ -1651,7 +1670,13 @@ def render_analyse_landing(base_url: str) -> None:
             st.rerun()
         else:
             update("Starting background analyse…", 0.2)
-            status_path = start_collect_job(source)
+            status_path = start_collect_job(
+                source,
+                home_kit_hex=home_kit_hex,
+                away_kit_hex=away_kit_hex,
+                home_team_name=home_team_name or None,
+                away_team_name=away_team_name or None,
+            )
             st.session_state[JOB_KEY] = str(status_path)
             st.session_state.pop(RUNDOWN_KEY, None)
             st.session_state.pop("analyse_cleared", None)

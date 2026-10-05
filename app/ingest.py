@@ -263,6 +263,10 @@ def collect_from_film_path(
     path: str | Path,
     *,
     on_progress: ProgressFn | None = None,
+    home_kit_hex: str | None = None,
+    away_kit_hex: str | None = None,
+    home_team_name: str | None = None,
+    away_team_name: str | None = None,
 ) -> MatchRundown:
     """Collect tags from a film (both teams) or from an explicit XML path.
 
@@ -289,7 +293,14 @@ def collect_from_film_path(
     if not resolved.is_file():
         raise ValueError(f"Match film not found: {resolved}")
     try:
-        return collect_from_video(resolved, on_progress=on_progress)
+        return collect_from_video(
+            resolved,
+            on_progress=on_progress,
+            home_kit_hex=home_kit_hex,
+            away_kit_hex=away_kit_hex,
+            home_team_name=home_team_name,
+            away_team_name=away_team_name,
+        )
     except VideoCollectError as exc:
         raise ValueError(str(exc)) from exc
 

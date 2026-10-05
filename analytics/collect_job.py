@@ -103,6 +103,12 @@ def run_collect_job(film: Path, status_path: Path) -> MatchRundown:
 
     from app.ingest import collect_from_film_path
 
+    prior = read_job_status(status_path) or {}
+    home_kit = str(prior.get("home_kit_hex") or "").strip() or None
+    away_kit = str(prior.get("away_kit_hex") or "").strip() or None
+    home_name = str(prior.get("home_team_name") or "").strip() or None
+    away_name = str(prior.get("away_team_name") or "").strip() or None
+
     status: dict[str, Any] = {
         "job_id": status_path.stem.replace(".status", "") if status_path.stem else uuid4().hex[:12],
         "state": "running",
@@ -112,7 +118,11 @@ def run_collect_job(film: Path, status_path: Path) -> MatchRundown:
         "pid": os.getpid(),
         "error": "",
         "rundown_path": "",
-        "started_at": _now(),
+        "home_kit_hex": home_kit or "",
+        "away_kit_hex": away_kit or "",
+        "home_team_name": home_name or "",
+        "away_team_name": away_name or "",
+        "started_at": str(prior.get("started_at") or _now()),
         "updated_at": _now(),
     }
     _write_json(status_path, status)
@@ -125,7 +135,14 @@ def run_collect_job(film: Path, status_path: Path) -> MatchRundown:
         _write_json(status_path, status)
 
     try:
-        rundown = collect_from_film_path(film, on_progress=_progress)
+        rundown = collect_from_film_path(
+            film,
+            on_progress=_progress,
+            home_kit_hex=home_kit,
+            away_kit_hex=away_kit,
+            home_team_name=home_name,
+            away_team_name=away_name,
+        )
     except (ValueError, OSError) as exc:
         status["state"] = "error"
         status["error"] = str(exc)
@@ -150,7 +167,14 @@ def run_collect_job(film: Path, status_path: Path) -> MatchRundown:
     return rundown
 
 
-def start_collect_job(film: Path) -> Path:
+def start_collect_job(
+    film: Path,
+    *,
+    home_kit_hex: str | None = None,
+    away_kit_hex: str | None = None,
+    home_team_name: str | None = None,
+    away_team_name: str | None = None,
+) -> Path:
     """Spawn a detached process that collects ``film``. Returns the status path."""
 
     resolved = film.expanduser().resolve()
@@ -170,6 +194,10 @@ def start_collect_job(film: Path) -> Path:
             "pid": 0,
             "error": "",
             "rundown_path": "",
+            "home_kit_hex": (home_kit_hex or "").strip(),
+            "away_kit_hex": (away_kit_hex or "").strip(),
+            "home_team_name": (home_team_name or "").strip(),
+            "away_team_name": (away_team_name or "").strip(),
             "started_at": _now(),
             "updated_at": _now(),
         },

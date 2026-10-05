@@ -36,6 +36,12 @@ import numpy as np
 from analytics.game_ingest import GamePayload, MatchRundown, PlayerRosterEntry, collect_game
 from analytics.match_tags import infer_team_names, write_sidecar_xml
 from analytics.oncesport_export import write_oncesport_pair
+from analytics.smart_detect import (
+    assign_side_by_kit,
+    detect_objects_smart,
+    detector_label,
+    parse_kit_hex,
+)
 from data_models.events import EventType, MatchEvent, ShotOutcome
 
 AUTO_NAMESPACE: UUID = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
@@ -414,6 +420,13 @@ def _contour_bgr(frame: np.ndarray, contour: np.ndarray) -> tuple[float, float, 
 
 
 def detect_objects(frame: np.ndarray) -> list[Detection]:
+    """Find players/ball — smart HOG/YOLO first, pitch-blob fallback."""
+
+    smart = detect_objects_smart(frame, blob_fallback=_detect_objects_blob)
+    return [Detection(x=hit.x, y=hit.y, area=hit.area, kind=hit.kind, bgr=hit.bgr) for hit in smart]
+
+
+def _detect_objects_blob(frame: np.ndarray) -> list[Detection]:
     """Find player-sized blobs on the grass, ignoring stands and graphics.
 
     Broadcast films: key a wide grass window, keep the largest pitch
@@ -562,13 +575,37 @@ def _hue(bgr: tuple[float, float, float]) -> float:
     return float(hsv[0, 0, 0])
 
 
-def _assign_teams(players: list[Track]) -> None:
-    """Split tracks into two sides using shirt colour, then mean pitch X."""
+def _assign_teams(
+    players: list[Track],
+    *,
+    home_kit_bgr: tuple[float, float, float] | None = None,
+    away_kit_bgr: tuple[float, float, float] | None = None,
+) -> None:
+    """Split tracks into Home/Away using kit colours, then hue, then pitch X."""
 
     if len(players) < 2:
         for track in players:
             track.team = 0
         return
+
+    # Step B: operator kit colours win when both sides are set.
+    if home_kit_bgr is not None and away_kit_bgr is not None:
+        assigned = 0
+        for track in players:
+            side = assign_side_by_kit(track.bgr, home_kit_bgr, away_kit_bgr)
+            if side is not None:
+                track.team = side
+                assigned += 1
+        if assigned >= max(2, len(players) // 2):
+            # Fill leftovers by nearest kit.
+            for track in players:
+                if assign_side_by_kit(track.bgr, home_kit_bgr, away_kit_bgr) is not None:
+                    continue
+                d_home = abs(_hue(track.bgr) - _hue(home_kit_bgr))
+                d_away = abs(_hue(track.bgr) - _hue(away_kit_bgr))
+                track.team = 0 if d_home <= d_away else 1
+            return
+
     hues = [_hue(track.bgr) for track in players]
     spread = max(hues) - min(hues)
     if spread >= 18:
@@ -741,6 +778,8 @@ def events_from_tracks(
     clip_url: str,
     home_name: str = "Home",
     away_name: str = "Away",
+    home_kit_bgr: tuple[float, float, float] | None = None,
+    away_kit_bgr: tuple[float, float, float] | None = None,
 ) -> tuple[list[MatchEvent], list[PlayerRosterEntry]]:
     """Turn tracked play into a full-match tag sheet plus a two-team roster.
 
@@ -777,7 +816,7 @@ def events_from_tracks(
         raise VideoCollectError(
             "No players found in the film. Try a clearer tactical / broadcast view."
         )
-    _assign_teams(players)
+    _assign_teams(players, home_kit_bgr=home_kit_bgr, away_kit_bgr=away_kit_bgr)
     team_ids = (
         uuid5(AUTO_NAMESPACE, f"{match_id}-team-{home_name}"),
         uuid5(AUTO_NAMESPACE, f"{match_id}-team-{away_name}"),
@@ -1146,6 +1185,10 @@ def collect_from_video(
     max_side: int = DEFAULT_MAX_SIDE,
     max_sample_frames: int = DEFAULT_MAX_SAMPLE_FRAMES,
     on_progress: ProgressFn | None = None,
+    home_kit_hex: str | None = None,
+    away_kit_hex: str | None = None,
+    home_team_name: str | None = None,
+    away_team_name: str | None = None,
 ) -> MatchRundown:
     """Watch a match film and return the collected four-pillar rundown.
 
@@ -1156,9 +1199,15 @@ def collect_from_video(
         max_side: Longest resized edge in pixels.
         max_sample_frames: Safety cap (default 48,000 ≈ 160 minutes at 5 Hz).
         on_progress: Optional ``(label, fraction)`` callback for a loading bar.
+        home_kit_hex: Optional ``#RRGGBB`` home shirt colour for team split.
+        away_kit_hex: Optional ``#RRGGBB`` away shirt colour for team split.
+        home_team_name: Optional home display name (else inferred from filename).
+        away_team_name: Optional away display name.
     """
 
-    _emit(on_progress, "Opening match film…", 0.02)
+    home_kit_bgr = parse_kit_hex(home_kit_hex)
+    away_kit_bgr = parse_kit_hex(away_kit_hex)
+    _emit(on_progress, f"Opening match film… ({detector_label()})", 0.02)
     info = probe_video(path)
     minutes = info.duration_seconds / 60.0
     size_gb = info.size_bytes / (1024**3)
@@ -1169,7 +1218,7 @@ def collect_from_video(
         on_progress,
         (
             f"Opened {info.path.name} · {minutes:.1f} min · {size_gb:.2f} GB · "
-            f"watching the full match at {sample_hz:.0f} Hz"
+            f"watching with {detector_label()} at {sample_hz:.0f} Hz"
         ),
         0.06,
     )
@@ -1184,7 +1233,9 @@ def collect_from_video(
     match_id = uuid5(AUTO_NAMESPACE, f"video:{info.path.name}:{info.size_bytes}")
     team_id = uuid5(AUTO_NAMESPACE, f"team:{match_id}")
     clip_url = info.path.as_uri()
-    home_name, away_name = infer_team_names(info.path.name)
+    inferred_home, inferred_away = infer_team_names(info.path.name)
+    home_name = (home_team_name or "").strip() or inferred_home
+    away_name = (away_team_name or "").strip() or inferred_away
     events, roster = events_from_tracks(
         tracks,
         fps=info.fps,
@@ -1193,6 +1244,8 @@ def collect_from_video(
         clip_url=clip_url,
         home_name=home_name,
         away_name=away_name,
+        home_kit_bgr=home_kit_bgr,
+        away_kit_bgr=away_kit_bgr,
     )
     rundown = collect_game(
         GamePayload(
