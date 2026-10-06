@@ -94,7 +94,10 @@ GLOSSARY: dict[str, str] = {
     "depth": "Space behind the opponent’s last line.",
     "switch_of_play": "Moving the ball quickly from one wing to the other.",
     "cutback": "A pass pulled back from the byline toward the penalty spot / late runners.",
-    "cross": "A delivery from the wing into the box.",
+    "cross": (
+        "Flank delivery into the penalty area — open play only (Wyscout/Opta). "
+        "Not counted as a pass in Opta pass stats."
+    ),
     "shot": (
         "Deliberate attempt to score (Wyscout/Opta/StatsBomb). On film: real strike "
         "in the box or Wyscout danger zone — not a dribble."
@@ -103,7 +106,6 @@ GLOSSARY: dict[str, str] = {
     "pass": (
         "Delivery to a teammate (Wyscout/Opta). Crosses and throw-ins are separate."
     ),
-    "cross": "Flank delivery into the penalty area — open play only (Wyscout).",
     "interception": "Cutting out a pass by reading the lane (Opta/StatsBomb).",
     "ball_recovery": (
         "First touch starting your possession after winning the ball in open play "
