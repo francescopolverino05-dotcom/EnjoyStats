@@ -63,7 +63,7 @@ RUN chmod +x /app/scripts/statman_worker_entrypoint.sh
 
 # Stay root so entrypoint can chown the Railway volume, then drop privileges.
 USER root
-VOLUME ["/data"]
+# Do not use Dockerfile VOLUME — Railway rejects it. Attach a Volume at /data in the UI.
 
 # Prefer CMD (not ENTRYPOINT) so Railway startCommand can replace cleanly.
 CMD ["/app/scripts/statman_worker_entrypoint.sh"]

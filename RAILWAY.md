@@ -6,7 +6,8 @@
 # Or Config-as-code file = railway.worker.toml
 #
 # 1. Deploy this GitHub repo as TWO services (Web + Worker).
-# 2. Add a Volume, mount it at /data on BOTH services.
+# 2. Add a Volume in the Railway UI, mount it at /data on BOTH services.
+#    (Do not use Dockerfile VOLUME — Railway rejects that instruction.)
 # 3. Copy env from .env.example (Railway section) onto both.
 # 4. Web: public URL, Dockerfile.dashboard / railway.toml
 # 5. Worker: no public domain, Dockerfile.worker / railway.worker.toml
