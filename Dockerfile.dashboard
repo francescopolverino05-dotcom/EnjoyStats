@@ -76,9 +76,9 @@ RUN chmod +x /app/scripts/statman_web_entrypoint.sh \
     && chown -R enjoystats:enjoystats /app/.streamlit /app/scripts
 
 # Stay root so entrypoint can chown the Railway volume, then drop privileges.
+# /data is provided by a Railway volume attached to the service (not a Dockerfile VOLUME).
 USER root
 EXPOSE 8501
-VOLUME ["/data"]
 
 # Public PORT serves the portal (proxies Streamlit /_stcore/health).
 HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=10 \
