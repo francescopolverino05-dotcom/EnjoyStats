@@ -126,18 +126,32 @@ def create_portal(
         target = f"{scheme}://{parsed.netloc}{websocket.url.path}"
         if websocket.url.query:
             target = f"{target}?{websocket.url.query}"
-        await websocket.accept()
-        additional_headers = None
+
+        # Streamlit requires Sec-WebSocket-Protocol to be echoed. Accept only
+        # after the upstream handshake so we can pass the negotiated value.
+        proto_header = websocket.headers.get("sec-websocket-protocol")
+        subprotocols = (
+            [part.strip() for part in proto_header.split(",") if part.strip()]
+            if proto_header
+            else None
+        )
+        additional_headers: dict[str, str] = {}
         cookie = websocket.headers.get("cookie")
         if cookie:
-            additional_headers = {"Cookie": cookie}
+            additional_headers["Cookie"] = cookie
+        origin = websocket.headers.get("origin")
+        if origin:
+            additional_headers["Origin"] = origin
+
         try:
             async with websockets.connect(
                 target,
-                additional_headers=additional_headers,
+                additional_headers=additional_headers or None,
+                subprotocols=subprotocols,
                 max_size=32 * 1024 * 1024,
                 open_timeout=30,
             ) as upstream_ws:
+                await websocket.accept(subprotocol=upstream_ws.subprotocol)
 
                 async def client_to_upstream() -> None:
                     try:
@@ -170,6 +184,7 @@ def create_portal(
         except Exception as exc:  # noqa: BLE001
             LOGGER.warning("Portal websocket error %s: %s", target, exc)
             try:
+                # If accept never happened, this may no-op / error — ignore.
                 await websocket.close(code=1011)
             except Exception:  # noqa: BLE001
                 pass
