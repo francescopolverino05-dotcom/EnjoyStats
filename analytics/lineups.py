@@ -282,11 +282,7 @@ def parse_lineup_csv(raw: str, *, home_team: str = "Home", away_team: str = "Awa
         if jersey is None or not name:
             # Try first+last when a single name column is missing.
             if jersey is not None and not name:
-                rebuilt = {
-                    str(k).lower(): v
-                    for k, v in row.items()
-                    if k is not None
-                }
+                rebuilt = {str(k).lower(): v for k, v in row.items() if k is not None}
                 name = _player_name_from_row(rebuilt)
             if jersey is None or not name:
                 continue

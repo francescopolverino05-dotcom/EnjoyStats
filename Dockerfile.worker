@@ -65,4 +65,5 @@ RUN chmod +x /app/scripts/statman_worker_entrypoint.sh
 USER root
 VOLUME ["/data"]
 
-ENTRYPOINT ["/app/scripts/statman_worker_entrypoint.sh"]
+# Prefer CMD (not ENTRYPOINT) so Railway startCommand can replace cleanly.
+CMD ["/app/scripts/statman_worker_entrypoint.sh"]

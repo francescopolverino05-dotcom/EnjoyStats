@@ -102,17 +102,13 @@ GLOSSARY: dict[str, str] = {
         "in the box or Wyscout danger zone — not a dribble."
     ),
     "goal": "Ball reaches the goal mouth between the posts after a shot.",
-    "pass": (
-        "Delivery to a teammate (Wyscout/Opta). Crosses and throw-ins are separate."
-    ),
+    "pass": ("Delivery to a teammate (Wyscout/Opta). Crosses and throw-ins are separate."),
     "interception": "Cutting out a pass by reading the lane (Opta/StatsBomb).",
     "ball_recovery": (
         "First touch starting your possession after winning the ball in open play "
         "(Wyscout recovery / Opta ball recovery)."
     ),
-    "danger_zone": (
-        "Wyscout central shooting band (x≥84.29, y 36.29–63.71 on 0–100 pitch)."
-    ),
+    "danger_zone": ("Wyscout central shooting band (x≥84.29, y 36.29–63.71 on 0–100 pitch)."),
 }
 
 
@@ -206,9 +202,7 @@ def classify_strike(
     in_box = point[0] >= box_x if attack_goal_x >= 50 else point[0] <= box_x
     start_in_box = start[0] >= box_x if attack_goal_x >= 50 else start[0] <= box_x
     in_danger = is_wyscout_danger_zone(point[0], point[1], attack_goal_x=attack_goal_x)
-    start_in_danger = is_wyscout_danger_zone(
-        start[0], start[1], attack_goal_x=attack_goal_x
-    )
+    start_in_danger = is_wyscout_danger_zone(start[0], start[1], attack_goal_x=attack_goal_x)
     between_posts = GOAL_POST_Y_MIN <= point[1] <= GOAL_POST_Y_MAX
     at_mouth = abs(point[0] - attack_goal_x) <= GOAL_MOUTH_X and between_posts
     wide = is_wing(point[1]) or is_wing(start[1])
@@ -256,12 +250,17 @@ def classify_distribution(
     end_lane = pitch_lane(point[1])
     from_byline = start[0] >= 90.0 or start[0] <= 10.0
     pulling_back = (not toward_goal) and in_box and travel >= 8.0
-    if from_byline and pulling_back and start_lane in {
-        PitchLane.LEFT_WING,
-        PitchLane.RIGHT_WING,
-        PitchLane.LEFT_HALF_SPACE,
-        PitchLane.RIGHT_HALF_SPACE,
-    }:
+    if (
+        from_byline
+        and pulling_back
+        and start_lane
+        in {
+            PitchLane.LEFT_WING,
+            PitchLane.RIGHT_WING,
+            PitchLane.LEFT_HALF_SPACE,
+            PitchLane.RIGHT_HALF_SPACE,
+        }
+    ):
         return EventType.CUTBACK
 
     wing_delivery = start_lane in {PitchLane.LEFT_WING, PitchLane.RIGHT_WING} or end_lane in {

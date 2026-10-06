@@ -1486,10 +1486,15 @@ def render_film_uploader_panel(base_url: str) -> None:
             f"{status.get('message') or 'Check .local-run/uvicorn.log'}."
         )
         return
-    if not same_origin and not remote_ok and base_url.rstrip("/") not in {
-        "http://127.0.0.1:8000",
-        "http://localhost:8000",
-    }:
+    if (
+        not same_origin
+        and not remote_ok
+        and base_url.rstrip("/")
+        not in {
+            "http://127.0.0.1:8000",
+            "http://localhost:8000",
+        }
+    ):
         st.warning(
             "Sidebar FastAPI URL is unreachable from this machine. "
             "Uploads still go to the always-on local API on :8000 "
@@ -2050,9 +2055,7 @@ def main(*, fetch: FetchFn = _run_fetch) -> None:
     rundown = _stored_rundown()
     job_path_raw = str(st.session_state.get(JOB_KEY, "") or "")
     job_status = read_job_status(Path(job_path_raw)) if job_path_raw else None
-    analysing = bool(
-        job_status and job_status.get("state") in {"queued", "claimed", "running"}
-    )
+    analysing = bool(job_status and job_status.get("state") in {"queued", "claimed", "running"})
     section = render_app_nav(has_match=rundown is not None, analysing=analysing)
 
     if section == "Match rundown" and rundown is not None:

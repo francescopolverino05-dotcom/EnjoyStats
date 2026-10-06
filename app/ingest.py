@@ -59,11 +59,7 @@ def ready_films() -> list[Path]:
 def ready_match_films() -> list[Path]:
     """Newest-first match videos only (skip tag XML sitting in the inbox)."""
 
-    return [
-        path
-        for path in ready_films()
-        if path.suffix.lower() in VIDEO_SUFFIXES
-    ]
+    return [path for path in ready_films() if path.suffix.lower() in VIDEO_SUFFIXES]
 
 
 def latest_ready_film() -> Path | None:

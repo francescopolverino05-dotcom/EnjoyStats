@@ -195,8 +195,5 @@ def ensure_api_running(
         "started": True,
         "pid": proc.pid,
         "url": url,
-        "message": (
-            f"Film upload API did not become ready on {url}. "
-            f"See {LOG_FILE}."
-        ),
+        "message": (f"Film upload API did not become ready on {url}. " f"See {LOG_FILE}."),
     }

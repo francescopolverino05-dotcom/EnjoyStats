@@ -83,9 +83,7 @@ def create_portal(
         if query:
             target = f"{target}?{query}"
         headers = {
-            key: value
-            for key, value in request.headers.items()
-            if key.lower() not in HOP_BY_HOP
+            key: value for key, value in request.headers.items() if key.lower() not in HOP_BY_HOP
         }
         body = await request.body()
         try:

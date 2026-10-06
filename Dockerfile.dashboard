@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Streamlit + same-origin portal (film upload) for Railway Web.
-# Public traffic hits $PORT via api.portal; Streamlit stays on 8501 inside.
+# Public traffic hits $PORT via api.portal; Streamlit stays internal.
 
 FROM python:3.11-slim AS builder
 
@@ -72,7 +72,8 @@ COPY --from=builder --chown=enjoystats:enjoystats /src/app /app/app
 COPY --from=builder --chown=enjoystats:enjoystats /src/api /app/api
 COPY .streamlit /app/.streamlit
 COPY scripts/statman_web_entrypoint.sh /app/scripts/statman_web_entrypoint.sh
-RUN chmod +x /app/scripts/statman_web_entrypoint.sh \
+COPY scripts/statman_web_healthcheck.sh /app/scripts/statman_web_healthcheck.sh
+RUN chmod +x /app/scripts/statman_web_entrypoint.sh /app/scripts/statman_web_healthcheck.sh \
     && chown -R enjoystats:enjoystats /app/.streamlit /app/scripts
 
 # Stay root so entrypoint can chown the Railway volume, then drop privileges.
@@ -81,7 +82,8 @@ EXPOSE 8501
 VOLUME ["/data"]
 
 # Public PORT serves the portal (proxies Streamlit /_stcore/health).
-HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=10 \
-    CMD python -c "import os,urllib.request; p=os.environ.get('PORT','8501'); urllib.request.urlopen(f'http://127.0.0.1:{p}/_stcore/health', timeout=3)"
+HEALTHCHECK --interval=15s --timeout=5s --start-period=90s --retries=10 \
+    CMD ["/app/scripts/statman_web_healthcheck.sh"]
 
-ENTRYPOINT ["/app/scripts/statman_web_entrypoint.sh"]
+# Prefer CMD (not ENTRYPOINT) so Railway startCommand can replace cleanly.
+CMD ["/app/scripts/statman_web_entrypoint.sh"]

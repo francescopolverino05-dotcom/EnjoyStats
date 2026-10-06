@@ -107,13 +107,9 @@ def test_upload_app_serves_film_chunk(tmp_path, monkeypatch) -> None:
 def test_portal_proxies_film_chunk(tmp_path, monkeypatch) -> None:
     inbox = tmp_path / "inbox"
     monkeypatch.setenv("ENJOYSTATS_FILM_INBOX", str(inbox))
-    from api.main import create_app
-    from tests.fakes import InMemoryProfileStore
+    from api.upload_app import app as api_app
 
-    api_app = create_app(aggregator=InMemoryProfileStore())
-    # Drive portal against the in-process API via ASGI transport by mounting
-    # through httpx — use TestClient on portal with a real upstream TestClient
-    # is heavy; instead hit film router through portal's pick + direct API.
+    # Drive film upload through the slim upload app (Railway Web path).
     with TestClient(api_app) as api_client:
         page = api_client.get("/upload-film")
         assert page.status_code == 200

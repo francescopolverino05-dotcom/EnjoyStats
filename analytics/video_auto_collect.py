@@ -1264,9 +1264,7 @@ def events_from_tracks(
             pending_fresh=(now_s - pending_shot_s) <= PENDING_SHOT_TTL_S,
         )
         is_progressive = toward_goal and travel >= 8.0
-        if progressive_from_half_space(
-            start_y=start[1], toward_goal=toward_goal, travel=travel
-        ):
+        if progressive_from_half_space(start_y=start[1], toward_goal=toward_goal, travel=travel):
             is_progressive = True
         payload: dict[str, object] = {
             "match_id": match_id,
@@ -1298,9 +1296,7 @@ def events_from_tracks(
                         pending_shot.player_id if pending_shot is not None else actor_player_id
                     ),
                     "team_id": (
-                        pending_shot.team_id
-                        if pending_shot is not None
-                        else payload["team_id"]
+                        pending_shot.team_id if pending_shot is not None else payload["team_id"]
                     ),
                 }
             )

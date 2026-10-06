@@ -35,6 +35,4 @@ def test_provider_notes_return_text() -> None:
 def test_wyscout_danger_zone() -> None:
     assert is_wyscout_danger_zone(90.0, 50.0, attack_goal_x=100.0)
     assert not is_wyscout_danger_zone(50.0, 50.0, attack_goal_x=100.0)
-    assert is_wyscout_danger_zone(
-        100.0 - WYSCOUT_DANGER_X_MIN, 50.0, attack_goal_x=0.0
-    )
+    assert is_wyscout_danger_zone(100.0 - WYSCOUT_DANGER_X_MIN, 50.0, attack_goal_x=0.0)

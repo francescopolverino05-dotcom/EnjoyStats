@@ -149,9 +149,7 @@ def test_dashboard_renders_analyse_landing(tmp_path, monkeypatch) -> None:
     assert not at.exception
     errors = [str(element.value) for element in at.error]
     infos = [str(element.value) for element in at.info]
-    assert any(
-        "upload" in message.lower() for message in errors + infos
-    )
+    assert any("upload" in message.lower() for message in errors + infos)
 
 
 def test_analyse_uses_newest_uploaded_film(tmp_path, monkeypatch) -> None:

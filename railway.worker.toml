@@ -1,7 +1,9 @@
-# Railway config for the **Worker** service.
-# In Railway → Worker → Settings → Config-as-code, set config file to:
+# Railway config for the **Worker** service only.
+# In Railway → Worker → Settings → Config-as-code, set the file to:
 #   railway.worker.toml
-# Or manually: Dockerfile = Dockerfile.worker, start = python -m analytics.collect_worker
+# If this is left on railway.toml, Worker builds the Web image and fails.
+#
+# Worker: no public domain / no healthcheck path.
 
 [build]
 builder = "DOCKERFILE"

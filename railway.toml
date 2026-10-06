@@ -1,19 +1,18 @@
-# Railway config for the **Web** service.
-# On the Worker service, override in the Railway UI:
-#   Dockerfile path = Dockerfile.worker
-#   Config-as-code  = railway.worker.toml
-# Do NOT leave Worker on this file's Dockerfile.dashboard default.
+# Railway config for the **Web** service only.
+# Worker must use a different Config-as-code file:
+#   Settings → Config-as-code → railway.worker.toml
 #
 # Generate Service Domain port: 8501
-# (or leave Railway's $PORT — the entrypoint listens on $PORT)
 
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile.dashboard"
 
 [deploy]
+# Match Dockerfile CMD. Do not set a second conflicting custom start in the UI.
 startCommand = "/app/scripts/statman_web_entrypoint.sh"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
+# Portal + Streamlit need time; 30s is too short and marks the deploy failed.
 healthcheckPath = "/_stcore/health"
-healthcheckTimeout = 30
+healthcheckTimeout = 300

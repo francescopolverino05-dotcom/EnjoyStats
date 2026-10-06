@@ -22,9 +22,7 @@ def test_use_external_worker_flag(monkeypatch) -> None:
     assert use_external_worker() is True
 
 
-def test_external_worker_enqueues_without_spawning(
-    tmp_path: Path, monkeypatch
-) -> None:
+def test_external_worker_enqueues_without_spawning(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("ENJOYSTATS_JOBS_DIR", str(tmp_path / "jobs"))
     monkeypatch.setenv("STATMAN_USE_EXTERNAL_WORKER", "1")
     clip = write_synthetic_match_clip(tmp_path / "match.avi", frames=16, fps=8)

@@ -40,9 +40,7 @@ LOGGER = logging.getLogger(__name__)
 
 SCHEMA_PATH: Final[Path] = Path(__file__).with_name("postgres_tables.sql")
 
-UPSERT_PLAYER_PROFILE_SQL: Final[
-    str
-] = """
+UPSERT_PLAYER_PROFILE_SQL: Final[str] = """
 INSERT INTO player_match_stats (
     player_id,
     match_id,
@@ -104,17 +102,13 @@ ON CONFLICT (player_id, match_id) DO UPDATE SET
 RETURNING stats_id
 """
 
-ENSURE_MATCH_SQL: Final[
-    str
-] = """
+ENSURE_MATCH_SQL: Final[str] = """
 INSERT INTO matches (match_id, status, updated_at)
 VALUES ($1, 'live', NOW())
 ON CONFLICT (match_id) DO NOTHING
 """
 
-FETCH_PLAYER_PROFILE_SQL: Final[
-    str
-] = """
+FETCH_PLAYER_PROFILE_SQL: Final[str] = """
 SELECT
     player_id,
     match_id,
@@ -145,9 +139,7 @@ FROM player_match_stats
 WHERE player_id = $1 AND match_id = $2
 """
 
-UPSERT_MATCH_EVENT_SQL: Final[
-    str
-] = """
+UPSERT_MATCH_EVENT_SQL: Final[str] = """
 INSERT INTO match_events (
     event_id, match_id, team_id, player_id, period, minute, second,
     event_type, x, y, end_x, end_y, successful, is_goal, is_assist,
@@ -183,9 +175,7 @@ ON CONFLICT (event_id) DO UPDATE SET
     recorded_at = EXCLUDED.recorded_at
 """
 
-UPSERT_VIDEO_CLIP_INDEX_SQL: Final[
-    str
-] = """
+UPSERT_VIDEO_CLIP_INDEX_SQL: Final[str] = """
 INSERT INTO video_clip_index (
     event_id, match_id, team_id, player_id, event_type, highlight_kind,
     video_timestamp_ms, clip_url, duration_ms
@@ -203,9 +193,7 @@ ON CONFLICT (event_id) DO UPDATE SET
     duration_ms = EXCLUDED.duration_ms
 """
 
-FETCH_MATCH_EVENTS_SQL: Final[
-    str
-] = """
+FETCH_MATCH_EVENTS_SQL: Final[str] = """
 SELECT
     event_id, match_id, team_id, player_id, period, minute, second,
     event_type, x, y, end_x, end_y, successful, is_goal, is_assist,

@@ -16,15 +16,16 @@
 # worker claims it → Analyse runs off the web dyno → download PDF →
 # delete the film when done.
 
-## Web “Application failed to respond”
+## Web / Worker both fail to build or deploy
 #
-# Generate Service Domain port: **8501**
-# Web entrypoint listens on $PORT with the same-origin **portal**
-# (Streamlit UI + /upload-film on one public URL).
-# Redeploy Web after pulling the fix that ships `api/` + portal entrypoint.
-#
-# If it still fails: Web → Deployments → View logs
-#   Look for "statman-web: starting portal" and Streamlit health.
+# 1. Each service needs its **own** Config-as-code file:
+#      Web    → railway.toml          (Dockerfile.dashboard)
+#      Worker → railway.worker.toml   (Dockerfile.worker)
+#    If Worker is left on railway.toml it builds the Web image and breaks.
+# 2. Generate Service Domain port: **8501** (Web only).
+# 3. Redeploy both after this branch updates.
+# 4. Logs: Web should show `statman-web: starting portal`.
+#    Worker should show collect_worker poll / claim lines.
 
 Web start (Railway / Docker):
   /app/scripts/statman_web_entrypoint.sh
