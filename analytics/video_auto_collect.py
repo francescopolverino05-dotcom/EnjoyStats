@@ -169,12 +169,42 @@ def _looks_like_video_bytes(path: Path) -> bool:
     return any(head.startswith(magic) for magic in _VIDEO_MAGIC_PREFIXES)
 
 
-def promote_finished_part_films(directory: Path) -> list[Path]:
-    """Rename ``*.mp4.part`` (etc.) to real video names when the bytes look complete.
+def film_is_seekable(path: Path) -> bool:
+    """Return whether the film body matches the duration claimed in its header.
 
-    Chunked uploads write ``name.mp4.part`` and only rename on the final chunk.
-    If the last chunk drops after the body arrived, the usable film is stuck as
-    ``.part``. Promote it so Analyse Stats can find it.
+    Truncated uploads (``.part`` renamed early) often open and report a full
+    duration from the ``moov`` atom, then hang forever on ``partial file``
+    seeks. If seeking near the end clamps far earlier than claimed, reject.
+    """
+
+    capture = cv2.VideoCapture(str(path))
+    if not capture.isOpened():
+        capture.release()
+        return False
+    try:
+        frame_count = int(capture.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        ok, _frame = capture.read()
+        if not ok:
+            return False
+        if frame_count <= 100:
+            return True
+        target = max(0, frame_count - 25)
+        capture.set(cv2.CAP_PROP_POS_FRAMES, float(target))
+        pos = float(capture.get(cv2.CAP_PROP_POS_FRAMES) or 0.0)
+        # Truncated mdat: OpenCV clamps the position well before the claimed end.
+        if pos < frame_count * 0.5:
+            return False
+        ok, _frame = capture.read()
+        return bool(ok)
+    finally:
+        capture.release()
+
+
+def promote_finished_part_films(directory: Path) -> list[Path]:
+    """Rename ``*.mp4.part`` only when the bytes are a seekable finished film.
+
+    Chunked uploads write ``name.mp4.part`` and rename on the final chunk.
+    Do **not** promote a partial body just because the MP4 header looks valid.
     """
 
     promoted: list[Path] = []
@@ -183,7 +213,6 @@ def promote_finished_part_films(directory: Path) -> list[Path]:
     for part in directory.glob("*.part"):
         if not part.is_file():
             continue
-        # Expect names like match.mp4.part → match.mp4
         name = part.name
         if not name.endswith(".part"):
             continue
@@ -194,10 +223,11 @@ def promote_finished_part_films(directory: Path) -> list[Path]:
         dest = part.with_name(stem)
         if not _looks_like_video_bytes(part):
             continue
+        if not film_is_seekable(part):
+            continue
         try:
             if dest.exists():
-                # Keep the larger of the two.
-                if dest.stat().st_size >= part.stat().st_size:
+                if dest.stat().st_size >= part.stat().st_size and film_is_seekable(dest):
                     part.unlink(missing_ok=True)
                     continue
                 dest.unlink(missing_ok=True)
@@ -438,6 +468,12 @@ def probe_video(path: Path) -> VideoInfo:
         height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
     finally:
         capture.release()
+    if not film_is_seekable(resolved):
+        raise VideoCollectError(
+            f"Match film looks incomplete or truncated: {resolved.name}. "
+            "The upload probably stopped before it said Saved. "
+            "Upload the full MP4 again, wait for Saved, then Analyse Stats."
+        )
     if fps <= 0.0:
         fps = 25.0
     duration = frame_count / fps if frame_count > 0 else 0.0
