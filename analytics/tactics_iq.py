@@ -1,11 +1,15 @@
 """EnjoyStats film IQ — tactical glossary + classifiers for auto-tag.
 
 Sources (simplified wording for operators and CV rules):
-- JMftbl glossary, Coaches' Voice tactics glossary / rest defence
-- Spielverlagerung: half-spaces, rest defence (Restverteidigung)
+- Wyscout Data Glossary — https://dataglossary.wyscout.com/
+- Opta Event Definitions — https://www.statsperform.com/opta-event-definitions/
+- StatsBomb Open Data — https://github.com/statsbomb/open-data
+- Coaches' Voice tactics glossary / rest defence
+- JMftbl, Spielverlagerung (half-spaces, Restverteidigung)
 
-Film CV is still geometry — this module is the football brain that stops
-nonsense like 79–10 scorelines and keeper clearances counted as shots.
+Event vocabulary is aligned in :mod:`analytics.event_registry`. Film CV is
+still geometry — this module is the football brain that stops nonsense like
+79–10 scorelines and keeper clearances counted as shots.
 """
 
 from __future__ import annotations
@@ -14,6 +18,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final
 
+from analytics.event_registry import is_wyscout_danger_zone
 from data_models.events import EventType, ShotOutcome
 
 # --- Shot / goal gates (football, not NBA) ---------------------------------
@@ -90,8 +95,23 @@ GLOSSARY: dict[str, str] = {
     "switch_of_play": "Moving the ball quickly from one wing to the other.",
     "cutback": "A pass pulled back from the byline toward the penalty spot / late runners.",
     "cross": "A delivery from the wing into the box.",
-    "shot": "A real strike at goal from a shooting zone — not a dribble or square pass.",
+    "shot": (
+        "Deliberate attempt to score (Wyscout/Opta/StatsBomb). On film: real strike "
+        "in the box or Wyscout danger zone — not a dribble."
+    ),
     "goal": "Ball reaches the goal mouth between the posts after a shot.",
+    "pass": (
+        "Delivery to a teammate (Wyscout/Opta). Crosses and throw-ins are separate."
+    ),
+    "cross": "Flank delivery into the penalty area — open play only (Wyscout).",
+    "interception": "Cutting out a pass by reading the lane (Opta/StatsBomb).",
+    "ball_recovery": (
+        "First touch starting your possession after winning the ball in open play "
+        "(Wyscout recovery / Opta ball recovery)."
+    ),
+    "danger_zone": (
+        "Wyscout central shooting band (x≥84.29, y 36.29–63.71 on 0–100 pitch)."
+    ),
 }
 
 
@@ -177,19 +197,26 @@ def classify_strike(
     """Decide shot/goal with film IQ — GK rule first, then strike + mouth."""
 
     if actor_is_gk:
+        # Opta/Wyscout: keeper distribution and clearances are never shots.
         return StrikeVerdict(False, False, False, "gk_rule")
 
     toward_goal = abs(point[0] - attack_goal_x) < abs(start[0] - attack_goal_x)
     box_x = 82.0 if attack_goal_x >= 50 else 18.0
     in_box = point[0] >= box_x if attack_goal_x >= 50 else point[0] <= box_x
     start_in_box = start[0] >= box_x if attack_goal_x >= 50 else start[0] <= box_x
+    in_danger = is_wyscout_danger_zone(point[0], point[1], attack_goal_x=attack_goal_x)
+    start_in_danger = is_wyscout_danger_zone(
+        start[0], start[1], attack_goal_x=attack_goal_x
+    )
     between_posts = GOAL_POST_Y_MIN <= point[1] <= GOAL_POST_Y_MAX
     at_mouth = abs(point[0] - attack_goal_x) <= GOAL_MOUTH_X and between_posts
     wide = is_wing(point[1]) or is_wing(start[1])
     strike = travel >= SHOT_MIN_TRAVEL or speed >= SHOT_MIN_SPEED
+    # Wyscout: scoring intent in box or danger zone; Opta: deliberate attempt on target.
+    shooting_zone = in_box or start_in_box or in_danger or start_in_danger
     shot_like = (
         toward_goal
-        and (in_box or start_in_box)
+        and shooting_zone
         and strike
         and not wide
         and shot_gap_ok
@@ -243,6 +270,7 @@ def classify_distribution(
     if wing_delivery and in_box and toward_goal and travel >= 10.0 and not actor_is_gk:
         return EventType.CROSS
 
+    # StatsBomb clearance / Wyscout loss point: GK hoof in own third stays a pass.
     return EventType.PASS
 
 

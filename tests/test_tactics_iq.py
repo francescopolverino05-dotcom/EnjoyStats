@@ -20,6 +20,8 @@ def test_glossary_has_gk_rule_and_core_terms() -> None:
     assert "rest_defence" in GLOSSARY
     assert "shot" in GLOSSARY
     assert "goal" in GLOSSARY
+    assert "danger_zone" in GLOSSARY
+    assert "pass" in GLOSSARY
 
 
 def test_gk_rule_blocks_shots_and_goals() -> None:
