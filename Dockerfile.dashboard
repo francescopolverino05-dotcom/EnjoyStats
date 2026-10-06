@@ -71,6 +71,7 @@ COPY --from=builder --chown=enjoystats:enjoystats /src/api /app/api
 COPY .streamlit /app/.streamlit
 COPY scripts/statman_web_entrypoint.sh /app/scripts/statman_web_entrypoint.sh
 COPY scripts/statman_web_healthcheck.sh /app/scripts/statman_web_healthcheck.sh
+COPY scripts/statman_web_diag.py /app/scripts/statman_web_diag.py
 RUN chmod +x /app/scripts/statman_web_entrypoint.sh /app/scripts/statman_web_healthcheck.sh \
     && chown -R enjoystats:enjoystats /app/.streamlit /app/scripts
 
