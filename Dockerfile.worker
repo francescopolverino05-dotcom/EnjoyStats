@@ -63,6 +63,5 @@ RUN chmod +x /app/scripts/statman_worker_entrypoint.sh
 
 # Stay root so entrypoint can chown the Railway volume, then drop privileges.
 USER root
-VOLUME ["/data"]
 
 ENTRYPOINT ["/app/scripts/statman_worker_entrypoint.sh"]
