@@ -53,8 +53,11 @@ def test_railway_web_entrypoint_runs_streamlit_on_port() -> None:
     script = (ROOT / "scripts" / "statman_web_entrypoint.sh").read_text(encoding="utf-8")
     assert "streamlit run app/dashboard.py" in script
     assert "server.address=0.0.0.0" in script
-    assert "PORT" in script
+    assert "LISTEN_PORT" in script
+    assert "STATMAN_LISTEN_PORT" in script
     assert "STATMAN_STREAMLIT_FILM_UPLOAD" in script
+    # Must not drop privileges via su — that broke PATH/PORT on Railway.
+    assert "su " not in script
     railway = (ROOT / "railway.toml").read_text(encoding="utf-8")
     assert "statman_web_entrypoint.sh" in railway
     assert "Dockerfile.dashboard" in railway

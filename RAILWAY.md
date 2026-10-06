@@ -17,12 +17,16 @@
 # worker claims it → Analyse runs off the web dyno → download PDF →
 # delete the film when done.
 
-## Web “Application failed to respond”
+## Web “Application failed to respond” (HTTP 502)
 #
-# Site URL (production): https://statman-production.up.railway.app
-# Web start is Streamlit on $PORT (no portal sidecar).
-# Domain port must be **8501** (or whatever $PORT is).
-# Logs should show: `statman-web: Streamlit on 0.0.0.0:…`
+# Site URL: https://statman-production.up.railway.app
+#
+# Almost always a **port mismatch**:
+#   Web → Variables → PORT (or STATMAN_LISTEN_PORT)
+#   Web → Settings → Networking → target port
+# Those two numbers must be **identical**. Use **8501** for both.
+#
+# Deploy logs must show: `statman-web: listening on 0.0.0.0:8501`
 
 ## Web / Worker both fail to build or deploy
 #
