@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1
-# StatMan Web (Streamlit). Listens on Railway-injected $PORT.
+# StatMan Web: portal on $PORT → Streamlit UI + chunked film upload API.
 
 FROM python:3.11-slim AS builder
 
@@ -44,12 +44,17 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     MPLBACKEND=Agg \
     PATH="/opt/venv/bin:$PATH" \
     PYTHONPATH=/app \
-    ENJOYSTATS_API_URL=http://127.0.0.1:8000 \
+    ENJOYSTATS_API_URL=http://127.0.0.1:18000 \
     ENJOYSTATS_JOBS_DIR=/data/jobs \
     ENJOYSTATS_FILM_INBOX=/data/inbox \
     ENJOYSTATS_FILM_UPLOADS=/data/uploads \
+    ENJOYSTATS_SAME_ORIGIN_UPLOAD=1 \
     STATMAN_USE_EXTERNAL_WORKER=1 \
-    STATMAN_STREAMLIT_FILM_UPLOAD=1
+    STATMAN_UPLOAD_ONLY=1 \
+    STATMAN_STREAMLIT_FILM_UPLOAD=0 \
+    ENJOYSTATS_UVICORN_APP=api.upload_app:app \
+    ENJOYSTATS_PORT=18000 \
+    ENJOYSTATS_UI_PORT=18501
 
 WORKDIR /app
 
@@ -57,7 +62,7 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends fonts-dejavu-core libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --create-home --home-dir /home/enjoystats enjoystats \
-    && mkdir -p /data/jobs /data/inbox /data/uploads \
+    && mkdir -p /data/jobs /data/inbox /data/uploads /app/.local-run \
     && chown -R enjoystats:enjoystats /data /app
 
 COPY --from=builder /opt/venv /opt/venv
@@ -73,8 +78,5 @@ RUN chmod +x /app/scripts/statman_web_entrypoint.sh /app/scripts/statman_web_hea
     && chown -R enjoystats:enjoystats /app/.streamlit /app/scripts
 
 USER root
-# Do not declare a container port or bake PORT into the image.
-# Railway injects PORT and routes the domain to it.
-# Attach Volume at /data in the Railway UI (not a Dockerfile volume).
 
 CMD ["/bin/sh", "/app/scripts/statman_web_entrypoint.sh"]

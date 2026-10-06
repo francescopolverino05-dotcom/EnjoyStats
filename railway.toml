@@ -1,12 +1,7 @@
-# Web service only. Worker must use railway.worker.toml.
+# Web service only. Worker → railway.worker.toml
 #
-# Domain 502 fix: do NOT type a random port when generating the domain.
-# After deploy, open Web → Deployments → latest → Logs.
-# Find:  statman-web: Streamlit on 0.0.0.0:NNNN
-# Networking → domain target port = NNNN (that exact number).
-#
-# Also: Variables → delete any manual PORT if it fights the domain.
-# Settings → Deploy → clear Custom Start Command (leave empty).
+# Domain target port must match Railway PORT (yours is 8000).
+# Film upload uses same-origin chunked API via the portal (not Streamlit axios).
 
 [build]
 builder = "DOCKERFILE"

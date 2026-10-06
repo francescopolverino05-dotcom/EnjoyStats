@@ -49,5 +49,8 @@ Web also:
 
 ```
 STATMAN_USE_EXTERNAL_WORKER=1
-STATMAN_STREAMLIT_FILM_UPLOAD=1
+ENJOYSTATS_SAME_ORIGIN_UPLOAD=1
 ```
+
+Film upload: chunked same-origin API through the portal (avoids Streamlit Axios 502).
+Domain target port must match logs (`portal on 0.0.0.0:NNNN` — often **8000**).

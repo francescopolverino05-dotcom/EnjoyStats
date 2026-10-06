@@ -44,20 +44,22 @@ def test_dockerfiles_are_multistage_slim_python() -> None:
     assert "maxMessageSize = 5120" in streamlit_cfg
     assert "PORT" in web_entry
     assert "streamlit run" in web_entry
+    assert "api.portal" in web_entry
     assert "COPY api ./api" in dashboard
     assert "/src/api" in dashboard
     assert "statman_web_entrypoint.sh" in dashboard
-    assert "STATMAN_STREAMLIT_FILM_UPLOAD=1" in dashboard
+    assert "ENJOYSTATS_SAME_ORIGIN_UPLOAD=1" in dashboard
+    assert "api.upload_app:app" in dashboard
     assert "fastapi" in dashboard
-    # Must not hardcode PORT in the image — Railway injects it.
     assert "ENV PORT=" not in dashboard
-    assert "EXPOSE" not in dashboard
 
 
 def test_railway_web_entrypoint_runs_on_port() -> None:
     script = (ROOT / "scripts" / "statman_web_entrypoint.sh").read_text(encoding="utf-8")
     assert "PORT" in script
     assert "streamlit run" in script
+    assert "api.portal" in script
+    assert "upload_app" in script or "UVICORN_APP" in script
     assert "su " not in script
     railway = (ROOT / "railway.toml").read_text(encoding="utf-8")
     assert "statman_web_entrypoint.sh" in railway

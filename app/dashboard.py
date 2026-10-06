@@ -1451,11 +1451,17 @@ def _same_origin_upload() -> bool:
 
 
 def _use_streamlit_film_upload() -> bool:
-    """Railway / external-worker: browser cannot reach container :8000."""
+    """Use Streamlit's uploader only when explicitly enabled.
 
+    On Railway the same-origin portal serves chunked ``/api/.../film/chunk``
+    uploads. Streamlit's built-in uploader often returns AxiosError 502 there.
+    """
+
+    if _same_origin_upload():
+        return False
     if _env_flag("STATMAN_STREAMLIT_FILM_UPLOAD"):
         return True
-    return _env_flag("STATMAN_USE_EXTERNAL_WORKER") and not _same_origin_upload()
+    return False
 
 
 def _ensure_api_watchdog() -> None:
