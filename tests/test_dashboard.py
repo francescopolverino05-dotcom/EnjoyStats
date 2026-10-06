@@ -158,6 +158,7 @@ def test_analyse_uses_newest_uploaded_film(tmp_path, monkeypatch) -> None:
     from streamlit.testing.v1 import AppTest
 
     from analytics.collect_job import read_job_status
+    from analytics.video_auto_collect import MIN_READY_VIDEO_BYTES
 
     monkeypatch.setenv("ENJOYSTATS_JOBS_DIR", str(tmp_path / "jobs"))
     monkeypatch.setenv("ENJOYSTATS_FILM_INBOX", str(tmp_path / "inbox"))
@@ -166,7 +167,8 @@ def test_analyse_uses_newest_uploaded_film(tmp_path, monkeypatch) -> None:
     inbox = tmp_path / "inbox"
     inbox.mkdir(parents=True)
     film = inbox / "gw1.mp4"
-    film.write_bytes(b"fake-match-bytes")
+    header = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00isommp42"
+    film.write_bytes(header + b"\x00" * MIN_READY_VIDEO_BYTES)
     script = Path(__file__).resolve().parents[1] / "app" / "dashboard.py"
     at = AppTest.from_file(str(script), default_timeout=20)
     at.run()

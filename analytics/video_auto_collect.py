@@ -70,6 +70,14 @@ TARGET_EVENT_GAP_S: float = 60.0 / WYSCOUT_ACTIONS_PER_MINUTE
 MIN_EVENT_GAP_S: float = 1.2
 VIDEO_SUFFIXES: tuple[str, ...] = (".mp4", ".mov", ".mkv", ".avi", ".m4v", ".webm")
 TAG_SUFFIXES: tuple[str, ...] = (".xml",)
+# Junk probe bytes and empty uploads must never become "Ready" films.
+MIN_READY_VIDEO_BYTES = 256 * 1024
+_VIDEO_MAGIC_PREFIXES: tuple[bytes, ...] = (
+    b"\x00\x00\x00",  # ISO BMFF / MP4 (size + ftyp)
+    b"ftyp",
+    b"\x1aE\xdf\xa3",  # Matroska / WebM
+    b"RIFF",  # AVI
+)
 
 
 def video_limit_label(max_bytes: int = MAX_VIDEO_BYTES) -> str:
@@ -143,6 +151,63 @@ def film_upload_dir() -> Path:
     return Path(__file__).resolve().parents[1] / ".local-run" / "uploads"
 
 
+def _looks_like_video_bytes(path: Path) -> bool:
+    """Cheap header check so ASCII probe files never get analysed."""
+
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return False
+    if size < MIN_READY_VIDEO_BYTES:
+        return False
+    try:
+        head = path.read_bytes()[:64]
+    except OSError:
+        return False
+    if b"ftyp" in head[:32]:
+        return True
+    return any(head.startswith(magic) for magic in _VIDEO_MAGIC_PREFIXES)
+
+
+def promote_finished_part_films(directory: Path) -> list[Path]:
+    """Rename ``*.mp4.part`` (etc.) to real video names when the bytes look complete.
+
+    Chunked uploads write ``name.mp4.part`` and only rename on the final chunk.
+    If the last chunk drops after the body arrived, the usable film is stuck as
+    ``.part``. Promote it so Analyse Stats can find it.
+    """
+
+    promoted: list[Path] = []
+    if not directory.is_dir():
+        return promoted
+    for part in directory.glob("*.part"):
+        if not part.is_file():
+            continue
+        # Expect names like match.mp4.part → match.mp4
+        name = part.name
+        if not name.endswith(".part"):
+            continue
+        stem = name[: -len(".part")]
+        suffix = Path(stem).suffix.lower()
+        if suffix not in VIDEO_SUFFIXES:
+            continue
+        dest = part.with_name(stem)
+        if not _looks_like_video_bytes(part):
+            continue
+        try:
+            if dest.exists():
+                # Keep the larger of the two.
+                if dest.stat().st_size >= part.stat().st_size:
+                    part.unlink(missing_ok=True)
+                    continue
+                dest.unlink(missing_ok=True)
+            part.replace(dest)
+            promoted.append(dest)
+        except OSError:
+            continue
+    return promoted
+
+
 def list_ready_films(*directories: Path) -> list[Path]:
     """Newest-first films and tag XML sitting in the inbox / uploads folders."""
 
@@ -153,6 +218,7 @@ def list_ready_films(*directories: Path) -> list[Path]:
     for directory in search:
         if not directory.is_dir():
             continue
+        promote_finished_part_films(directory)
         for candidate in directory.iterdir():
             try:
                 resolved = candidate.resolve()
@@ -160,10 +226,18 @@ def list_ready_films(*directories: Path) -> list[Path]:
                 continue
             if resolved in seen or not resolved.is_file():
                 continue
-            if resolved.suffix.lower() not in accepted:
+            suffix = resolved.suffix.lower()
+            if suffix not in accepted:
                 continue
-            if resolved.stat().st_size <= 0:
+            try:
+                size = resolved.stat().st_size
+            except OSError:
                 continue
+            if size <= 0:
+                continue
+            if suffix in VIDEO_SUFFIXES:
+                if size < MIN_READY_VIDEO_BYTES or not _looks_like_video_bytes(resolved):
+                    continue
             seen.add(resolved)
             found.append(resolved)
     found.sort(key=lambda path: path.stat().st_mtime, reverse=True)
@@ -227,7 +301,8 @@ def remux_for_opencv(path: Path) -> Path:
         raise VideoCollectError(
             f"OpenCV could not open the match film: {resolved}. "
             "Install ffmpeg to remux unsupported codecs, or export the "
-            "clip as mp4/avi."
+            "clip as mp4/avi. If this path is a tiny leftover file, "
+            "re-upload the real match film and wait until it says Saved."
         )
 
     copy_cmd = [

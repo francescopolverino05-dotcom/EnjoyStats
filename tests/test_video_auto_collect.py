@@ -295,3 +295,24 @@ def test_analyse_stats_runs_film_even_with_sibling_wyscout(tmp_path: Path) -> No
     assert rundown.summary.passes < 100
     names = {profile.player_name for profile in rundown.players}
     assert "A. Harriman-Annous" not in names
+
+
+def test_list_ready_films_skips_tiny_junk_and_promotes_part(tmp_path: Path) -> None:
+    from analytics.video_auto_collect import (
+        MIN_READY_VIDEO_BYTES,
+        list_ready_films,
+        promote_finished_part_films,
+    )
+
+    junk = tmp_path / "probe.mp4"
+    junk.write_bytes(b"REMOTE_PORTAL")
+    # Valid-looking MP4 header + padding past the minimum size.
+    header = b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00isommp42"
+    part = tmp_path / "match.mp4.part"
+    part.write_bytes(header + b"\x00" * MIN_READY_VIDEO_BYTES)
+    promoted = promote_finished_part_films(tmp_path)
+    assert any(p.name == "match.mp4" for p in promoted)
+    ready = list_ready_films(tmp_path)
+    names = {p.name for p in ready}
+    assert "match.mp4" in names
+    assert "probe.mp4" not in names
