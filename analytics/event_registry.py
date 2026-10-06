@@ -1,4 +1,4 @@
-"""Industry event definitions aligned to EnjoyStats ``EventType``.
+"""Industry event definitions aligned to StatMan IQ ``EventType``.
 
 Sources (simplified operator wording):
 - Wyscout Data Glossary — https://dataglossary.wyscout.com/
@@ -22,18 +22,18 @@ WYSCOUT_DANGER_Y_MAX: Final[float] = 63.71
 
 
 class DataProvider(StrEnum):
-    """External data models referenced by EnjoyStats IQ."""
+    """External data models referenced by StatMan IQ."""
 
     WYSCOUT = "wyscout"
     OPTA = "opta"
     STATSBOMB = "statsbomb"
     COACHES_VOICE = "coaches_voice"
-    ENJOYSTATS = "enjoystats"
+    STATMAN = "statman"
 
 
 @dataclass(frozen=True, slots=True)
 class EventDefinition:
-    """One EnjoyStats event mapped to provider vocabulary."""
+    """One StatMan event mapped to provider vocabulary."""
 
     event_type: EventType
     summary: str
@@ -283,7 +283,7 @@ def event_definition(event_type: EventType) -> EventDefinition:
     if row is None:
         return EventDefinition(
             event_type=event_type,
-            summary=f"EnjoyStats event `{event_type.value}`.",
+            summary=f"StatMan event `{event_type.value}`.",
         )
     return row
 
