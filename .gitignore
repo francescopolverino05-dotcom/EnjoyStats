@@ -15,6 +15,9 @@ htmlcov/
 venv/
 env/
 
+# Local one-click runner logs / PIDs
+.local-run/
+
 # Environment and secrets
 .env
 .env.*
@@ -29,3 +32,13 @@ env/
 build/
 dist/
 *.egg-info/
+
+# Node / STAT MAN
+node_modules/
+apps/web/.next/
+*.sqlite
+.turbo/
+
+# ML weights (downloaded locally)
+*.pt
+yolov8*.pt

@@ -17,6 +17,7 @@ def test_compose_stack_wires_db_api_and_dashboard() -> None:
         in compose
     )
     assert "condition: service_healthy" in compose
+    assert '"5432:5432"' in compose
     assert '"8000:8000"' in compose
     assert '"8501:8501"' in compose
     assert "ENJOYSTATS_API_URL" in compose
@@ -35,4 +36,9 @@ def test_dockerfiles_are_multistage_slim_python() -> None:
     assert "python:3.11-slim AS runtime" in dashboard
     assert 'CMD ["python", "-m", "api.main"]' in api
     assert "streamlit" in dashboard
+    assert "opencv-python-headless" in dashboard
+    assert "yt-dlp" in dashboard
+    assert "maxUploadSize=5120" in dashboard
+    assert "maxMessageSize=5120" in dashboard
+    assert "0.0.0.0" in dashboard
     assert "http://api:8000" in dashboard

@@ -45,6 +45,7 @@ class EventType(StrEnum):
     YELLOW_CARD = "yellow_card"
     RED_CARD = "red_card"
     GOAL_CONCEDED = "goal_conceded"
+    SAVE = "save"
 
 
 class ShotOutcome(StrEnum):
