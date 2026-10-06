@@ -55,6 +55,16 @@ from analytics.smart_detect import (
     detector_label,
     parse_kit_hex,
 )
+from analytics.tactics_iq import (
+    GOAL_MIN_GAP_S,
+    PENDING_SHOT_TTL_S,
+    SHOT_MIN_GAP_S,
+    classify_distribution,
+    classify_strike,
+    is_goalkeeper_actor,
+    progressive_from_half_space,
+    shot_outcome_for,
+)
 from data_models.events import EventType, MatchEvent, ShotOutcome
 
 AUTO_NAMESPACE: UUID = UUID("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa")
@@ -68,16 +78,6 @@ DEFAULT_MAX_SAMPLE_FRAMES: int = 72_000
 WYSCOUT_ACTIONS_PER_MINUTE: float = 7.55
 TARGET_EVENT_GAP_S: float = 60.0 / WYSCOUT_ACTIONS_PER_MINUTE
 MIN_EVENT_GAP_S: float = 1.2
-# Film CV is geometry, not a human tagger — shots/goals need strict gates or
-# every box carry becomes a "shot" and every end-line touch a "goal".
-SHOT_MIN_GAP_S: float = 10.0
-GOAL_MIN_GAP_S: float = 30.0
-SHOT_MIN_TRAVEL: float = 12.0
-SHOT_MIN_SPEED: float = 22.0
-GOAL_MOUTH_X: float = 3.5
-GOAL_POST_Y_MIN: float = 36.0
-GOAL_POST_Y_MAX: float = 64.0
-PENDING_SHOT_TTL_S: float = 2.5
 VIDEO_SUFFIXES: tuple[str, ...] = (".mp4", ".mov", ".mkv", ".avi", ".m4v", ".webm")
 TAG_SUFFIXES: tuple[str, ...] = (".xml",)
 # Junk probe bytes and empty uploads must never become "Ready" films.
@@ -182,8 +182,14 @@ def finish_collect_from_checkpoint(film: Path) -> MatchRundown:
     rundown = collect_game(
         GamePayload(
             match_id=UUID(str(payload["match_id"])),
-            players=[PlayerRosterEntry.model_validate(row) for row in payload["players"]],  # type: ignore[arg-type]
-            events=[MatchEvent.model_validate(row) for row in payload["events"]],  # type: ignore[arg-type]
+            players=[
+                PlayerRosterEntry.model_validate(row)  # type: ignore[arg-type]
+                for row in payload["players"]
+            ],
+            events=[
+                MatchEvent.model_validate(row)  # type: ignore[arg-type]
+                for row in payload["events"]
+            ],
             home_team_name=str(payload.get("home_team_name") or "Home"),
             away_team_name=str(payload.get("away_team_name") or "Away"),
             tag_source="film",
@@ -1182,6 +1188,8 @@ def events_from_tracks(
         lineups=lineups,
     )
     locked_team_by_player = {entry.player_id: entry.team_id for entry in roster}
+    position_by_player = {entry.player_id: (entry.position or "") for entry in roster}
+    name_by_player = {entry.player_id: (entry.player_name or "") for entry in roster}
 
     frame_indexes = sorted({frame for track in players for frame in track.frames})
     if ball is not None:
@@ -1230,29 +1238,36 @@ def events_from_tracks(
         toward_goal = abs(point[0] - attack_goal) < abs(start[0] - attack_goal)
         box_x = 82.0 if attack_goal >= 50 else 18.0
         in_box = point[0] >= box_x if attack_goal >= 50 else point[0] <= box_x
-        start_in_box = start[0] >= box_x if attack_goal >= 50 else start[0] <= box_x
-        between_posts = GOAL_POST_Y_MIN <= point[1] <= GOAL_POST_Y_MAX
-        # Goal mouth = on the goal line *and* between the posts — not the corner flags.
-        at_mouth = abs(point[0] - attack_goal) <= GOAL_MOUTH_X and between_posts
-        wide = point[1] <= 18.0 or point[1] >= 82.0
         touchline = point[1] <= 4.0 or point[1] >= 96.0
         corner = (point[0] <= 6.0 or point[0] >= 94.0) and (point[1] <= 10.0 or point[1] >= 90.0)
         gap_ok = (now_s - last_event_s) >= MIN_EVENT_GAP_S
         due = (now_s - last_event_s) >= TARGET_EVENT_GAP_S
         shot_gap_ok = (now_s - last_shot_s) >= SHOT_MIN_GAP_S
         goal_gap_ok = (now_s - last_goal_s) >= GOAL_MIN_GAP_S
-        # A shot is a strike toward goal from the box — not a dribble or square pass.
-        strike = travel >= SHOT_MIN_TRAVEL or speed >= SHOT_MIN_SPEED
-        shot_like = (
-            toward_goal
-            and (in_box or start_in_box)
-            and strike
-            and not wide
-            and shot_gap_ok
-            and (gap_ok or at_mouth)
-        )
         actor = last_owner if last_owner is not None else owner
         actor_player_id = player_ids[actor.track_id]
+        actor_is_gk = is_goalkeeper_actor(
+            position_by_player.get(actor_player_id),
+            player_name=name_by_player.get(actor_player_id),
+        )
+        verdict = classify_strike(
+            start=start,
+            point=point,
+            travel=travel,
+            speed=speed,
+            attack_goal_x=attack_goal,
+            shot_gap_ok=shot_gap_ok,
+            goal_gap_ok=goal_gap_ok,
+            gap_ok=gap_ok,
+            actor_is_gk=actor_is_gk,
+            pending_shot=pending_shot is not None,
+            pending_fresh=(now_s - pending_shot_s) <= PENDING_SHOT_TTL_S,
+        )
+        is_progressive = toward_goal and travel >= 8.0
+        if progressive_from_half_space(
+            start_y=start[1], toward_goal=toward_goal, travel=travel
+        ):
+            is_progressive = True
         payload: dict[str, object] = {
             "match_id": match_id,
             "team_id": locked_team_by_player.get(actor_player_id, team_ids[actor.team]),
@@ -1265,58 +1280,41 @@ def events_from_tracks(
             "end_x": point[0],
             "end_y": point[1],
             "successful": True,
-            "is_progressive": toward_goal and travel >= 8.0,
+            "is_progressive": is_progressive,
             "attacking_left_to_right": attack_goal >= 50,
             "video_timestamp_ms": timestamp_ms,
             "clip_url": clip_url,
         }
 
         tagged = False
-        if (
-            pending_shot is not None
-            and at_mouth
-            and toward_goal
-            and goal_gap_ok
-            and (now_s - pending_shot_s) <= PENDING_SHOT_TTL_S
-        ):
+        if verdict.is_goal:
             _emit(
                 {
                     **payload,
                     "event_type": EventType.GOAL,
                     "is_goal": True,
                     "shot_outcome": ShotOutcome.ON_TARGET,
-                    "player_id": pending_shot.player_id,
-                    "team_id": pending_shot.team_id,
+                    "player_id": (
+                        pending_shot.player_id if pending_shot is not None else actor_player_id
+                    ),
+                    "team_id": (
+                        pending_shot.team_id
+                        if pending_shot is not None
+                        else payload["team_id"]
+                    ),
                 }
             )
             pending_shot = None
             last_shot_s = now_s
             last_goal_s = now_s
             tagged = True
-        elif shot_like and at_mouth and goal_gap_ok:
-            # Ball already arrived between the posts on a strike — count the goal.
-            _emit(
-                {
-                    **payload,
-                    "event_type": EventType.GOAL,
-                    "is_goal": True,
-                    "shot_outcome": ShotOutcome.ON_TARGET,
-                }
-            )
-            pending_shot = None
-            last_shot_s = now_s
-            last_goal_s = now_s
-            tagged = True
-        elif shot_like:
-            on_target = between_posts and abs(point[0] - attack_goal) <= 12.0
+        elif verdict.is_shot:
             shot = _emit(
                 {
                     **payload,
                     "event_type": EventType.SHOT,
                     "is_goal": False,
-                    "shot_outcome": (
-                        ShotOutcome.ON_TARGET if on_target else ShotOutcome.MISSED
-                    ),
+                    "shot_outcome": shot_outcome_for(verdict),
                 }
             )
             pending_shot = shot
@@ -1351,6 +1349,7 @@ def events_from_tracks(
                 )
                 tagged = True
             elif last_owner is not None and owner.team != last_owner.team and gap_ok:
+                # Defensive transition → attacking transition for the winner.
                 _emit(
                     {
                         **payload,
@@ -1391,21 +1390,20 @@ def events_from_tracks(
                 and travel >= 3.5
                 and gap_ok
             ):
-                if corner:
-                    kind = EventType.CORNER
-                elif touchline:
-                    kind = EventType.THROW_IN
-                elif wide and in_box:
-                    kind = EventType.CROSS
-                elif travel >= 30.0:
-                    # Long diagonal / switch — OnceSport "Lanci lunghi".
-                    kind = EventType.PASS
+                kind = classify_distribution(
+                    start=start,
+                    point=point,
+                    travel=travel,
+                    toward_goal=toward_goal,
+                    in_box=in_box,
+                    touchline=touchline,
+                    corner=corner,
+                    actor_is_gk=actor_is_gk,
+                )
+                if kind is EventType.PASS and travel >= 30.0:
                     payload["is_progressive"] = True
-                elif travel >= 18.0 and toward_goal:
-                    kind = EventType.PASS
+                elif kind is EventType.PASS and travel >= 18.0 and toward_goal:
                     payload["is_progressive"] = True
-                else:
-                    kind = EventType.PASS
                 extra: dict[str, object] = {"event_type": kind}
                 if kind in {EventType.CORNER, EventType.THROW_IN}:
                     extra["end_x"] = point[0]
@@ -1413,7 +1411,18 @@ def events_from_tracks(
                 _emit({**payload, **extra})
                 tagged = True
             elif due and travel >= 4.0:
-                kind = EventType.THROW_IN if touchline else EventType.PASS
+                kind = classify_distribution(
+                    start=start,
+                    point=point,
+                    travel=travel,
+                    toward_goal=toward_goal,
+                    in_box=in_box,
+                    touchline=touchline,
+                    corner=False,
+                    actor_is_gk=actor_is_gk,
+                )
+                if kind is EventType.CROSS and actor_is_gk:
+                    kind = EventType.PASS
                 _emit({**payload, "event_type": kind})
                 tagged = True
 
@@ -1505,7 +1514,6 @@ def sample_and_track(
     frame_index = start_frame
     if start_frame > 0:
         capture.set(cv2.CAP_PROP_POS_FRAMES, float(start_frame))
-    match_minutes = max(window_duration / 60.0, planned / max(sample_hz, 0.1) / 60.0)
     try:
         while sampled < max_sample_frames and frame_index < end_frame:
             if step > 1 and (frame_index - start_frame) % step != 0:

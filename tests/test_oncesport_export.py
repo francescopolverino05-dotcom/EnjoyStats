@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from uuid import uuid4
 
-from analytics.game_ingest import GamePayload, PlayerRosterEntry, collect_game
+from analytics.game_ingest import collect_game
 from analytics.oncesport_export import (
     AWAY_BUTTONS,
     HOME_BUTTONS,

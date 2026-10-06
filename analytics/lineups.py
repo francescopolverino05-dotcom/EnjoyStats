@@ -159,7 +159,16 @@ def _player_name_from_row(row: dict[str, Any]) -> str:
         _row_get(row, "firstname", "first_name", "first", "nome", "givenname", "given_name") or ""
     )
     last = _clean_name(
-        _row_get(row, "lastname", "last_name", "last", "cognome", "surname", "familyname", "family_name")
+        _row_get(
+            row,
+            "lastname",
+            "last_name",
+            "last",
+            "cognome",
+            "surname",
+            "familyname",
+            "family_name",
+        )
         or ""
     )
     return _clean_name(f"{first} {last}".strip())

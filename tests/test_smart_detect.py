@@ -34,8 +34,6 @@ def test_assign_side_by_kit_picks_nearest() -> None:
 
 
 def test_assign_teams_uses_kit_colours() -> None:
-    home_bgr = parse_kit_hex("#B45014")  # ≈ synthetic player_a BGR (180,80,20)
-    away_bgr = parse_kit_hex("#C82814")  # ≈ synthetic player_b-ish red
     # Use the exact synthetic circle colours.
     home_exact = (180.0, 80.0, 20.0)
     away_exact = (20.0, 40.0, 200.0)
