@@ -1,17 +1,17 @@
 # Railway config for the **Web** service only.
-# Worker must use a different Config-as-code file:
-#   Settings → Config-as-code → railway.worker.toml
+# Worker → Settings → Config-as-code → railway.worker.toml
 #
-# Generate Service Domain port: 8501
-# (must match the container listen port / $PORT)
+# CRITICAL: Networking domain target port must equal the PORT variable.
+# Set Web → Variables → PORT=8501 and domain target port 8501 (same number).
 
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile.dashboard"
 
 [deploy]
-startCommand = "/app/scripts/statman_web_entrypoint.sh"
+# Shell form so $PORT expands if Railway substitutes the start command.
+startCommand = "/bin/sh /app/scripts/statman_web_entrypoint.sh"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
 healthcheckPath = "/_stcore/health"
-healthcheckTimeout = 120
+healthcheckTimeout = 300

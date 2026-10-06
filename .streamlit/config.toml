@@ -1,13 +1,11 @@
 [server]
 address = "0.0.0.0"
-# Entrypoint CLI sets --server.port from Railway $PORT (default 8501).
-port = 8501
-maxUploadSize = 5120
-maxMessageSize = 5120
 headless = true
 enableXsrfProtection = false
 enableCORS = false
 enableWebsocketCompression = false
+maxUploadSize = 5120
+maxMessageSize = 5120
 
 [browser]
 gatherUsageStats = false

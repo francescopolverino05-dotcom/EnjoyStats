@@ -11,7 +11,6 @@
 # 3. Copy env from .env.example (Railway section) onto both.
 # 4. Web: public URL, Dockerfile.dashboard / railway.toml
 # 5. Worker: no public domain, Dockerfile.worker / railway.worker.toml
-#    start = python -m analytics.collect_worker
 #
 # Flow: upload film on the site → job queued under /data/jobs →
 # worker claims it → Analyse runs off the web dyno → download PDF →
@@ -19,47 +18,37 @@
 
 ## Web “Application failed to respond” (HTTP 502)
 #
-# Site URL: https://statman-production.up.railway.app
+# Site: https://statman-production.up.railway.app
 #
-# Almost always a **port mismatch**:
-#   Web → Variables → PORT (or STATMAN_LISTEN_PORT)
-#   Web → Settings → Networking → target port
-# Those two numbers must be **identical**. Use **8501** for both.
+# Fix the domain target port (most common cause):
+#   1. Web → Variables → set PORT = 8501
+#   2. Web → Settings → Networking → domain target port = 8501
+#      (same number as PORT — not 3000, not blank mismatch)
+#   3. Redeploy Web
+#   4. Deploy logs must show: statman-web: Streamlit 0.0.0.0:8501
 #
-# Deploy logs must show: `statman-web: listening on 0.0.0.0:8501`
+# Web start is Streamlit on $PORT only (no portal sidecar).
 
-## Web / Worker both fail to build or deploy
+## Web / Worker config files
 #
-# 1. Each service needs its **own** Config-as-code file:
-#      Web    → railway.toml          (Dockerfile.dashboard)
-#      Worker → railway.worker.toml   (Dockerfile.worker)
-#    If Worker is left on railway.toml it builds the Web image and breaks.
-# 2. Generate Service Domain port: **8501** (Web only).
-# 3. Attach Volume at /data on both (Railway UI — not Dockerfile VOLUME).
-# 4. Redeploy both after this branch updates.
+#   Web    → railway.toml          (Dockerfile.dashboard)
+#   Worker → railway.worker.toml   (Dockerfile.worker)
 
-Web start (Railway / Docker):
-  /app/scripts/statman_web_entrypoint.sh
-  (Streamlit on $PORT · film upload via Streamlit into /data)
+Web start:
+  /bin/sh /app/scripts/statman_web_entrypoint.sh
 
 Worker start:
   /app/scripts/statman_worker_entrypoint.sh
-  (or: python -m analytics.collect_worker)
-
-Worker build:
-  Dockerfile path = Dockerfile.worker
-  (If Worker crashes instantly, it is almost always still on Dockerfile.dashboard
-  OR /data volume permissions — entrypoint now chowns /data.)
 
 Required shared env (both services):
   ENJOYSTATS_JOBS_DIR=/data/jobs
   ENJOYSTATS_FILM_INBOX=/data/inbox
   ENJOYSTATS_FILM_UPLOADS=/data/uploads
 
-Web-only (defaults are set in Dockerfile.dashboard):
+Web-only:
   STATMAN_USE_EXTERNAL_WORKER=1
   STATMAN_STREAMLIT_FILM_UPLOAD=1
-  PORT=8501   # or Railway's $PORT — must match Generate Service Domain
+  PORT=8501
 
 Worker-only:
   STATMAN_WORKER_POLL_S=3
