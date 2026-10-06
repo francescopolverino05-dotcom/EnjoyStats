@@ -20,11 +20,13 @@ Web start (Nixpacks / custom):
   streamlit run app/dashboard.py --server.address=0.0.0.0 --server.port=$PORT --server.headless=true --server.maxUploadSize=5120 --browser.gatherUsageStats=false
 
 Worker start:
-  python -m analytics.collect_worker
+  /app/scripts/statman_worker_entrypoint.sh
+  (or: python -m analytics.collect_worker)
 
 Worker build:
   Dockerfile path = Dockerfile.worker
-  (If Worker crashes instantly, it is almost always still on Dockerfile.dashboard.)
+  (If Worker crashes instantly, it is almost always still on Dockerfile.dashboard
+  OR /data volume permissions — entrypoint now chowns /data.)
 
 Required shared env (both services):
   ENJOYSTATS_JOBS_DIR=/data/jobs

@@ -65,3 +65,19 @@ def test_claim_is_exclusive(tmp_path: Path, monkeypatch) -> None:
 def test_poll_once_no_work(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("ENJOYSTATS_JOBS_DIR", str(tmp_path))
     assert poll_once() is False
+
+
+def test_ensure_jobs_dir_falls_back_when_unwritable(tmp_path: Path, monkeypatch) -> None:
+    from analytics.collect_worker import ensure_jobs_dir
+
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+    blocked.chmod(0o555)
+    monkeypatch.setenv("ENJOYSTATS_JOBS_DIR", str(blocked / "jobs"))
+    monkeypatch.setenv("TMPDIR", str(tmp_path / "tmp"))
+    try:
+        path = ensure_jobs_dir()
+        assert path.is_dir()
+        assert "statman" in str(path)
+    finally:
+        blocked.chmod(0o755)

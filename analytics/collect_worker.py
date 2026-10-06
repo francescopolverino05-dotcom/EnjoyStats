@@ -140,20 +140,33 @@ def poll_once() -> bool:
     return False
 
 
+def ensure_jobs_dir() -> Path:
+    """Create the jobs directory, falling back if the volume is not writable."""
+
+    primary = collect_jobs_dir()
+    try:
+        primary.mkdir(parents=True, exist_ok=True)
+        probe = primary / ".statman_write_probe"
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink(missing_ok=True)
+        return primary
+    except OSError as exc:
+        fallback = Path(os.environ.get("TMPDIR") or "/tmp") / "statman" / "jobs"
+        sys.stderr.write(
+            f"[statman-worker] {primary} not writable ({exc}); using {fallback}\n"
+            "Attach the same Railway volume at /data on Web + Worker.\n"
+        )
+        sys.stderr.flush()
+        fallback.mkdir(parents=True, exist_ok=True)
+        os.environ["ENJOYSTATS_JOBS_DIR"] = str(fallback)
+        return fallback
+
+
 def run_forever(*, poll_s: float | None = None) -> None:
     """Block forever, claiming queued Analyse jobs."""
 
     interval = worker_poll_seconds() if poll_s is None else max(0.5, float(poll_s))
-    jobs = collect_jobs_dir()
-    try:
-        jobs.mkdir(parents=True, exist_ok=True)
-    except OSError as exc:
-        sys.stderr.write(
-            f"[statman-worker] cannot create jobs dir {jobs}: {exc}\n"
-            "Mount a Railway volume at /data and set ENJOYSTATS_JOBS_DIR=/data/jobs\n"
-        )
-        sys.stderr.flush()
-        raise SystemExit(1) from exc
+    jobs = ensure_jobs_dir()
     sys.stdout.write(
         f"[statman-worker] watching {jobs} every {interval:.1f}s "
         f"(external_worker={use_external_worker()})\n"
