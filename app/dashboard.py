@@ -56,6 +56,7 @@ from app.ingest import (
     persist_rundown,
     profile_label,
     ready_match_films,
+    save_uploaded_film,
 )
 from analytics.collect_job import (
     latest_job_status_path,
@@ -71,9 +72,11 @@ from analytics.team_collect import (
     team_profiles_from_rundown,
 )
 from analytics.video_auto_collect import (
+    VIDEO_SUFFIXES,
     VideoCollectError,
     film_inbox_dir,
     film_upload_dir,
+    safe_film_name,
     video_limit_label,
 )
 from api.film_upload import upload_page_html
@@ -1439,18 +1442,27 @@ def render_statman_panel() -> None:
                 )
 
 
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _same_origin_upload() -> bool:
-    return os.environ.get("ENJOYSTATS_SAME_ORIGIN_UPLOAD", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    return _env_flag("ENJOYSTATS_SAME_ORIGIN_UPLOAD")
+
+
+def _use_streamlit_film_upload() -> bool:
+    """Railway / external-worker: browser cannot reach container :8000."""
+
+    if _env_flag("STATMAN_STREAMLIT_FILM_UPLOAD"):
+        return True
+    return _env_flag("STATMAN_USE_EXTERNAL_WORKER") and not _same_origin_upload()
 
 
 def _ensure_api_watchdog() -> None:
     """Background loop so Uvicorn is restarted if it dies mid-session."""
 
+    if _use_streamlit_film_upload():
+        return
     if st.session_state.get("_api_watchdog_started"):
         return
     st.session_state["_api_watchdog_started"] = True
@@ -1466,8 +1478,47 @@ def _ensure_api_watchdog() -> None:
     threading.Thread(target=_loop, name="enjoystats-api-watchdog", daemon=True).start()
 
 
+def render_streamlit_film_uploader() -> None:
+    """Save a match film into the shared /data inbox (Railway-safe)."""
+
+    st.markdown("**Upload match film**")
+    st.caption(
+        f"Saved into the shared inbox (up to {video_limit_label()}). "
+        "When it says Saved, click Analyse Stats below."
+    )
+    uploaded = st.file_uploader(
+        "Match film",
+        type=[suffix.lstrip(".") for suffix in VIDEO_SUFFIXES],
+        key="analyse_streamlit_film",
+    )
+    if uploaded is None:
+        return
+    if st.button(
+        "Save film to inbox", type="primary", use_container_width=True, key="save_st_film"
+    ):
+        try:
+            name = safe_film_name(getattr(uploaded, "name", "") or "match.mp4")
+            destination = film_inbox_dir() / name
+            progress = st.progress(0, text="Saving film…")
+
+            def _on_progress(done: int, total: int) -> None:
+                if total > 0:
+                    progress.progress(min(done / total, 1.0), text=f"Saving… {_format_bytes(done)}")
+
+            saved = save_uploaded_film(uploaded, destination, on_progress=_on_progress)
+            progress.progress(1.0, text="Saved")
+            st.success(f"Saved: **{saved.name}** · {_format_bytes(saved.stat().st_size)}")
+            st.rerun()
+        except (ValueError, OSError, VideoCollectError) as exc:
+            st.error(str(exc))
+
+
 def render_film_uploader_panel(base_url: str) -> None:
-    """The only match-film upload path: chunked FastAPI uploader."""
+    """Match-film upload: Streamlit on Railway, chunked FastAPI locally/portal."""
+
+    if _use_streamlit_film_upload():
+        render_streamlit_film_uploader()
+        return
 
     _ensure_api_watchdog()
     status = ensure_api_running(wait_s=20.0)
@@ -2047,9 +2098,11 @@ def main(*, fetch: FetchFn = _run_fetch) -> None:
     _inject_styles()
     if not _site_password_ok():
         return
-    # Film upload must never depend on someone remembering to start Uvicorn.
-    ensure_api_running(wait_s=15.0)
-    _ensure_api_watchdog()
+    # On Railway, skip local Uvicorn — the public port is Streamlit only.
+    # Blocking here for 15s caused Railway's "Application failed to respond".
+    if not _use_streamlit_film_upload():
+        ensure_api_running(wait_s=15.0)
+        _ensure_api_watchdog()
     _hydrate_collect_job()
     base_url = render_sidebar()
     rundown = _stored_rundown()

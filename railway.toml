@@ -3,16 +3,15 @@
 #   Settings → Config-as-code → railway.worker.toml
 #
 # Generate Service Domain port: 8501
+# (must match the container listen port / $PORT)
 
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile.dashboard"
 
 [deploy]
-# Match Dockerfile CMD. Do not set a second conflicting custom start in the UI.
 startCommand = "/app/scripts/statman_web_entrypoint.sh"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
-# Portal + Streamlit need time; 30s is too short and marks the deploy failed.
 healthcheckPath = "/_stcore/health"
-healthcheckTimeout = 300
+healthcheckTimeout = 120

@@ -43,18 +43,18 @@ def test_dockerfiles_are_multistage_slim_python() -> None:
     assert "maxMessageSize=5120" in web_entry
     assert "COPY api ./api" in dashboard
     assert "/src/api" in dashboard
-    assert "api.upload_app:app" in dashboard
     assert "statman_web_entrypoint.sh" in dashboard
+    assert "STATMAN_STREAMLIT_FILM_UPLOAD=1" in dashboard
     assert "fastapi" in dashboard
-    assert "websockets" in dashboard
     assert "http://127.0.0.1:8000" in dashboard
 
 
-def test_railway_web_entrypoint_uses_portal() -> None:
+def test_railway_web_entrypoint_runs_streamlit_on_port() -> None:
     script = (ROOT / "scripts" / "statman_web_entrypoint.sh").read_text(encoding="utf-8")
-    assert "api.portal" in script
     assert "streamlit run app/dashboard.py" in script
+    assert "server.address=0.0.0.0" in script
     assert "PORT" in script
+    assert "STATMAN_STREAMLIT_FILM_UPLOAD" in script
     railway = (ROOT / "railway.toml").read_text(encoding="utf-8")
     assert "statman_web_entrypoint.sh" in railway
     assert "Dockerfile.dashboard" in railway

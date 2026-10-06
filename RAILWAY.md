@@ -17,6 +17,13 @@
 # worker claims it → Analyse runs off the web dyno → download PDF →
 # delete the film when done.
 
+## Web “Application failed to respond”
+#
+# Site URL (production): https://statman-production.up.railway.app
+# Web start is Streamlit on $PORT (no portal sidecar).
+# Domain port must be **8501** (or whatever $PORT is).
+# Logs should show: `statman-web: Streamlit on 0.0.0.0:…`
+
 ## Web / Worker both fail to build or deploy
 #
 # 1. Each service needs its **own** Config-as-code file:
@@ -24,13 +31,12 @@
 #      Worker → railway.worker.toml   (Dockerfile.worker)
 #    If Worker is left on railway.toml it builds the Web image and breaks.
 # 2. Generate Service Domain port: **8501** (Web only).
-# 3. Redeploy both after this branch updates.
-# 4. Logs: Web should show `statman-web: starting portal`.
-#    Worker should show collect_worker poll / claim lines.
+# 3. Attach Volume at /data on both (Railway UI — not Dockerfile VOLUME).
+# 4. Redeploy both after this branch updates.
 
 Web start (Railway / Docker):
   /app/scripts/statman_web_entrypoint.sh
-  (portal on $PORT · Streamlit internal · slim upload API on :8000)
+  (Streamlit on $PORT · film upload via Streamlit into /data)
 
 Worker start:
   /app/scripts/statman_worker_entrypoint.sh
@@ -48,8 +54,7 @@ Required shared env (both services):
 
 Web-only (defaults are set in Dockerfile.dashboard):
   STATMAN_USE_EXTERNAL_WORKER=1
-  STATMAN_UPLOAD_ONLY=1
-  ENJOYSTATS_SAME_ORIGIN_UPLOAD=1
+  STATMAN_STREAMLIT_FILM_UPLOAD=1
   PORT=8501   # or Railway's $PORT — must match Generate Service Domain
 
 Worker-only:

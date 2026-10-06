@@ -45,15 +45,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     MPLBACKEND=Agg \
     PATH="/opt/venv/bin:$PATH" \
     PYTHONPATH=/app \
-    PORT=8501 \
     ENJOYSTATS_API_URL=http://127.0.0.1:8000 \
     ENJOYSTATS_JOBS_DIR=/data/jobs \
     ENJOYSTATS_FILM_INBOX=/data/inbox \
     ENJOYSTATS_FILM_UPLOADS=/data/uploads \
-    ENJOYSTATS_SAME_ORIGIN_UPLOAD=1 \
-    STATMAN_UPLOAD_ONLY=1 \
     STATMAN_USE_EXTERNAL_WORKER=1 \
-    ENJOYSTATS_UVICORN_APP=api.upload_app:app
+    STATMAN_STREAMLIT_FILM_UPLOAD=1
 
 WORKDIR /app
 
@@ -81,8 +78,7 @@ USER root
 EXPOSE 8501
 # Do not use Dockerfile VOLUME — Railway rejects it. Attach a Volume at /data in the UI.
 
-# Public PORT serves the portal (proxies Streamlit /_stcore/health).
-HEALTHCHECK --interval=15s --timeout=5s --start-period=90s --retries=10 \
+HEALTHCHECK --interval=15s --timeout=5s --start-period=45s --retries=8 \
     CMD ["/app/scripts/statman_web_healthcheck.sh"]
 
 # Prefer CMD (not ENTRYPOINT) so Railway startCommand can replace cleanly.
