@@ -68,6 +68,16 @@ DEFAULT_MAX_SAMPLE_FRAMES: int = 72_000
 WYSCOUT_ACTIONS_PER_MINUTE: float = 7.55
 TARGET_EVENT_GAP_S: float = 60.0 / WYSCOUT_ACTIONS_PER_MINUTE
 MIN_EVENT_GAP_S: float = 1.2
+# Film CV is geometry, not a human tagger — shots/goals need strict gates or
+# every box carry becomes a "shot" and every end-line touch a "goal".
+SHOT_MIN_GAP_S: float = 10.0
+GOAL_MIN_GAP_S: float = 30.0
+SHOT_MIN_TRAVEL: float = 12.0
+SHOT_MIN_SPEED: float = 22.0
+GOAL_MOUTH_X: float = 3.5
+GOAL_POST_Y_MIN: float = 36.0
+GOAL_POST_Y_MAX: float = 64.0
+PENDING_SHOT_TTL_S: float = 2.5
 VIDEO_SUFFIXES: tuple[str, ...] = (".mp4", ".mov", ".mkv", ".avi", ".m4v", ".webm")
 TAG_SUFFIXES: tuple[str, ...] = (".xml",)
 # Junk probe bytes and empty uploads must never become "Ready" films.
@@ -1179,10 +1189,13 @@ def events_from_tracks(
 
     events: list[MatchEvent] = []
     last_event_s = -1e9
+    last_shot_s = -1e9
+    last_goal_s = -1e9
     last_tag_point: tuple[float, float] | None = None
     last_owner: Track | None = None
     prev_point: tuple[float, float] | None = None
     pending_shot: MatchEvent | None = None
+    pending_shot_s = -1e9
 
     def _emit(payload: dict[str, object]) -> MatchEvent:
         event = MatchEvent.model_validate(payload)
@@ -1196,6 +1209,8 @@ def events_from_tracks(
             continue
         period, minute, second, timestamp_ms = _clock(frame_index, fps)
         now_s = timestamp_ms / 1000.0
+        if pending_shot is not None and (now_s - pending_shot_s) > PENDING_SHOT_TTL_S:
+            pending_shot = None
         if last_tag_point is None or last_owner is None:
             last_tag_point = point
             last_owner = owner
@@ -1215,12 +1230,27 @@ def events_from_tracks(
         toward_goal = abs(point[0] - attack_goal) < abs(start[0] - attack_goal)
         box_x = 82.0 if attack_goal >= 50 else 18.0
         in_box = point[0] >= box_x if attack_goal >= 50 else point[0] <= box_x
-        mouth = abs(point[0] - attack_goal) <= 5.0
+        start_in_box = start[0] >= box_x if attack_goal >= 50 else start[0] <= box_x
+        between_posts = GOAL_POST_Y_MIN <= point[1] <= GOAL_POST_Y_MAX
+        # Goal mouth = on the goal line *and* between the posts — not the corner flags.
+        at_mouth = abs(point[0] - attack_goal) <= GOAL_MOUTH_X and between_posts
         wide = point[1] <= 18.0 or point[1] >= 82.0
         touchline = point[1] <= 4.0 or point[1] >= 96.0
         corner = (point[0] <= 6.0 or point[0] >= 94.0) and (point[1] <= 10.0 or point[1] >= 90.0)
         gap_ok = (now_s - last_event_s) >= MIN_EVENT_GAP_S
         due = (now_s - last_event_s) >= TARGET_EVENT_GAP_S
+        shot_gap_ok = (now_s - last_shot_s) >= SHOT_MIN_GAP_S
+        goal_gap_ok = (now_s - last_goal_s) >= GOAL_MIN_GAP_S
+        # A shot is a strike toward goal from the box — not a dribble or square pass.
+        strike = travel >= SHOT_MIN_TRAVEL or speed >= SHOT_MIN_SPEED
+        shot_like = (
+            toward_goal
+            and (in_box or start_in_box)
+            and strike
+            and not wide
+            and shot_gap_ok
+            and (gap_ok or at_mouth)
+        )
         actor = last_owner if last_owner is not None else owner
         actor_player_id = player_ids[actor.track_id]
         payload: dict[str, object] = {
@@ -1242,7 +1272,13 @@ def events_from_tracks(
         }
 
         tagged = False
-        if pending_shot is not None and mouth and toward_goal:
+        if (
+            pending_shot is not None
+            and at_mouth
+            and toward_goal
+            and goal_gap_ok
+            and (now_s - pending_shot_s) <= PENDING_SHOT_TTL_S
+        ):
             _emit(
                 {
                     **payload,
@@ -1254,25 +1290,38 @@ def events_from_tracks(
                 }
             )
             pending_shot = None
+            last_shot_s = now_s
+            last_goal_s = now_s
             tagged = True
-        elif (
-            toward_goal
-            and in_box
-            and (travel >= 6.0 or speed >= 12.0 or mouth)
-            and (gap_ok or mouth)
-        ):
-            is_goal = mouth
+        elif shot_like and at_mouth and goal_gap_ok:
+            # Ball already arrived between the posts on a strike — count the goal.
+            _emit(
+                {
+                    **payload,
+                    "event_type": EventType.GOAL,
+                    "is_goal": True,
+                    "shot_outcome": ShotOutcome.ON_TARGET,
+                }
+            )
+            pending_shot = None
+            last_shot_s = now_s
+            last_goal_s = now_s
+            tagged = True
+        elif shot_like:
+            on_target = between_posts and abs(point[0] - attack_goal) <= 12.0
             shot = _emit(
                 {
                     **payload,
-                    "event_type": EventType.GOAL if is_goal else EventType.SHOT,
-                    "is_goal": is_goal,
+                    "event_type": EventType.SHOT,
+                    "is_goal": False,
                     "shot_outcome": (
-                        ShotOutcome.ON_TARGET if is_goal or mouth else ShotOutcome.MISSED
+                        ShotOutcome.ON_TARGET if on_target else ShotOutcome.MISSED
                     ),
                 }
             )
-            pending_shot = None if is_goal else shot
+            pending_shot = shot
+            pending_shot_s = now_s
+            last_shot_s = now_s
             tagged = True
         else:
             opponent = None

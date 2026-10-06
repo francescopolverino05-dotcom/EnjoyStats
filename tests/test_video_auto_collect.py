@@ -216,7 +216,91 @@ def test_stitch_tracks_joins_fragmented_identities() -> None:
     assert players[0].frames == [0, 1, 2, 6, 7, 8]
 
 
-def test_static_crowd_does_not_hide_a_full_possession_chain() -> None:
+def test_box_carries_are_not_mass_goals() -> None:
+    """Regression: old heuristics tagged every end-line touch as a goal (~80/match)."""
+
+    from uuid import uuid4
+
+    from data_models.events import EventType
+
+    n_frames = 240
+    # Slow zig-zag carries inside the box — must stay passes/duels, not 20 goals.
+    xs = []
+    ys = []
+    for frame in range(n_frames):
+        xs.append(84.0 + (frame % 10) * 0.4)
+        ys.append(30.0 + (frame % 20) * 1.5)
+    attacker = Track(
+        track_id=1,
+        kind="player",
+        xs=xs,
+        ys=ys,
+        frames=list(range(n_frames)),
+        last_x=xs[-1],
+        last_y=ys[-1],
+        bgr=(20.0, 40.0, 200.0),
+        team=0,
+    )
+    ball = Track(
+        track_id=2,
+        kind="ball",
+        xs=xs,
+        ys=ys,
+        frames=list(range(n_frames)),
+        last_x=xs[-1],
+        last_y=ys[-1],
+    )
+    events, _roster = events_from_tracks(
+        [attacker, ball],
+        fps=8.0,
+        match_id=uuid4(),
+        team_id=uuid4(),
+        clip_url="file:///tmp/box.avi",
+        home_name="Home",
+        away_name="Away",
+    )
+    goals = sum(1 for event in events if event.event_type is EventType.GOAL or event.is_goal)
+    shots = sum(1 for event in events if event.event_type is EventType.SHOT)
+    assert goals <= 2
+    assert shots <= 4
+
+
+def test_clear_central_strike_still_counts_goal() -> None:
+    from uuid import uuid4
+
+    from data_models.events import EventType
+
+    attacker = Track(
+        track_id=1,
+        kind="player",
+        xs=[70.0, 78.0, 86.0, 94.0],
+        ys=[50.0, 50.0, 50.0, 50.0],
+        frames=[0, 4, 8, 12],
+        last_x=94.0,
+        last_y=50.0,
+        bgr=(20.0, 40.0, 200.0),
+        team=0,
+    )
+    ball = Track(
+        track_id=2,
+        kind="ball",
+        xs=[72.0, 82.0, 92.0, 98.0],
+        ys=[50.0, 50.0, 50.0, 50.0],
+        frames=[0, 4, 8, 12],
+        last_x=98.0,
+        last_y=50.0,
+    )
+    events, _roster = events_from_tracks(
+        [attacker, ball],
+        fps=8.0,
+        match_id=uuid4(),
+        team_id=uuid4(),
+        clip_url="file:///tmp/strike.avi",
+        home_name="Home",
+        away_name="Away",
+    )
+    assert any(event.event_type is EventType.GOAL or event.is_goal for event in events)
+
     """Long-lived stand blobs used to crowd out the 22-track cap (≈9 tags)."""
 
     from uuid import uuid4
