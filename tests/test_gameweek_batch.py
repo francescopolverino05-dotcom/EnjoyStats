@@ -31,6 +31,70 @@ def test_parse_lineup_json_bytes() -> None:
     assert lineups.home[0].name == "Rossi"
 
 
+def test_parse_lineup_json_accepts_spreadsheet_and_alias_shapes() -> None:
+    from analytics.lineups import parse_lineup_json
+
+    # Pandas / Excel often emit jersey as 1.0
+    float_sheet = {
+        "home_team": "Napoli",
+        "away_team": "Lazio",
+        "home_players": [{"jersey": 1.0, "name": "Mattia Magliano"}],
+        "away_players": [{"jersey": 9.0, "playerName": "Carmine Mennea"}],
+    }
+    parsed = parse_lineup_json(float_sheet)
+    assert parsed.home[0].jersey == 1
+    assert parsed.away[0].name == "Carmine Mennea"
+
+    first_last = {
+        "home": [{"number": 7, "firstName": "Luigi", "lastName": "Riccio"}],
+        "away": [{"shirtNumber": 10, "first": "Daniele", "last": "Lulaj"}],
+    }
+    parsed = parse_lineup_json(first_last)
+    assert parsed.home[0].name == "Luigi Riccio"
+    assert parsed.away[0].jersey == 10
+
+    mixed_rows = [
+        {"side": "home", "jersey": "07", "name": "Verdi"},
+        {"side": "away", "numero": 11, "nome": "Bianchi"},
+    ]
+    parsed = parse_lineup_json(mixed_rows)
+    assert len(parsed.home) == 1 and parsed.home[0].jersey == 7
+    assert parsed.away[0].name == "Bianchi"
+
+    nested = {
+        "lineups": {
+            "home_team": "Pisa",
+            "away_team": "Perugia",
+            "home": [{"jersey": 9, "name": "Rossi"}],
+            "away": [{"jersey": 10, "name": "Bianchi"}],
+        }
+    }
+    parsed = parse_lineup_json(nested)
+    assert parsed.home_team == "Pisa"
+    assert parsed.by_jersey("away", 10).name == "Bianchi"
+
+    teams = {
+        "teams": [
+            {"name": "Napoli", "players": [{"jersey": 1, "name": "Magliano"}]},
+            {"name": "Lazio", "players": [{"jersey": 1, "name": "Bekirov"}]},
+        ]
+    }
+    parsed = parse_lineup_json(teams)
+    assert parsed.home_team == "Napoli"
+    assert parsed.away[0].name == "Bekirov"
+
+    double = '"{\\"home\\":[{\\"jersey\\":1,\\"name\\":\\"A\\"}],\\"away\\":[{\\"jersey\\":2,\\"name\\":\\"B\\"}]}"'
+    parsed = parse_lineup_json(double)
+    assert len(parsed.home) + len(parsed.away) == 2
+
+
+def test_parse_lineup_semicolon_csv() -> None:
+    raw = "side;jersey;name\nhome;1;Rossi\naway;10;Bianchi\n"
+    lineups = parse_lineup_bytes(raw.encode(), filename="sheet.csv", home_team="Pisa", away_team="Perugia")
+    assert lineups.home[0].name == "Rossi"
+    assert lineups.away_team == "Perugia"
+
+
 def test_assign_lineup_roster_uses_real_names() -> None:
     lineups = MatchLineups(
         home_team="Pisa",
@@ -86,6 +150,10 @@ def test_batch_collect_queues_inbox(tmp_path: Path, monkeypatch) -> None:
     inbox.mkdir()
     monkeypatch.setenv("ENJOYSTATS_FILM_INBOX", str(inbox))
     monkeypatch.setenv("ENJOYSTATS_JOBS_DIR", str(jobs))
+    from analytics import video_auto_collect as vac
+
+    monkeypatch.setattr(vac, "MIN_READY_VIDEO_BYTES", 1)
+    monkeypatch.setattr(vac, "film_is_seekable", lambda _p: True)
     write_synthetic_match_clip(inbox / "gw1_pisa_perugia.avi")
     write_synthetic_match_clip(inbox / "gw1_other.avi")
     films = list_inbox_films()
