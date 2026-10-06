@@ -197,7 +197,12 @@ def start_collect_job(
     away_team_name: str | None = None,
     lineup_json: str | None = None,
 ) -> Path:
-    """Spawn a detached process that collects ``film``. Returns the status path."""
+    """Queue a collect for ``film``. Returns the status path.
+
+    Locally (default): spawns a detached subprocess immediately.
+    With ``STATMAN_USE_EXTERNAL_WORKER=1``: only writes a queued status file;
+    the Railway/Docker worker claims and runs it.
+    """
 
     resolved = film.expanduser().resolve()
     folder = collect_jobs_dir()
@@ -225,6 +230,17 @@ def start_collect_job(
             "updated_at": _now(),
         },
     )
+
+    from analytics.collect_worker import use_external_worker
+
+    if use_external_worker():
+        # Worker service will claim this job — do not spawn on the web dyno.
+        status = read_job_status(status_path) or {}
+        status["label"] = "Queued for StatMan worker…"
+        status["updated_at"] = _now()
+        _write_json(status_path, status)
+        return status_path
+
     root = Path(__file__).resolve().parents[1]
     env = os.environ.copy()
     existing = env.get("PYTHONPATH")

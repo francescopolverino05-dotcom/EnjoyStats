@@ -40,7 +40,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     MPLBACKEND=Agg \
     PATH="/opt/venv/bin:$PATH" \
     PYTHONPATH=/app \
-    ENJOYSTATS_API_URL=http://api:8000
+    ENJOYSTATS_API_URL=http://api:8000 \
+    ENJOYSTATS_JOBS_DIR=/data/jobs \
+    ENJOYSTATS_FILM_INBOX=/data/inbox \
+    ENJOYSTATS_FILM_UPLOADS=/data/uploads
 
 WORKDIR /app
 

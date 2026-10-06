@@ -61,7 +61,13 @@ services:
       - compose.env
     environment:
       ENJOYSTATS_API_URL: ${ENJOYSTATS_API_URL:-http://api:8000}
+      ENJOYSTATS_JOBS_DIR: /data/jobs
+      ENJOYSTATS_FILM_INBOX: /data/inbox
+      ENJOYSTATS_FILM_UPLOADS: /data/uploads
+      STATMAN_USE_EXTERNAL_WORKER: ${STATMAN_USE_EXTERNAL_WORKER:-1}
       MPLBACKEND: Agg
+    volumes:
+      - statman_data:/data
     ports:
       - "8501:8501"
     depends_on:
@@ -81,5 +87,25 @@ services:
       start_period: 25s
     restart: unless-stopped
 
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.worker
+    container_name: enjoystats-worker
+    env_file:
+      - compose.env
+    environment:
+      ENJOYSTATS_JOBS_DIR: /data/jobs
+      ENJOYSTATS_FILM_INBOX: /data/inbox
+      ENJOYSTATS_FILM_UPLOADS: /data/uploads
+      STATMAN_WORKER_POLL_S: ${STATMAN_WORKER_POLL_S:-3}
+      MPLBACKEND: Agg
+    volumes:
+      - statman_data:/data
+    depends_on:
+      - dashboard
+    restart: unless-stopped
+
 volumes:
   postgres_data:
+  statman_data:

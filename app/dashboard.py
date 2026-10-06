@@ -2011,16 +2011,37 @@ def render_api_demo(base_url: str, fetch: FetchFn) -> None:
         render_dashboard(fetch(base_url, match_id, player_id))
 
 
+def _site_password_ok() -> bool:
+    """Optional shared password for the Railway website (STATMAN_SITE_PASSWORD)."""
+
+    expected = os.environ.get("STATMAN_SITE_PASSWORD", "").strip()
+    if not expected:
+        return True
+    if st.session_state.get("_statman_authed"):
+        return True
+    st.markdown("### StatMan")
+    st.caption("Restricted access")
+    entered = st.text_input("Password", type="password", key="statman_site_password")
+    if st.button("Enter", type="primary", use_container_width=True):
+        if entered == expected:
+            st.session_state["_statman_authed"] = True
+            st.rerun()
+        st.error("Wrong password.")
+    return False
+
+
 def main(*, fetch: FetchFn = _run_fetch) -> None:
     """Streamlit entry point. ``fetch`` is injectable for tests."""
 
     st.set_page_config(
-        page_title="EnjoyStats · Analyse Stats",
+        page_title="StatMan · Analyse Stats",
         page_icon="⚽",
         layout="wide",
         initial_sidebar_state="collapsed",
     )
     _inject_styles()
+    if not _site_password_ok():
+        return
     # Film upload must never depend on someone remembering to start Uvicorn.
     ensure_api_running(wait_s=15.0)
     _ensure_api_watchdog()
@@ -2029,7 +2050,9 @@ def main(*, fetch: FetchFn = _run_fetch) -> None:
     rundown = _stored_rundown()
     job_path_raw = str(st.session_state.get(JOB_KEY, "") or "")
     job_status = read_job_status(Path(job_path_raw)) if job_path_raw else None
-    analysing = bool(job_status and job_status.get("state") in {"queued", "running"})
+    analysing = bool(
+        job_status and job_status.get("state") in {"queued", "claimed", "running"}
+    )
     section = render_app_nav(has_match=rundown is not None, analysing=analysing)
 
     if section == "Match rundown" and rundown is not None:
