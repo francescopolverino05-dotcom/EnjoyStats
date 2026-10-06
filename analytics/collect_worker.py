@@ -145,7 +145,15 @@ def run_forever(*, poll_s: float | None = None) -> None:
 
     interval = worker_poll_seconds() if poll_s is None else max(0.5, float(poll_s))
     jobs = collect_jobs_dir()
-    jobs.mkdir(parents=True, exist_ok=True)
+    try:
+        jobs.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        sys.stderr.write(
+            f"[statman-worker] cannot create jobs dir {jobs}: {exc}\n"
+            "Mount a Railway volume at /data and set ENJOYSTATS_JOBS_DIR=/data/jobs\n"
+        )
+        sys.stderr.flush()
+        raise SystemExit(1) from exc
     sys.stdout.write(
         f"[statman-worker] watching {jobs} every {interval:.1f}s "
         f"(external_worker={use_external_worker()})\n"
@@ -172,9 +180,17 @@ def main(argv: list[str] | None = None) -> int:
             "  Poll ENJOYSTATS_JOBS_DIR for queued Analyse jobs and run them.\n"
         )
         return 0
-    if args and args[0] == "--once":
-        return 0 if not poll_once() else 0
-    run_forever()
+    try:
+        if args and args[0] == "--once":
+            poll_once()
+            return 0
+        run_forever()
+    except SystemExit:
+        raise
+    except Exception as exc:  # noqa: BLE001 — show boot errors clearly on Railway
+        sys.stderr.write(f"[statman-worker] fatal: {exc}\n")
+        sys.stderr.flush()
+        return 1
     return 0
 
 

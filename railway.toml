@@ -1,20 +1,14 @@
-# Railway multi-service layout for StatMan.
-#
-# Create TWO services from this repo in the Railway project:
-#
-# 1) Web (public) — Dockerfile.dashboard or Nixpacks with start command below
-# 2) Worker (private) — Dockerfile.worker
-#
-# Attach the SAME volume to both, mounted at /data, and set the env vars
-# in .env.example under "Railway / shared volume".
+# Railway config for the **Web** service.
+# On the Worker service, override in the Railway UI:
+#   Dockerfile path = Dockerfile.worker
+#   Start command   = python -m analytics.collect_worker
+# Do NOT leave Worker on this file's Dockerfile.dashboard default.
 
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile.dashboard"
 
 [deploy]
-# Web default. Override on the Worker service to:
-#   python -m analytics.collect_worker
 startCommand = "streamlit run app/dashboard.py --server.address=0.0.0.0 --server.port=$PORT --server.headless=true --server.maxUploadSize=5120 --server.maxMessageSize=5120 --browser.gatherUsageStats=false"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10

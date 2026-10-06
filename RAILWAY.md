@@ -1,10 +1,15 @@
 # StatMan on Railway — web site + Analyse worker
 #
-# 1. New Railway project → deploy this GitHub repo twice (two services).
+# CRITICAL — Worker must NOT use the Web Dockerfile.
+# In Worker → Settings → Build:
+#   Dockerfile path = Dockerfile.worker
+# Or Config-as-code file = railway.worker.toml
+#
+# 1. Deploy this GitHub repo as TWO services (Web + Worker).
 # 2. Add a Volume, mount it at /data on BOTH services.
 # 3. Copy env from .env.example (Railway section) onto both.
-# 4. Web service: public URL, start = Streamlit (see railway.toml).
-# 5. Worker service: no public domain, Dockerfile = Dockerfile.worker
+# 4. Web: public URL, Dockerfile.dashboard / railway.toml
+# 5. Worker: no public domain, Dockerfile.worker / railway.worker.toml
 #    start = python -m analytics.collect_worker
 #
 # Flow: upload film on the site → job queued under /data/jobs →
@@ -16,6 +21,10 @@ Web start (Nixpacks / custom):
 
 Worker start:
   python -m analytics.collect_worker
+
+Worker build:
+  Dockerfile path = Dockerfile.worker
+  (If Worker crashes instantly, it is almost always still on Dockerfile.dashboard.)
 
 Required shared env (both services):
   ENJOYSTATS_JOBS_DIR=/data/jobs
