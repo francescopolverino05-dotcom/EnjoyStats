@@ -111,6 +111,7 @@ def create_portal(
             key: value
             for key, value in upstream_response.headers.items()
             if key.lower() not in HOP_BY_HOP
+            and key.lower() not in {"content-encoding", "content-length"}
         }
         return Response(
             content=upstream_response.content,
