@@ -87,13 +87,25 @@ def upload_page_html(api_origin: str = "") -> str:
     <div id="msg"></div>
   </div>
   <script>
-  const API = {origin!r};
+  const CONFIGURED_API = {origin!r};
   const CHUNK = 4 * 1024 * 1024;
-  const TRIES = 5;
+  const TRIES = 8;
   const fileInput = document.getElementById("file");
   const go = document.getElementById("go");
   const fill = document.getElementById("fill");
   const msg = document.getElementById("msg");
+  function resolveApi() {{
+    if (CONFIGURED_API && CONFIGURED_API.length) {{
+      return CONFIGURED_API.replace(/\\/$/, "");
+    }}
+    try {{
+      if (window.parent && window.parent !== window
+          && window.parent.location && window.parent.location.origin) {{
+        return window.parent.location.origin;
+      }}
+    }} catch (err) {{}}
+    return window.location.origin;
+  }}
   function fmt(n) {{
     if (n >= 1073741824) return (n / 1073741824).toFixed(2) + " GB";
     if (n >= 1048576) return (n / 1048576).toFixed(1) + " MB";
@@ -138,7 +150,7 @@ def upload_page_html(api_origin: str = "") -> str:
       }}
       msg.textContent = "Retry " + attempt + "/" + TRIES
         + " after a drop… (" + lastDetail + ")";
-      await sleep(400 * attempt);
+      await sleep(500 * attempt);
     }}
     throw new Error(lastDetail);
   }}
@@ -148,10 +160,11 @@ def upload_page_html(api_origin: str = "") -> str:
     if (file.size > {MAX_VIDEO_BYTES}) {{
       fail("Film exceeds the {limit} limit."); return;
     }}
+    const API = resolveApi();
     go.disabled = true;
     msg.className = "";
     fill.style.width = "2%";
-    msg.textContent = "Preparing " + fmt(file.size) + "…";
+    msg.textContent = "Preparing " + fmt(file.size) + " via " + API + "…";
     let offset = 0;
     let savedName = file.name;
     try {{
@@ -177,7 +190,7 @@ def upload_page_html(api_origin: str = "") -> str:
     }} catch (err) {{
       fail("Upload kept dropping after retries ("
         + ((err && err.message) ? err.message : String(err))
-        + "). Check that the API is running, then try again.");
+        + "). Refresh the page — the app auto-starts the upload API — then try again.");
     }}
   }};
   </script>

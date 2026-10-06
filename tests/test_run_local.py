@@ -40,6 +40,9 @@ def test_run_local_script_covers_stack_phases() -> None:
     assert "/docs" in text
     assert "streamlit" in text
     assert "8501" in text
+    assert "api.portal" in text
+    assert "8080" in text
+    assert "ENJOYSTATS_SAME_ORIGIN_UPLOAD" in text
     assert "maxUploadSize=5120" in text
     assert "maxMessageSize=5120" in text
     assert "--server.address=0.0.0.0" in text
@@ -49,6 +52,7 @@ def test_run_local_script_covers_stack_phases() -> None:
     assert "trap cleanup INT TERM EXIT" in text
     assert "http://localhost:8000/docs" in text
     assert "http://localhost:8501" in text
+    assert "restarting film upload API" in text
     assert "CTRL+C" in text
     assert "compose stop db" in text
 

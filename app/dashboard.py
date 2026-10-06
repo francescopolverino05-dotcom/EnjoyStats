@@ -10,7 +10,9 @@ from __future__ import annotations
 import asyncio
 import importlib
 import math
+import os
 import sys
+import threading
 import time
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -75,6 +77,7 @@ from analytics.video_auto_collect import (
     video_limit_label,
 )
 from api.film_upload import upload_page_html
+from api.supervisor import api_is_healthy, ensure_api_running
 from analytics.collection_history import (
     delete_history_entry,
     list_history,
@@ -1436,28 +1439,74 @@ def render_statman_panel() -> None:
                 )
 
 
+def _same_origin_upload() -> bool:
+    return os.environ.get("ENJOYSTATS_SAME_ORIGIN_UPLOAD", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
+def _ensure_api_watchdog() -> None:
+    """Background loop so Uvicorn is restarted if it dies mid-session."""
+
+    if st.session_state.get("_api_watchdog_started"):
+        return
+    st.session_state["_api_watchdog_started"] = True
+
+    def _loop() -> None:
+        while True:
+            try:
+                ensure_api_running(wait_s=12.0)
+            except Exception:  # noqa: BLE001 — never kill the UI thread via watchdog
+                pass
+            time.sleep(12)
+
+    threading.Thread(target=_loop, name="enjoystats-api-watchdog", daemon=True).start()
+
+
 def render_film_uploader_panel(base_url: str) -> None:
     """The only match-film upload path: chunked FastAPI uploader."""
 
-    api = base_url.rstrip("/")
-    upload_url = f"{api}/upload-film"
-    api_online = asyncio.run(probe_api(api))
-    if not api_online:
+    _ensure_api_watchdog()
+    status = ensure_api_running(wait_s=20.0)
+    same_origin = _same_origin_upload()
+    # Same-origin (portal / try-link): browser posts to this page's host.
+    # Otherwise post straight to the local FastAPI origin we just ensured.
+    api_for_browser = "" if same_origin else "http://127.0.0.1:8000"
+    upload_url = "/upload-film" if same_origin else f"{api_for_browser}/upload-film"
+    local_ok = status.get("ok") or api_is_healthy("http://127.0.0.1:8000")
+    remote_ok = True
+    if not same_origin:
+        remote_ok = asyncio.run(probe_api(base_url.rstrip("/")))
+    if not local_ok:
         st.error(
-            "Upload API is offline. Start FastAPI on this machine "
-            "(`uvicorn api.main:app --host 127.0.0.1 --port 8000`), "
-            f"then refresh. Expected: `{api}`."
+            "Upload API would not start. "
+            f"{status.get('message') or 'Check .local-run/uvicorn.log'}."
         )
         return
+    if not same_origin and not remote_ok and base_url.rstrip("/") not in {
+        "http://127.0.0.1:8000",
+        "http://localhost:8000",
+    }:
+        st.warning(
+            "Sidebar FastAPI URL is unreachable from this machine. "
+            "Uploads still go to the always-on local API on :8000 "
+            "(or use the portal try-link for phones)."
+        )
     st.markdown("**Upload match film**")
     st.caption(
         f"One path only — 4 MB chunks with retries (up to {video_limit_label()}). "
+        "The upload API is kept running automatically. "
         "When it says Saved, click Analyse Stats below."
     )
+    if status.get("started"):
+        st.success("Upload API was down — started it automatically.")
     st.link_button("Open uploader full-screen", upload_url)
     import streamlit.components.v1 as components
 
-    components.html(upload_page_html(api), height=420, scrolling=False)
+    components.html(upload_page_html(api_for_browser), height=420, scrolling=False)
 
 
 def render_analyse_landing(base_url: str) -> None:
@@ -1972,6 +2021,9 @@ def main(*, fetch: FetchFn = _run_fetch) -> None:
         initial_sidebar_state="collapsed",
     )
     _inject_styles()
+    # Film upload must never depend on someone remembering to start Uvicorn.
+    ensure_api_running(wait_s=15.0)
+    _ensure_api_watchdog()
     _hydrate_collect_job()
     base_url = render_sidebar()
     rundown = _stored_rundown()

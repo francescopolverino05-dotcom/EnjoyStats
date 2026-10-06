@@ -6,13 +6,18 @@ Football match auto-tagger and Once Sport Analyser exporter.
 
 ## Upload a match (one path)
 
-1. Start the stack: `./run_local.sh` (FastAPI **must** be on `:8000` — that is the uploader)
-2. Open the dashboard → **Upload match film** (4 MB chunks, auto-retries)
-3. When it says Saved → set kit colours + line-up → **Analyse Stats**
+1. Start the stack: `./run_local.sh`  
+   - FastAPI on `:8000` is **auto-started and auto-restarted** if it dies  
+   - Portal on `:8080` = **one URL** for the UI + film upload (same origin — no `Failed to fetch`)
+2. Open **http://localhost:8080** (or the try-link that tunnels the portal)
+3. Upload match film → wait for Saved → set kits/line-up → **Analyse Stats**
 4. Review tags → download Home.xml / Away.xml
 
 There is no Streamlit film picker, no link paste, and no second uploader.
 Analyse always uses the newest film in the inbox.
+
+If you only run Streamlit by hand, the dashboard still calls `ensure_api_running()`
+and boots Uvicorn on `:8000` automatically. For phones / try-links, use the portal.
 
 ## Game-week batch
 
@@ -40,9 +45,11 @@ Always upload line-ups before a game-week batch.
 pip install -r requirements.txt
 # system package: tesseract-ocr (for shirt numbers)
 ./run_local.sh
+# open http://localhost:8080  (portal — UI + always-on upload API)
 # or separately:
-#   uvicorn api.main:app --host 127.0.0.1 --port 8000
+#   python -m uvicorn api.main:app --host 127.0.0.1 --port 8000
 #   streamlit run app/dashboard.py
+#   ENJOYSTATS_SAME_ORIGIN_UPLOAD=1 python -m api.portal --port 8080
 ```
 
 ## Monorepo
@@ -50,6 +57,8 @@ pip install -r requirements.txt
 | Path | Role |
 |------|------|
 | `api/film_upload.py` | **Only** match-film upload (chunked) |
+| `api/supervisor.py` | Auto-start / keep FastAPI running |
+| `api/portal.py` | Same-origin UI + upload (kills Failed to fetch) |
 | `analytics/lineups.py` | CSV/JSON line-up import |
 | `analytics/jersey_ocr.py` | Shirt-number OCR (Tesseract) |
 | `analytics/batch_collect.py` | Queue all inbox films |

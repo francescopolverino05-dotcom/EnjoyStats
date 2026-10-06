@@ -18,6 +18,7 @@ cd "$ROOT"
 API_HOST="127.0.0.1"
 API_PORT="8000"
 UI_PORT="8501"
+PORTAL_PORT="8080"
 DB_PORT="5432"
 DB_CONTAINER="enjoystats-db"
 DB_USER="enjoystats"
@@ -26,8 +27,10 @@ SCHEMA_FILE="$ROOT/storage/postgres_tables.sql"
 LOG_DIR="$ROOT/.local-run"
 API_LOG="$LOG_DIR/uvicorn.log"
 UI_LOG="$LOG_DIR/streamlit.log"
+PORTAL_LOG="$LOG_DIR/portal.log"
 API_PID=""
 UI_PID=""
+PORTAL_PID=""
 TAIL_PID=""
 CLEANING=0
 
@@ -182,7 +185,7 @@ cleanup() {
     trap - INT TERM EXIT
 
     _started=0
-    if [ -n "${TAIL_PID}${UI_PID}${API_PID}" ]; then
+    if [ -n "${TAIL_PID}${UI_PID}${API_PID}${PORTAL_PID}" ]; then
         _started=1
     fi
 
@@ -190,6 +193,7 @@ cleanup() {
         printf "\n"
         phase "Shutting down local stack"
         stop_pid "$TAIL_PID" "log stream"
+        stop_pid "$PORTAL_PID" "Portal"
         stop_pid "$UI_PID" "Streamlit"
         stop_pid "$API_PID" "Uvicorn"
     fi
@@ -342,6 +346,10 @@ export ENJOYSTATS_HOST="${ENJOYSTATS_HOST:-0.0.0.0}"
 export ENJOYSTATS_PORT="${ENJOYSTATS_PORT:-${API_PORT}}"
 export ENJOYSTATS_API_URL="${ENJOYSTATS_API_URL:-http://${API_HOST}:${API_PORT}}"
 export ENJOYSTATS_DEBUG="${ENJOYSTATS_DEBUG:-false}"
+export ENJOYSTATS_SAME_ORIGIN_UPLOAD="${ENJOYSTATS_SAME_ORIGIN_UPLOAD:-1}"
+export ENJOYSTATS_PORTAL_PORT="${ENJOYSTATS_PORTAL_PORT:-${PORTAL_PORT}}"
+export ENJOYSTATS_API_UPSTREAM="${ENJOYSTATS_API_UPSTREAM:-http://127.0.0.1:${API_PORT}}"
+export ENJOYSTATS_UI_UPSTREAM="${ENJOYSTATS_UI_UPSTREAM:-http://127.0.0.1:${UI_PORT}}"
 export PYTHONPATH="${ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 export PYTHONUNBUFFERED="1"
 export MPLBACKEND="${MPLBACKEND:-Agg}"
@@ -360,6 +368,9 @@ fi
 if port_in_use "$UI_PORT"; then
     die "Port ${UI_PORT} is already in use. Stop the other Streamlit process and retry."
 fi
+if port_in_use "$PORTAL_PORT"; then
+    die "Port ${PORTAL_PORT} is already in use. Stop the other portal process or change ENJOYSTATS_PORTAL_PORT."
+fi
 
 log "Booting FastAPI (Uvicorn) on port ${API_PORT} in the background..."
 python -m uvicorn api.main:app \
@@ -368,6 +379,7 @@ python -m uvicorn api.main:app \
     --log-level info \
     >"$API_LOG" 2>&1 &
 API_PID=$!
+echo "$API_PID" >"$LOG_DIR/uvicorn.pid"
 ok "Uvicorn started (pid ${API_PID}) — logs: ${API_LOG}"
 
 log "Waiting for OpenAPI docs at http://${API_HOST}:${API_PORT}/docs ..."
@@ -402,6 +414,23 @@ if ! wait_for_http "http://127.0.0.1:${UI_PORT}/_stcore/health" "Streamlit" 40; 
     fi
 fi
 
+log "Booting same-origin portal on port ${PORTAL_PORT} (UI + film upload)..."
+python -m api.portal \
+    --host 0.0.0.0 \
+    --port "$PORTAL_PORT" \
+    --api "http://127.0.0.1:${API_PORT}" \
+    --ui "http://127.0.0.1:${UI_PORT}" \
+    >"$PORTAL_LOG" 2>&1 &
+PORTAL_PID=$!
+ok "Portal started (pid ${PORTAL_PID}) — logs: ${PORTAL_LOG}"
+
+log "Waiting for portal at http://127.0.0.1:${PORTAL_PORT}/upload-film ..."
+if ! wait_for_http "http://127.0.0.1:${PORTAL_PORT}/upload-film" "Portal /upload-film" 40; then
+    warn "Portal failed to become ready. Last log lines:"
+    tail -n 40 "$PORTAL_LOG" >&2 || true
+    die "Portal did not respond on /upload-film within 40s."
+fi
+
 # ---------------------------------------------------------------------------
 # 4. Banner, stream logs, wait until CTRL+C
 # ---------------------------------------------------------------------------
@@ -414,34 +443,51 @@ printf "  ============================================================\n"
 printf "   %sEnjoyStats — local stack is ready%s\n" "$C_BOLD" "$C_RESET$C_CYAN"
 printf "  ============================================================\n"
 LAN_IP="$(lan_address)"
-printf "    API Docs : %shttp://localhost:8000/docs%s\n" "$C_BOLD$C_GREEN" "$C_RESET$C_CYAN"
-printf "    Film up  : %shttp://localhost:8000/upload-film%s\n" "$C_BOLD$C_GREEN" "$C_RESET$C_CYAN"
-printf "    UI       : %shttp://localhost:8501%s\n" "$C_BOLD$C_GREEN" "$C_RESET$C_CYAN"
+printf "    Open this : %shttp://localhost:%s%s  (portal — UI + upload)\n" "$C_BOLD$C_GREEN" "$PORTAL_PORT" "$C_RESET$C_CYAN"
+printf "    Film up   : %shttp://localhost:%s/upload-film%s\n" "$C_BOLD$C_GREEN" "$PORTAL_PORT" "$C_RESET$C_CYAN"
+printf "    API Docs  : %shttp://localhost:8000/docs%s\n" "$C_BOLD$C_GREEN" "$C_RESET$C_CYAN"
+printf "    UI direct : %shttp://localhost:8501%s\n" "$C_BOLD$C_GREEN" "$C_RESET$C_CYAN"
 if [ -n "$LAN_IP" ]; then
     printf "    Phone / tablet / other computer on this Wi-Fi:\n"
-    printf "               %shttp://%s:8501%s\n" "$C_BOLD$C_GREEN" "$LAN_IP" "$C_RESET$C_CYAN"
-    printf "    Film up    %shttp://%s:8000/upload-film%s\n" "$C_BOLD$C_GREEN" "$LAN_IP" "$C_RESET$C_CYAN"
+    printf "               %shttp://%s:%s%s\n" "$C_BOLD$C_GREEN" "$LAN_IP" "$PORTAL_PORT" "$C_RESET$C_CYAN"
+    printf "    Film up    %shttp://%s:%s/upload-film%s\n" "$C_BOLD$C_GREEN" "$LAN_IP" "$PORTAL_PORT" "$C_RESET$C_CYAN"
 fi
-printf "    Inbox    : %s${LOG_DIR}/inbox%s\n" "$C_BOLD$C_GREEN" "$C_RESET$C_CYAN"
+printf "    Inbox     : %s${LOG_DIR}/inbox%s\n" "$C_BOLD$C_GREEN" "$C_RESET$C_CYAN"
 printf "  ============================================================\n"
-printf "    Press CTRL+C to stop Uvicorn, Streamlit, and PostgreSQL\n"
+printf "    Press CTRL+C to stop Portal, Uvicorn, Streamlit, and PostgreSQL\n"
 printf "  ============================================================\n"
 printf "%s\n" "$C_RESET"
 
-log "Streaming Uvicorn + Streamlit logs (background PIDs ${API_PID} / ${UI_PID})..."
+log "Streaming Uvicorn + Streamlit + Portal logs..."
 printf "%s" "$C_DIM"
-tail -n +1 -f "$API_LOG" "$UI_LOG" &
+tail -n +1 -f "$API_LOG" "$UI_LOG" "$PORTAL_LOG" &
 TAIL_PID=$!
 
-# Keep the wrapper in the foreground until interrupted or a child dies.
+# Keep the wrapper in the foreground; auto-restart Uvicorn if it dies.
 while :; do
-    if ! kill -0 "$API_PID" 2>/dev/null; then
-        kill "$TAIL_PID" 2>/dev/null || true
-        die "Uvicorn exited unexpectedly. See ${API_LOG}"
+    if ! kill -0 "$API_PID" 2>/dev/null || ! port_in_use "$API_PORT"; then
+        warn "Uvicorn died — restarting film upload API..."
+        python -m uvicorn api.main:app \
+            --host 0.0.0.0 \
+            --port "$API_PORT" \
+            --log-level info \
+            >>"$API_LOG" 2>&1 &
+        API_PID=$!
+        echo "$API_PID" >"$LOG_DIR/uvicorn.pid"
+        if wait_for_http "http://${API_HOST}:${API_PORT}/docs" "FastAPI /docs" 30; then
+            ok "Uvicorn restarted (pid ${API_PID})"
+        else
+            kill "$TAIL_PID" 2>/dev/null || true
+            die "Uvicorn would not restart. See ${API_LOG}"
+        fi
     fi
     if ! kill -0 "$UI_PID" 2>/dev/null; then
         kill "$TAIL_PID" 2>/dev/null || true
         die "Streamlit exited unexpectedly. See ${UI_LOG}"
     fi
-    sleep 1
+    if ! kill -0 "$PORTAL_PID" 2>/dev/null; then
+        kill "$TAIL_PID" 2>/dev/null || true
+        die "Portal exited unexpectedly. See ${PORTAL_LOG}"
+    fi
+    sleep 2
 done
