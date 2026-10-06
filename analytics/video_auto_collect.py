@@ -55,7 +55,7 @@ from analytics.smart_detect import (
     detector_label,
     parse_kit_hex,
 )
-from analytics.tactics_iq import (
+from analytics.statman_iq import (
     GOAL_MIN_GAP_S,
     PENDING_SHOT_TTL_S,
     SHOT_MIN_GAP_S,

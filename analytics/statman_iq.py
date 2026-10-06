@@ -1,14 +1,13 @@
-"""EnjoyStats film IQ — tactical glossary + classifiers for auto-tag.
+"""StatMan IQ — tactical glossary + classifiers for match film auto-tag.
 
 Sources (simplified wording for operators and CV rules):
+- Operator tactical glossary (JMftbl, Spielverlagerung, Coaches' Voice)
 - Wyscout Data Glossary — https://dataglossary.wyscout.com/
 - Opta Event Definitions — https://www.statsperform.com/opta-event-definitions/
 - StatsBomb Open Data — https://github.com/statsbomb/open-data
-- Coaches' Voice tactics glossary / rest defence
-- JMftbl, Spielverlagerung (half-spaces, Restverteidigung)
 
 Event vocabulary is aligned in :mod:`analytics.event_registry`. Film CV is
-still geometry — this module is the football brain that stops nonsense like
+still geometry — StatMan IQ is the football brain that stops nonsense like
 79–10 scorelines and keeper clearances counted as shots.
 """
 
@@ -196,7 +195,7 @@ def classify_strike(
     pending_shot: bool,
     pending_fresh: bool,
 ) -> StrikeVerdict:
-    """Decide shot/goal with film IQ — GK rule first, then strike + mouth."""
+    """Decide shot/goal with StatMan IQ — GK rule first, then strike + mouth."""
 
     if actor_is_gk:
         # Opta/Wyscout: keeper distribution and clearances are never shots.

@@ -1,8 +1,8 @@
-"""Tests for EnjoyStats film tactical IQ (glossary + classifiers)."""
+"""Tests for StatMan IQ (glossary + classifiers)."""
 
 from __future__ import annotations
 
-from analytics.tactics_iq import (
+from analytics.statman_iq import (
     GLOSSARY,
     PitchLane,
     classify_distribution,
