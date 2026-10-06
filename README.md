@@ -4,13 +4,24 @@ Football match auto-tagger and Once Sport Analyser exporter.
 
 **Collect in-house** (no Grokbot): film → smart watch → 5-min re-pass → Review → Home/Away XML.
 
-## Tomorrow night — game week batch (simple)
+## Upload a match (one path)
 
-1. Drop every match MP4 into the **inbox** folder  
-2. Upload the **line-up CSV** (names + shirt numbers)  
-3. Set Home / Away **kit colours**  
-4. Click **Collect ALL inbox films**  
-5. When a match finishes → **Review tags** (fix only wrong rows) → download Home.xml / Away.xml  
+1. Start the stack: `./run_local.sh` (FastAPI **must** be on `:8000` — that is the uploader)
+2. Open the dashboard → **Upload match film** (4 MB chunks, auto-retries)
+3. When it says Saved → set kit colours + line-up → **Analyse Stats**
+4. Review tags → download Home.xml / Away.xml
+
+There is no Streamlit film picker, no link paste, and no second uploader.
+Analyse always uses the newest film in the inbox.
+
+## Game-week batch
+
+After several films are in the inbox via the same uploader:
+
+1. Upload the **line-up CSV** (names + shirt numbers)
+2. Set Home / Away **kit colours**
+3. Open **Game-week batch** → **Collect ALL inbox films**
+4. When a match finishes → **Review tags** → download Home.xml / Away.xml
 
 ### How collect works
 1. **Watch** (YOLO people finder + kit colours + jersey OCR when readable)
@@ -28,13 +39,17 @@ Always upload line-ups before a game-week batch.
 ```bash
 pip install -r requirements.txt
 # system package: tesseract-ocr (for shirt numbers)
-streamlit run app/dashboard.py
+./run_local.sh
+# or separately:
+#   uvicorn api.main:app --host 127.0.0.1 --port 8000
+#   streamlit run app/dashboard.py
 ```
 
 ## Monorepo
 
 | Path | Role |
 |------|------|
+| `api/film_upload.py` | **Only** match-film upload (chunked) |
 | `analytics/lineups.py` | CSV/JSON line-up import |
 | `analytics/jersey_ocr.py` | Shirt-number OCR (Tesseract) |
 | `analytics/batch_collect.py` | Queue all inbox films |

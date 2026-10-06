@@ -41,10 +41,8 @@ from data_models.player_stats import PlayerMatchProfile
 
 INGEST_TIMEOUT_S = 30.0
 UPLOAD_DISCONNECT_HINT = (
-    "The browser uploader disconnected before the film arrived "
-    "(Streamlit ClientDisconnect on large PUTs). "
-    "Drop the file into .local-run/inbox, paste its local path, "
-    "or use the FastAPI uploader at /upload-film."
+    "Upload the match film with the chunked uploader on this page "
+    "(it retries drops). Then click Analyse Stats."
 )
 
 
@@ -56,6 +54,23 @@ def ready_films() -> list[Path]:
     inbox.mkdir(parents=True, exist_ok=True)
     uploads.mkdir(parents=True, exist_ok=True)
     return list_ready_films(inbox, uploads)
+
+
+def ready_match_films() -> list[Path]:
+    """Newest-first match videos only (skip tag XML sitting in the inbox)."""
+
+    return [
+        path
+        for path in ready_films()
+        if path.suffix.lower() in VIDEO_SUFFIXES
+    ]
+
+
+def latest_ready_film() -> Path | None:
+    """The newest match film on disk, or None when the inbox is empty."""
+
+    films = ready_match_films()
+    return films[0] if films else None
 
 
 def actions_from_team(

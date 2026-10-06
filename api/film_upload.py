@@ -35,9 +35,6 @@ def upload_page_html(api_origin: str = "") -> str:
 
     origin = api_origin.rstrip("/")
     limit = video_limit_label()
-    inbox = film_inbox_dir()
-    inbox.mkdir(parents=True, exist_ok=True)
-    inbox_path = str(inbox.resolve())
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -81,18 +78,16 @@ def upload_page_html(api_origin: str = "") -> str:
 <body>
   <div class="card">
     <h1>Upload a match film</h1>
-    <p>Sends the file in 4&nbsp;MB chunks (up to {limit}), with automatic
-    retries if a chunk drops. After it says Saved, pick the film under
-    <b>Films on this machine</b> and click Analyse Stats.</p>
-    <p>Most reliable: copy the MP4 into<br><code>{inbox_path}</code></p>
+    <p>One upload path. Sends the file in 4&nbsp;MB chunks (up to {limit}),
+    with automatic retries if a chunk drops. When it says Saved, click
+    <b>Analyse Stats</b> on the main page — it uses this film.</p>
     <input id="file" type="file" accept="video/*,.mp4,.mov,.mkv,.avi,.m4v,.webm">
-    <button id="go" type="button">Save film to inbox</button>
+    <button id="go" type="button">Upload match film</button>
     <div id="bar"><i id="fill"></i></div>
     <div id="msg"></div>
   </div>
   <script>
   const API = {origin!r};
-  const INBOX = {inbox_path!r};
   const CHUNK = 4 * 1024 * 1024;
   const TRIES = 5;
   const fileInput = document.getElementById("file");
@@ -177,13 +172,12 @@ def upload_page_html(api_origin: str = "") -> str:
       }}
       msg.className = "ok";
       msg.textContent = "Saved " + savedName
-        + ". On the main page, pick it under Films on this machine, "
-        + "then click Analyse Stats.";
+        + ". Click Analyse Stats on the main page — it will use this film.";
       go.disabled = false;
     }} catch (err) {{
-      fail("Upload kept dropping after retries.\\n"
-        + "Copy the MP4 into:\\n" + INBOX
-        + "\\nThen pick it under Films on this machine and Analyse Stats.");
+      fail("Upload kept dropping after retries ("
+        + ((err && err.message) ? err.message : String(err))
+        + "). Check that the API is running, then try again.");
     }}
   }};
   </script>

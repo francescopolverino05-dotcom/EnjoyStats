@@ -30,7 +30,7 @@ from matplotlib.axes import Axes
 from matplotlib.figure import Figure
 from matplotlib.patches import Ellipse, Rectangle
 
-from app.client import DEFAULT_BASE_URL, ProfileLoad, fetch_player_profile
+from app.client import DEFAULT_BASE_URL, ProfileLoad, fetch_player_profile, probe_api
 from app.dummy_data import PitchAction, catalog
 from app.metrics import PassDirections
 
@@ -48,12 +48,12 @@ from app.ingest import (
     collect_sample_match,
     collect_uploaded_bytes,
     film_has_official_tags,
+    latest_ready_film,
     load_from_rundown,
     load_from_team_profile,
     persist_rundown,
     profile_label,
-    ready_films,
-    save_uploaded_film,
+    ready_match_films,
 )
 from analytics.collect_job import (
     latest_job_status_path,
@@ -61,7 +61,6 @@ from analytics.collect_job import (
     read_job_status,
     start_collect_job,
 )
-from analytics.film_link import is_vimeo_page_link, register_match_link
 from analytics.team_collect import (
     SheetPerspective,
     analysed_team_profile,
@@ -73,7 +72,6 @@ from analytics.video_auto_collect import (
     VideoCollectError,
     film_inbox_dir,
     film_upload_dir,
-    normalize_film_path,
     video_limit_label,
 )
 from api.film_upload import upload_page_html
@@ -1139,37 +1137,6 @@ def render_match_tags(rundown: MatchRundown) -> None:
         )
 
 
-def _resolve_film_source(
-    film_path: str,
-    inbox_path: Path | None,
-    film: object | None,
-    upload_dir: Path,
-    update: Callable[[str, float], None],
-) -> str:
-    """Pick the on-disk film: pasted path, inbox file, or saved browser pick."""
-
-    if film_path.strip().strip("'\"").strip():
-        return str(normalize_film_path(film_path))
-    if inbox_path is not None:
-        return str(inbox_path)
-    if film is None:
-        raise ValueError(UPLOAD_DISCONNECT_HINT)
-    suffix = Path(getattr(film, "name", "match.mp4")).suffix or ".mp4"
-    dest = upload_dir / f"upload{suffix.lower()}"
-
-    def _on_save(written: int, expected: int) -> None:
-        denom = expected if expected > 0 else max(written, 1)
-        update(
-            f"Saving upload {_format_bytes(written)}"
-            + (f" / {_format_bytes(expected)}" if expected > 0 else ""),
-            0.35 * (written / denom),
-        )
-
-    update("Saving upload to disk…", 0.02)
-    save_uploaded_film(film, dest, on_progress=_on_save)
-    return str(dest)
-
-
 RUNDOWN_KEY = "collected_rundown"
 PERSIST_KEY = "ingest_persist_message"
 JOB_KEY = "collect_job_path"
@@ -1326,9 +1293,9 @@ def render_sidebar() -> str:
 
     st.sidebar.header("EnjoyStats")
     st.sidebar.caption(
-        "Skip hand-tagging every shot, pass, and corner. "
-        "Register a film or drop official XML, then Analyse Stats. "
-        "A full film can take hours — the tag sheet is waiting when you come back."
+        "Upload the match film on the home page (one path), "
+        "then Analyse Stats. A full film can take hours — "
+        "the tag sheet is waiting when you come back."
     )
     base_url = st.sidebar.text_input("FastAPI base URL", value=DEFAULT_BASE_URL).strip()
     if not base_url:
@@ -1470,37 +1437,37 @@ def render_statman_panel() -> None:
 
 
 def render_film_uploader_panel(base_url: str) -> None:
-    """Chunked FastAPI uploader for large films on any device."""
+    """The only match-film upload path: chunked FastAPI uploader."""
 
-    upload_url = f"{base_url.rstrip('/')}/upload-film"
-    inbox = film_inbox_dir()
-    inbox.mkdir(parents=True, exist_ok=True)
-    inbox_path = str(inbox.resolve())
-    st.markdown("**Upload from this device**")
+    api = base_url.rstrip("/")
+    upload_url = f"{api}/upload-film"
+    api_online = asyncio.run(probe_api(api))
+    if not api_online:
+        st.error(
+            "Upload API is offline. Start FastAPI on this machine "
+            "(`uvicorn api.main:app --host 127.0.0.1 --port 8000`), "
+            f"then refresh. Expected: `{api}`."
+        )
+        return
+    st.markdown("**Upload match film**")
     st.caption(
-        "Most reliable for a full match: copy the MP4 into "
-        f"`{inbox_path}`, then pick it under Films on this machine. "
-        "Or use the chunked uploader below (retries drops; up to "
-        f"{video_limit_label()})."
+        f"One path only — 4 MB chunks with retries (up to {video_limit_label()}). "
+        "When it says Saved, click Analyse Stats below."
     )
-    st.code(inbox_path, language=None)
-    st.link_button("Open uploader in a new tab", upload_url)
+    st.link_button("Open uploader full-screen", upload_url)
     import streamlit.components.v1 as components
 
-    components.html(upload_page_html(base_url.rstrip("/")), height=480, scrolling=False)
+    components.html(upload_page_html(api), height=420, scrolling=False)
 
 
 def render_analyse_landing(base_url: str) -> None:
-    """Simple Analyse home: film, home XML, optional away XML, sample draft."""
+    """One upload → Analyse Stats → Review → Home/Away XML."""
 
-    inbox_dir = film_inbox_dir()
     upload_dir = film_upload_dir()
     st.title("EnjoyStats")
     st.caption(
-        "Collect in-house: upload a match film → Analyse Stats → "
-        "Review tags (fix only wrong rows) → download Home / Away XMLs. "
-        "No Grokbot required. Film watch aims for dense OnceSport-level "
-        "tagging; Review is how you push accuracy to board-ready."
+        "Upload a match film → Analyse Stats → "
+        "Review tags (fix only wrong rows) → download Home / Away XMLs."
     )
     if st.button(
         "Load sample · Napoleon Bot vs 80s Jeans",
@@ -1515,7 +1482,6 @@ def render_analyse_landing(base_url: str) -> None:
 
     st.subheader("Analyse Stats")
     st.caption(
-        f"Upload the match MP4 (up to {video_limit_label()}). "
         f"Watcher: **{detector_label()}**. "
         "Set kit colours so Home and Away stay separate. "
         "Then download Home.xml + Away.xml with your OnceSport buttons."
@@ -1585,39 +1551,18 @@ def render_analyse_landing(base_url: str) -> None:
                 st.success(f"Line-up loaded · Home {len(parsed.home)} · Away {len(parsed.away)}")
             except ValueError as exc:
                 st.error(str(exc))
-    link = st.text_input(
-        "Register a link",
-        value="",
-        placeholder="https://…  ·  file:///…  ·  or a local path",
-        help="Direct video URL, local path, or file://. Prefer uploading the match MP4.",
-    ).strip()
-    vimeo_link = bool(link) and is_vimeo_page_link(link)
-    if vimeo_link:
-        st.info(
-            "Got a Vimeo watch page. Upload the MP4 below "
-            "(or pick it from the inbox), then click Analyse Stats."
+
+    render_film_uploader_panel(base_url)
+
+    films = ready_match_films()
+    latest = films[0] if films else None
+    if latest is not None:
+        st.success(
+            f"Ready: **{latest.name}** · {_format_bytes(latest.stat().st_size)}"
+            + (f" · {len(films)} films in inbox" if len(films) > 1 else "")
         )
-    on_disk = ready_films()
-    none_label = "(none — register a link or upload below)"
-    disk_labels: dict[str, Path | None] = {none_label: None}
-    for path in on_disk:
-        disk_labels[f"{path.name}  ·  {_format_bytes(path.stat().st_size)}"] = path
-    inbox_choice = st.selectbox(
-        "Films on this machine",
-        options=list(disk_labels.keys()),
-    )
-    inbox_path = disk_labels[inbox_choice]
-    film = st.file_uploader(
-        "Upload match MP4",
-        type=["mp4", "mov", "mkv", "avi", "m4v", "webm"],
-        help=f"Full match film up to {video_limit_label()}.",
-        key="analyse_film_upload",
-    )
-    with st.expander(
-        "Large film uploader (chunked, up to 5 GB)",
-        expanded=vimeo_link,
-    ):
-        render_film_uploader_panel(base_url)
+    else:
+        st.info("No match film uploaded yet. Use the uploader above, then Analyse Stats.")
 
     analyse = st.button(
         "Analyse Stats",
@@ -1625,33 +1570,35 @@ def render_analyse_landing(base_url: str) -> None:
         type="primary",
         key="analyse_film_primary",
     )
+
     inbox_films = list_inbox_films()
-    batch = st.button(
-        f"Collect ALL inbox films ({len(inbox_films)}) — game week batch",
-        use_container_width=True,
-        key="analyse_batch_inbox",
-        disabled=not inbox_films,
-    )
-    if batch:
-        try:
-            batch_path = start_batch_collect(
-                inbox_films,
-                home_kit_hex=home_kit_hex,
-                away_kit_hex=away_kit_hex,
-                home_team_name=home_team_name or None,
-                away_team_name=away_team_name or None,
-                lineup_json=lineup_json_text or None,
+    if len(inbox_films) > 1:
+        with st.expander(f"Game-week batch · {len(inbox_films)} films in inbox", expanded=False):
+            batch = st.button(
+                f"Collect ALL inbox films ({len(inbox_films)})",
+                use_container_width=True,
+                key="analyse_batch_inbox",
             )
-            st.session_state["batch_status_path"] = str(batch_path)
-            st.session_state[PERSIST_KEY] = (
-                f"Queued {len(inbox_films)} films for game-week collect. "
-                "Open Analysing to watch progress. "
-                f"Batch: {batch_path.name}"
-            )
-            _request_nav("Analysing")
-            st.rerun()
-        except ValueError as exc:
-            st.error(str(exc))
+            if batch:
+                try:
+                    batch_path = start_batch_collect(
+                        inbox_films,
+                        home_kit_hex=home_kit_hex,
+                        away_kit_hex=away_kit_hex,
+                        home_team_name=home_team_name or None,
+                        away_team_name=away_team_name or None,
+                        lineup_json=lineup_json_text or None,
+                    )
+                    st.session_state["batch_status_path"] = str(batch_path)
+                    st.session_state[PERSIST_KEY] = (
+                        f"Queued {len(inbox_films)} films for game-week collect. "
+                        "Open Analysing to watch progress. "
+                        f"Batch: {batch_path.name}"
+                    )
+                    _request_nav("Analysing")
+                    st.rerun()
+                except ValueError as exc:
+                    st.error(str(exc))
     if st.session_state.get("batch_status_path"):
         from pathlib import Path as _Path
         from analytics.batch_collect import read_batch_status
@@ -1686,7 +1633,6 @@ def render_analyse_landing(base_url: str) -> None:
         )
         if collect_xml:
             try:
-                upload_dir = film_upload_dir()
                 upload_dir.mkdir(parents=True, exist_ok=True)
                 if home_xml is not None:
                     home_bytes = home_xml.getvalue()
@@ -1723,32 +1669,13 @@ def render_analyse_landing(base_url: str) -> None:
     if not analyse:
         return
     try:
-        source_path = ""
-        pending_upload = None
-        usable_link = link if link and not vimeo_link else ""
-        if usable_link:
-            update, finish = render_upload_loader()
-            update("Registering match link…", 0.08)
-            registered = register_match_link(usable_link, inbox_dir)
-            source_path = str(registered)
-            finish()
-        elif inbox_path is not None:
-            source_path = str(inbox_path)
-        elif film is not None:
-            pending_upload = film
-        elif vimeo_link:
+        source = latest_ready_film()
+        if source is None:
             raise ValueError(
-                "Upload the match MP4 (or pick it from the inbox), then Analyse Stats."
-            )
-        else:
-            raise ValueError(
-                "Register a link, pick a film on this machine, or upload an MP4 first."
+                "Upload the match film with the uploader above, then click Analyse Stats."
             )
         update, finish = render_upload_loader()
         update("Preparing the match…", 0.04)
-        if pending_upload is not None:
-            source_path = _resolve_film_source("", None, pending_upload, upload_dir, update)
-        source = Path(source_path)
         if film_has_official_tags(source):
             update("Collecting official tags…", 0.36)
 
@@ -1756,7 +1683,7 @@ def render_analyse_landing(base_url: str) -> None:
                 update(label, 0.36 + 0.64 * fraction)
 
             rundown = collect_from_film_path(
-                source_path,
+                str(source),
                 on_progress=_on_collect,
                 home_kit_hex=home_kit_hex,
                 away_kit_hex=away_kit_hex,

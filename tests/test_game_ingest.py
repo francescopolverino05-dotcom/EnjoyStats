@@ -129,12 +129,12 @@ def test_film_stream_upload_writes_inbox(tmp_path: Path, monkeypatch) -> None:
     with TestClient(application) as client:
         page = client.get("/upload-film")
         assert page.status_code == 200
-        assert "Save film to inbox" in page.text
+        assert "Upload match film" in page.text
         assert "Analyse Stats" in page.text
         assert "width=device-width" in page.text
         assert "5 GB" in page.text or "5&nbsp;GB" in page.text
         assert "Retry" in page.text
-        assert str(inbox.resolve()) in page.text
+        assert "One upload path" in page.text
         response = client.post(
             "/api/v1/matches/film?filename=derby.mp4",
             content=payload,

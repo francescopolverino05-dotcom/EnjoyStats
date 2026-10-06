@@ -126,15 +126,16 @@ def test_dashboard_renders_analyse_landing(tmp_path, monkeypatch) -> None:
     nav = next(radio for radio in at.radio if set(radio.options) >= {"Home", "History"})
     assert nav.value == "Home"
     select_labels = [str(element.label) for element in at.selectbox]
-    assert any("Films on this machine" in label for label in select_labels)
+    assert not any("Films on this machine" in label for label in select_labels)
     assert not any("Cookies from browser" in label for label in select_labels)
     input_labels = [str(element.label) for element in at.text_input]
-    assert any("Register a link" in label for label in input_labels)
+    assert not any("Register a link" in label for label in input_labels)
     captions = [str(element.value) for element in at.caption]
     assert any("oncesport" in caption.lower() or "xml" in caption.lower() for caption in captions)
     assert any(
-        "mp4" in caption.lower() or "film" in caption.lower() for caption in captions
-    ) or any("5 gb" in str(element.label).lower() for element in at.expander)
+        "chunk" in caption.lower() or "upload" in caption.lower() or "film" in caption.lower()
+        for caption in captions
+    ) or any("upload match film" in str(element.value).lower() for element in at.markdown)
     buttons = [str(element.label) for element in at.button]
     assert any("Analyse Stats" in label for label in buttons)
     assert any("Napoleon Bot" in label for label in buttons)
@@ -147,32 +148,39 @@ def test_dashboard_renders_analyse_landing(tmp_path, monkeypatch) -> None:
     analyse.click().run()
     assert not at.exception
     errors = [str(element.value) for element in at.error]
-    assert any("Register a link" in message or "upload" in message.lower() for message in errors)
+    infos = [str(element.value) for element in at.info]
+    assert any(
+        "upload" in message.lower() for message in errors + infos
+    )
 
 
-def test_vimeo_paste_prompts_upload_not_hard_error(tmp_path, monkeypatch) -> None:
+def test_analyse_uses_newest_uploaded_film(tmp_path, monkeypatch) -> None:
     from streamlit.testing.v1 import AppTest
+
+    from analytics.collect_job import read_job_status
 
     monkeypatch.setenv("ENJOYSTATS_JOBS_DIR", str(tmp_path / "jobs"))
     monkeypatch.setenv("ENJOYSTATS_FILM_INBOX", str(tmp_path / "inbox"))
     monkeypatch.setenv("ENJOYSTATS_FILM_UPLOADS", str(tmp_path / "uploads"))
     monkeypatch.setenv("ENJOYSTATS_HISTORY_DIR", str(tmp_path / "history"))
+    inbox = tmp_path / "inbox"
+    inbox.mkdir(parents=True)
+    film = inbox / "gw1.mp4"
+    film.write_bytes(b"fake-match-bytes")
     script = Path(__file__).resolve().parents[1] / "app" / "dashboard.py"
-    at = AppTest.from_file(str(script), default_timeout=15)
+    at = AppTest.from_file(str(script), default_timeout=20)
     at.run()
-    link = next(field for field in at.text_input if "Register a link" in str(field.label))
-    link.set_value("https://vimeo.com/1224195986").run()
     assert not at.exception
-    infos = [str(element.value) for element in at.info]
-    assert any("Vimeo" in message and "Upload the MP4" in message for message in infos)
-    errors = [str(element.value) for element in at.error]
-    assert not any("not supported" in message.lower() for message in errors)
-    analyse = next(button for button in at.button if "Analyse Stats" in str(button.label))
+    successes = [str(element.value) for element in at.success]
+    assert any("gw1.mp4" in message for message in successes)
+    analyse = next(button for button in at.button if str(button.label) == "Analyse Stats")
     analyse.click().run()
     assert not at.exception
-    errors = [str(element.value) for element in at.error]
-    assert any("Upload the match MP4" in message for message in errors)
-    assert not any("not supported" in message.lower() for message in errors)
+    job_path = at.session_state.get("collect_job_path")
+    assert job_path
+    status = read_job_status(Path(str(job_path)))
+    assert status is not None
+    assert "gw1.mp4" in str(status.get("film") or "")
 
 
 def test_landing_sample_opens_tag_inventory(tmp_path, monkeypatch) -> None:
