@@ -22,6 +22,23 @@ PID_FILE = LOCAL_RUN / "uvicorn.pid"
 LOG_FILE = LOCAL_RUN / "uvicorn.log"
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8000
+DEFAULT_UVICORN_APP = "api.main:app"
+UPLOAD_ONLY_UVICORN_APP = "api.upload_app:app"
+
+
+def _truthy(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def uvicorn_app_target() -> str:
+    """ASGI target for the local film-upload Uvicorn process."""
+
+    override = os.environ.get("ENJOYSTATS_UVICORN_APP", "").strip()
+    if override:
+        return override
+    if _truthy("STATMAN_UPLOAD_ONLY") or _truthy("STATMAN_USE_EXTERNAL_WORKER"):
+        return UPLOAD_ONLY_UVICORN_APP
+    return DEFAULT_UVICORN_APP
 
 
 def api_base_url(*, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT) -> str:
@@ -141,7 +158,7 @@ def ensure_api_running(
                 os.environ.get("PYTHON", "python3"),
                 "-m",
                 "uvicorn",
-                "api.main:app",
+                uvicorn_app_target(),
                 "--host",
                 bind_host if bind_host != "127.0.0.1" else "0.0.0.0",
                 "--port",

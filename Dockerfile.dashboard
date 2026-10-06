@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1
-# Streamlit dashboard — builder installs wheels, runtime ships matplotlib + app.
+# Streamlit + same-origin portal (film upload) for Railway Web.
+# Public traffic hits $PORT via api.portal; Streamlit stays on 8501 inside.
 
 FROM python:3.11-slim AS builder
 
@@ -19,6 +20,7 @@ COPY config ./config
 COPY data_models ./data_models
 COPY analytics ./analytics
 COPY app ./app
+COPY api ./api
 
 RUN python -m venv /opt/venv \
     && /opt/venv/bin/pip install --upgrade pip \
@@ -26,6 +28,9 @@ RUN python -m venv /opt/venv \
         "pydantic>=2.7,<3" \
         "pydantic-settings>=2.3,<3" \
         "httpx>=0.27,<1" \
+        "fastapi>=0.111,<1" \
+        "uvicorn[standard]>=0.30,<1" \
+        "websockets>=12,<16" \
         "streamlit>=1.36,<2" \
         "matplotlib>=3.8,<4" \
         "seaborn>=0.13,<1" \
@@ -40,35 +45,43 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     MPLBACKEND=Agg \
     PATH="/opt/venv/bin:$PATH" \
     PYTHONPATH=/app \
-    ENJOYSTATS_API_URL=http://api:8000 \
+    PORT=8501 \
+    ENJOYSTATS_API_URL=http://127.0.0.1:8000 \
     ENJOYSTATS_JOBS_DIR=/data/jobs \
     ENJOYSTATS_FILM_INBOX=/data/inbox \
-    ENJOYSTATS_FILM_UPLOADS=/data/uploads
+    ENJOYSTATS_FILM_UPLOADS=/data/uploads \
+    ENJOYSTATS_SAME_ORIGIN_UPLOAD=1 \
+    STATMAN_UPLOAD_ONLY=1 \
+    STATMAN_USE_EXTERNAL_WORKER=1 \
+    ENJOYSTATS_UVICORN_APP=api.upload_app:app
 
 WORKDIR /app
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends fonts-dejavu-core libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/* \
-    && useradd --system --uid 10001 --create-home --home-dir /home/enjoystats enjoystats
+    && useradd --system --uid 10001 --create-home --home-dir /home/enjoystats enjoystats \
+    && mkdir -p /data/jobs /data/inbox /data/uploads /tmp/statman-web \
+    && chown -R enjoystats:enjoystats /data /app /tmp/statman-web
 
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder --chown=enjoystats:enjoystats /src/config /app/config
 COPY --from=builder --chown=enjoystats:enjoystats /src/data_models /app/data_models
 COPY --from=builder --chown=enjoystats:enjoystats /src/analytics /app/analytics
 COPY --from=builder --chown=enjoystats:enjoystats /src/app /app/app
+COPY --from=builder --chown=enjoystats:enjoystats /src/api /app/api
 COPY .streamlit /app/.streamlit
+COPY scripts/statman_web_entrypoint.sh /app/scripts/statman_web_entrypoint.sh
+RUN chmod +x /app/scripts/statman_web_entrypoint.sh \
+    && chown -R enjoystats:enjoystats /app/.streamlit /app/scripts
 
-USER enjoystats
+# Stay root so entrypoint can chown the Railway volume, then drop privileges.
+USER root
 EXPOSE 8501
+VOLUME ["/data"]
 
-HEALTHCHECK --interval=15s --timeout=5s --start-period=25s --retries=8 \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8501/_stcore/health', timeout=3)"
+# Public PORT serves the portal (proxies Streamlit /_stcore/health).
+HEALTHCHECK --interval=15s --timeout=5s --start-period=60s --retries=10 \
+    CMD python -c "import os,urllib.request; p=os.environ.get('PORT','8501'); urllib.request.urlopen(f'http://127.0.0.1:{p}/_stcore/health', timeout=3)"
 
-CMD ["streamlit", "run", "app/dashboard.py", \
-     "--server.address=0.0.0.0", \
-     "--server.port=8501", \
-     "--server.headless=true", \
-     "--server.maxUploadSize=5120", \
-     "--server.maxMessageSize=5120", \
-     "--browser.gatherUsageStats=false"]
+ENTRYPOINT ["/app/scripts/statman_web_entrypoint.sh"]

@@ -16,8 +16,19 @@
 # worker claims it → Analyse runs off the web dyno → download PDF →
 # delete the film when done.
 
-Web start (Nixpacks / custom):
-  streamlit run app/dashboard.py --server.address=0.0.0.0 --server.port=$PORT --server.headless=true --server.maxUploadSize=5120 --browser.gatherUsageStats=false
+## Web “Application failed to respond”
+#
+# Generate Service Domain port: **8501**
+# Web entrypoint listens on $PORT with the same-origin **portal**
+# (Streamlit UI + /upload-film on one public URL).
+# Redeploy Web after pulling the fix that ships `api/` + portal entrypoint.
+#
+# If it still fails: Web → Deployments → View logs
+#   Look for "statman-web: starting portal" and Streamlit health.
+
+Web start (Railway / Docker):
+  /app/scripts/statman_web_entrypoint.sh
+  (portal on $PORT · Streamlit internal · slim upload API on :8000)
 
 Worker start:
   /app/scripts/statman_worker_entrypoint.sh
@@ -33,9 +44,11 @@ Required shared env (both services):
   ENJOYSTATS_FILM_INBOX=/data/inbox
   ENJOYSTATS_FILM_UPLOADS=/data/uploads
 
-Web-only:
+Web-only (defaults are set in Dockerfile.dashboard):
   STATMAN_USE_EXTERNAL_WORKER=1
-  PORT=8501   # or Railway's $PORT
+  STATMAN_UPLOAD_ONLY=1
+  ENJOYSTATS_SAME_ORIGIN_UPLOAD=1
+  PORT=8501   # or Railway's $PORT — must match Generate Service Domain
 
 Worker-only:
   STATMAN_WORKER_POLL_S=3

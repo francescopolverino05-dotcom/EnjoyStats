@@ -65,6 +65,7 @@ services:
       ENJOYSTATS_FILM_INBOX: /data/inbox
       ENJOYSTATS_FILM_UPLOADS: /data/uploads
       STATMAN_USE_EXTERNAL_WORKER: ${STATMAN_USE_EXTERNAL_WORKER:-1}
+      PORT: "8501"
       MPLBACKEND: Agg
     volumes:
       - statman_data:/data
@@ -83,8 +84,8 @@ services:
         ]
       interval: 15s
       timeout: 5s
-      retries: 8
-      start_period: 25s
+      retries: 10
+      start_period: 60s
     restart: unless-stopped
 
   worker:

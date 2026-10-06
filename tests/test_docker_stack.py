@@ -30,6 +30,7 @@ def test_compose_stack_wires_db_api_and_dashboard() -> None:
 def test_dockerfiles_are_multistage_slim_python() -> None:
     api = (ROOT / "Dockerfile.api").read_text(encoding="utf-8")
     dashboard = (ROOT / "Dockerfile.dashboard").read_text(encoding="utf-8")
+    web_entry = (ROOT / "scripts" / "statman_web_entrypoint.sh").read_text(encoding="utf-8")
     assert "python:3.11-slim AS builder" in api
     assert "python:3.11-slim AS runtime" in api
     assert "python:3.11-slim AS builder" in dashboard
@@ -38,7 +39,22 @@ def test_dockerfiles_are_multistage_slim_python() -> None:
     assert "streamlit" in dashboard
     assert "opencv-python-headless" in dashboard
     assert "yt-dlp" in dashboard
-    assert "maxUploadSize=5120" in dashboard
-    assert "maxMessageSize=5120" in dashboard
-    assert "0.0.0.0" in dashboard
-    assert "http://api:8000" in dashboard
+    assert "maxUploadSize=5120" in web_entry
+    assert "maxMessageSize=5120" in web_entry
+    assert "COPY api ./api" in dashboard
+    assert "/src/api" in dashboard
+    assert "api.upload_app:app" in dashboard
+    assert "statman_web_entrypoint.sh" in dashboard
+    assert "fastapi" in dashboard
+    assert "websockets" in dashboard
+    assert "http://127.0.0.1:8000" in dashboard
+
+
+def test_railway_web_entrypoint_uses_portal() -> None:
+    script = (ROOT / "scripts" / "statman_web_entrypoint.sh").read_text(encoding="utf-8")
+    assert "api.portal" in script
+    assert "streamlit run app/dashboard.py" in script
+    assert "PORT" in script
+    railway = (ROOT / "railway.toml").read_text(encoding="utf-8")
+    assert "statman_web_entrypoint.sh" in railway
+    assert "Dockerfile.dashboard" in railway

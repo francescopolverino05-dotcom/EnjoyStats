@@ -1,14 +1,19 @@
 # Railway config for the **Web** service.
 # On the Worker service, override in the Railway UI:
 #   Dockerfile path = Dockerfile.worker
-#   Start command   = python -m analytics.collect_worker
+#   Config-as-code  = railway.worker.toml
 # Do NOT leave Worker on this file's Dockerfile.dashboard default.
+#
+# Generate Service Domain port: 8501
+# (or leave Railway's $PORT — the entrypoint listens on $PORT)
 
 [build]
 builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile.dashboard"
 
 [deploy]
-startCommand = "streamlit run app/dashboard.py --server.address=0.0.0.0 --server.port=$PORT --server.headless=true --server.maxUploadSize=5120 --server.maxMessageSize=5120 --browser.gatherUsageStats=false"
+startCommand = "/app/scripts/statman_web_entrypoint.sh"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
+healthcheckPath = "/_stcore/health"
+healthcheckTimeout = 30
