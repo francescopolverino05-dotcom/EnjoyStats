@@ -1,6 +1,5 @@
 # syntax=docker/dockerfile:1
-# Streamlit + same-origin portal (film upload) for Railway Web.
-# Public traffic hits $PORT via api.portal; Streamlit stays internal.
+# StatMan Web (Streamlit). Listens on Railway-injected $PORT.
 
 FROM python:3.11-slim AS builder
 
@@ -45,7 +44,6 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     MPLBACKEND=Agg \
     PATH="/opt/venv/bin:$PATH" \
     PYTHONPATH=/app \
-    PORT=8501 \
     ENJOYSTATS_API_URL=http://127.0.0.1:8000 \
     ENJOYSTATS_JOBS_DIR=/data/jobs \
     ENJOYSTATS_FILM_INBOX=/data/inbox \
@@ -59,8 +57,8 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends fonts-dejavu-core libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --system --uid 10001 --create-home --home-dir /home/enjoystats enjoystats \
-    && mkdir -p /data/jobs /data/inbox /data/uploads /tmp/statman-web \
-    && chown -R enjoystats:enjoystats /data /app /tmp/statman-web
+    && mkdir -p /data/jobs /data/inbox /data/uploads \
+    && chown -R enjoystats:enjoystats /data /app
 
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder --chown=enjoystats:enjoystats /src/config /app/config
@@ -71,17 +69,12 @@ COPY --from=builder --chown=enjoystats:enjoystats /src/api /app/api
 COPY .streamlit /app/.streamlit
 COPY scripts/statman_web_entrypoint.sh /app/scripts/statman_web_entrypoint.sh
 COPY scripts/statman_web_healthcheck.sh /app/scripts/statman_web_healthcheck.sh
-COPY scripts/statman_web_diag.py /app/scripts/statman_web_diag.py
 RUN chmod +x /app/scripts/statman_web_entrypoint.sh /app/scripts/statman_web_healthcheck.sh \
     && chown -R enjoystats:enjoystats /app/.streamlit /app/scripts
 
-# Stay root so entrypoint can chown the Railway volume, then drop privileges.
 USER root
-EXPOSE 8501
-# Do not use Dockerfile VOLUME — Railway rejects it. Attach a Volume at /data in the UI.
+# Do not declare a container port or bake PORT into the image.
+# Railway injects PORT and routes the domain to it.
+# Attach Volume at /data in the Railway UI (not a Dockerfile volume).
 
-HEALTHCHECK --interval=15s --timeout=5s --start-period=45s --retries=8 \
-    CMD ["/app/scripts/statman_web_healthcheck.sh"]
-
-# Prefer CMD (not ENTRYPOINT) so Railway startCommand can replace cleanly.
-CMD ["/app/scripts/statman_web_entrypoint.sh"]
+CMD ["/bin/sh", "/app/scripts/statman_web_entrypoint.sh"]

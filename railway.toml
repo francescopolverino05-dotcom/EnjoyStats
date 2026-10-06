@@ -1,8 +1,12 @@
-# Railway config for the **Web** service only.
-# Worker → Settings → Config-as-code → railway.worker.toml
+# Web service only. Worker must use railway.worker.toml.
 #
-# Set Web → Variables → PORT=8501
-# Set Networking domain target port = 8501 (same number).
+# Domain 502 fix: do NOT type a random port when generating the domain.
+# After deploy, open Web → Deployments → latest → Logs.
+# Find:  statman-web: Streamlit on 0.0.0.0:NNNN
+# Networking → domain target port = NNNN (that exact number).
+#
+# Also: Variables → delete any manual PORT if it fights the domain.
+# Settings → Deploy → clear Custom Start Command (leave empty).
 
 [build]
 builder = "DOCKERFILE"
@@ -12,5 +16,5 @@ dockerfilePath = "Dockerfile.dashboard"
 startCommand = "/bin/sh /app/scripts/statman_web_entrypoint.sh"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
-healthcheckPath = "/"
-healthcheckTimeout = 120
+healthcheckPath = "/_stcore/health"
+healthcheckTimeout = 300

@@ -1,57 +1,53 @@
-# StatMan on Railway — web site + Analyse worker
-#
-# CRITICAL — Worker must NOT use the Web Dockerfile.
-# In Worker → Settings → Build:
-#   Dockerfile path = Dockerfile.worker
-# Or Config-as-code file = railway.worker.toml
-#
-# 1. Deploy this GitHub repo as TWO services (Web + Worker).
-# 2. Add a Volume in the Railway UI, mount it at /data on BOTH services.
-#    (Do not use Dockerfile VOLUME — Railway rejects that instruction.)
-# 3. Copy env from .env.example (Railway section) onto both.
-# 4. Web: public URL, Dockerfile.dashboard / railway.toml
-# 5. Worker: no public domain, Dockerfile.worker / railway.worker.toml
-#
-# Flow: upload film on the site → job queued under /data/jobs →
-# worker claims it → Analyse runs off the web dyno → download PDF →
-# delete the film when done.
+# StatMan on Railway
 
-## Web “Application failed to respond” (HTTP 502)
-#
-# Site: https://statman-production.up.railway.app
-#
-# Fix the domain target port (most common cause):
-#   1. Web → Variables → set PORT = 8501
-#   2. Web → Settings → Networking → domain target port = 8501
-#      (same number as PORT — not 3000, not blank mismatch)
-#   3. Redeploy Web
-#   4. Deploy logs must show: statman-web: Streamlit 0.0.0.0:8501
-#
-# Web start is Streamlit on $PORT only (no portal sidecar).
+## You are here because the site says “Application failed to respond”
 
-## Web / Worker config files
-#
-#   Web    → railway.toml          (Dockerfile.dashboard)
-#   Worker → railway.worker.toml   (Dockerfile.worker)
+The app **is** deploying. The public URL is aimed at the **wrong port**.
+A tiny test server on the same URL also failed — this is Railway networking,
+not StatMan code.
 
-Web start:
-  /bin/sh /app/scripts/statman_web_entrypoint.sh
+### Do this once (Web service only)
 
-Worker start:
-  /app/scripts/statman_worker_entrypoint.sh
+1. **Variables**  
+   - Delete `PORT` if you added it by hand.  
+   - Save.
 
-Required shared env (both services):
-  ENJOYSTATS_JOBS_DIR=/data/jobs
-  ENJOYSTATS_FILM_INBOX=/data/inbox
-  ENJOYSTATS_FILM_UPLOADS=/data/uploads
+2. **Settings → Deploy**  
+   - Clear **Custom Start Command** (empty).  
+   - Save.
 
-Web-only:
-  STATMAN_USE_EXTERNAL_WORKER=1
-  STATMAN_STREAMLIT_FILM_UPLOAD=1
-  PORT=8501
+3. **Settings → Networking**  
+   - Delete the public domain `statman-production.up.railway.app`.
 
-Worker-only:
-  STATMAN_WORKER_POLL_S=3
+4. **Deployments → Redeploy** Web. Wait for Success.
 
-Optional password gate (Streamlit):
-  STATMAN_SITE_PASSWORD=your-shared-password
+5. Open the new deploy → **View logs**. Find this line:  
+   `statman-web: Streamlit on 0.0.0.0:NNNN`  
+   Remember **NNNN**.
+
+6. **Settings → Networking → Generate Domain**  
+   - When it asks for the port, type **NNNN** (same number from the log).  
+   - Not 8501 unless the log says 8501.
+
+7. Open the new URL.
+
+### Worker (keep as-is)
+
+- Config-as-code: `railway.worker.toml`
+- Volume at `/data` (same volume as Web)
+- No public domain
+
+### Shared env (both)
+
+```
+ENJOYSTATS_JOBS_DIR=/data/jobs
+ENJOYSTATS_FILM_INBOX=/data/inbox
+ENJOYSTATS_FILM_UPLOADS=/data/uploads
+```
+
+Web also:
+
+```
+STATMAN_USE_EXTERNAL_WORKER=1
+STATMAN_STREAMLIT_FILM_UPLOAD=1
+```
