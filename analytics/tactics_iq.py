@@ -128,7 +128,9 @@ def is_wing(y: float) -> bool:
     return pitch_lane(y) in {PitchLane.LEFT_WING, PitchLane.RIGHT_WING}
 
 
-def defensive_block_for_line(defensive_line_x: float, *, defending_left_goal: bool) -> DefensiveBlock:
+def defensive_block_for_line(
+    defensive_line_x: float, *, defending_left_goal: bool
+) -> DefensiveBlock:
     """Classify block height from the deepest outfield defensive line x."""
 
     # Normalize so "depth from own goal" rises as the line pushes up.

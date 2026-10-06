@@ -17,7 +17,7 @@ from analytics.game_ingest import collect_game
 from analytics.review_edits import apply_review_edits, coverage_rows_for_rundown, review_rows
 from analytics.sample_game import sample_game_payload
 from analytics.video_auto_collect import collect_from_video, write_synthetic_match_clip
-from data_models.events import EventType, MatchEvent, ShotOutcome
+from data_models.events import EventType, MatchEvent
 
 
 def test_block_math() -> None:

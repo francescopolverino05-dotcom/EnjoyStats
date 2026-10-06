@@ -38,8 +38,7 @@ def player_label_map(rundown: MatchRundown) -> dict[str, UUID]:
 def review_rows(rundown: MatchRundown) -> list[dict[str, Any]]:
     """Rows for ``st.data_editor`` — one row per tag."""
 
-    labels = {pid: label for label, pid in player_label_map(rundown).items()}
-    # Invert carefully: player_label_map is label→id; rebuild id→label.
+    # player_label_map is label→id; rebuild id→label for the editor.
     id_to_label: dict[UUID, str] = {}
     for label, pid in player_label_map(rundown).items():
         id_to_label[pid] = label

@@ -182,8 +182,14 @@ def finish_collect_from_checkpoint(film: Path) -> MatchRundown:
     rundown = collect_game(
         GamePayload(
             match_id=UUID(str(payload["match_id"])),
-            players=[PlayerRosterEntry.model_validate(row) for row in payload["players"]],  # type: ignore[arg-type]
-            events=[MatchEvent.model_validate(row) for row in payload["events"]],  # type: ignore[arg-type]
+            players=[
+                PlayerRosterEntry.model_validate(row)  # type: ignore[arg-type]
+                for row in payload["players"]
+            ],
+            events=[
+                MatchEvent.model_validate(row)  # type: ignore[arg-type]
+                for row in payload["events"]
+            ],
             home_team_name=str(payload.get("home_team_name") or "Home"),
             away_team_name=str(payload.get("away_team_name") or "Away"),
             tag_source="film",
@@ -1508,7 +1514,6 @@ def sample_and_track(
     frame_index = start_frame
     if start_frame > 0:
         capture.set(cv2.CAP_PROP_POS_FRAMES, float(start_frame))
-    match_minutes = max(window_duration / 60.0, planned / max(sample_hz, 0.1) / 60.0)
     try:
         while sampled < max_sample_frames and frame_index < end_frame:
             if step > 1 and (frame_index - start_frame) % step != 0:

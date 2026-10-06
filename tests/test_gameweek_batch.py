@@ -26,7 +26,11 @@ def test_parse_lineup_csv_sample() -> None:
 
 
 def test_parse_lineup_json_bytes() -> None:
-    raw = b'{"home_team":"Pisa","away_team":"Perugia","home":[{"jersey":9,"name":"Rossi","position":"ST"}],"away":[{"jersey":10,"name":"Bianchi","position":"ST"}]}'
+    raw = (
+        b'{"home_team":"Pisa","away_team":"Perugia",'
+        b'"home":[{"jersey":9,"name":"Rossi","position":"ST"}],'
+        b'"away":[{"jersey":10,"name":"Bianchi","position":"ST"}]}'
+    )
     lineups = parse_lineup_bytes(raw, filename="sheet.json")
     assert lineups.home[0].name == "Rossi"
 
@@ -83,14 +87,22 @@ def test_parse_lineup_json_accepts_spreadsheet_and_alias_shapes() -> None:
     assert parsed.home_team == "Napoli"
     assert parsed.away[0].name == "Bekirov"
 
-    double = '"{\\"home\\":[{\\"jersey\\":1,\\"name\\":\\"A\\"}],\\"away\\":[{\\"jersey\\":2,\\"name\\":\\"B\\"}]}"'
+    double = (
+        '"{\\"home\\":[{\\"jersey\\":1,\\"name\\":\\"A\\"}],'
+        '\\"away\\":[{\\"jersey\\":2,\\"name\\":\\"B\\"}]}"'
+    )
     parsed = parse_lineup_json(double)
     assert len(parsed.home) + len(parsed.away) == 2
 
 
 def test_parse_lineup_semicolon_csv() -> None:
     raw = "side;jersey;name\nhome;1;Rossi\naway;10;Bianchi\n"
-    lineups = parse_lineup_bytes(raw.encode(), filename="sheet.csv", home_team="Pisa", away_team="Perugia")
+    lineups = parse_lineup_bytes(
+        raw.encode(),
+        filename="sheet.csv",
+        home_team="Pisa",
+        away_team="Perugia",
+    )
     assert lineups.home[0].name == "Rossi"
     assert lineups.away_team == "Perugia"
 
