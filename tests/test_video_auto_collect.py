@@ -16,12 +16,16 @@ from analytics.video_auto_collect import (
     VideoCollectError,
     collect_from_video,
     events_from_tracks,
+    finish_collect_from_checkpoint,
+    film_checkpoint_path,
     list_ready_films,
+    load_collect_checkpoint,
     normalize_film_path,
     probe_video,
     remux_for_opencv,
     safe_film_name,
     stitch_tracks,
+    write_collect_checkpoint,
     write_film_chunks,
     write_synthetic_match_clip,
 )
@@ -317,3 +321,69 @@ def test_list_ready_films_skips_tiny_junk_and_promotes_part(tmp_path: Path, monk
     names = {p.name for p in ready}
     assert "match.mp4" in names
     assert "probe.mp4" not in names
+
+
+def test_finish_collect_from_checkpoint_skips_rewatch(tmp_path: Path) -> None:
+    """A saved pre-fold tag sheet must finish without opening the film again."""
+
+    from uuid import uuid4
+
+    from analytics.game_ingest import PlayerRosterEntry
+    from data_models.events import EventType, MatchEvent
+
+    film = tmp_path / "derby.mp4"
+    film.write_bytes(b"not-a-real-film")
+    match_id = uuid4()
+    home = uuid4()
+    away = uuid4()
+    player = uuid4()
+    events = [
+        MatchEvent(
+            match_id=match_id,
+            team_id=home,
+            player_id=player,
+            period=1,
+            minute=5,
+            second=0,
+            event_type=EventType.PASS,
+            x=20.0,
+            y=40.0,
+            end_x=35.0,
+            end_y=41.0,
+            successful=True,
+        ),
+        MatchEvent(
+            match_id=match_id,
+            team_id=away,
+            player_id=player,
+            period=1,
+            minute=6,
+            second=0,
+            event_type=EventType.PASS,
+            x=40.0,
+            y=40.0,
+            end_x=55.0,
+            end_y=42.0,
+            successful=True,
+        ),
+    ]
+    roster = [PlayerRosterEntry(player_id=player, team_id=home, jersey_number=7)]
+    path = write_collect_checkpoint(
+        film,
+        match_id=match_id,
+        home_name="Home",
+        away_name="Away",
+        events=events,
+        roster=roster,
+        stage="pre_collect_game",
+    )
+    assert path == film_checkpoint_path(film)
+    assert load_collect_checkpoint(film) is not None
+    rundown = finish_collect_from_checkpoint(film)
+    assert rundown.summary.event_count == 2
+    assert all(event.team_id == home for event in rundown.events)
+
+    seen: list[str] = []
+    resumed = collect_from_video(film, on_progress=lambda label, _f: seen.append(label))
+    assert resumed.summary.event_count == 2
+    assert any("no re-watch" in label for label in seen)

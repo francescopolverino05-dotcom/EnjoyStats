@@ -106,26 +106,55 @@ def _roster_for_events(
     events: Sequence[MatchEvent],
     declared: Sequence[PlayerRosterEntry],
 ) -> dict[UUID, PlayerRosterEntry]:
-    """Merge an optional roster with identities inferred from the feed."""
+    """Merge an optional roster with identities inferred from the feed.
+
+    Film auto-tag can briefly flip kit colours for the same track, so the same
+    ``player_id`` may show up on both team ids. Prefer the declared roster
+    team, else the majority team from events — never abort a finished watch.
+    """
 
     roster: dict[UUID, PlayerRosterEntry] = {entry.player_id: entry for entry in declared}
+    team_votes: dict[UUID, dict[UUID, int]] = defaultdict(lambda: defaultdict(int))
     for event in events:
         if event.player_id is None:
             continue
-        existing = roster.get(event.player_id)
-        if existing is None:
-            roster[event.player_id] = PlayerRosterEntry(
-                player_id=event.player_id,
-                team_id=event.team_id,
-            )
+        team_votes[event.player_id][event.team_id] += 1
+        if event.player_id in roster:
             continue
-        if existing.team_id != event.team_id:
-            raise ValueError(
-                f"Player {event.player_id} appears for more than one team in this match."
+        roster[event.player_id] = PlayerRosterEntry(
+            player_id=event.player_id,
+            team_id=event.team_id,
+        )
+    for player_id, votes in team_votes.items():
+        if len(votes) <= 1:
+            continue
+        declared_entry = next((entry for entry in declared if entry.player_id == player_id), None)
+        if declared_entry is not None:
+            chosen_team = declared_entry.team_id
+        else:
+            chosen_team = max(votes.items(), key=lambda item: item[1])[0]
+        existing = roster.get(player_id)
+        if existing is None:
+            roster[player_id] = PlayerRosterEntry(player_id=player_id, team_id=chosen_team)
+        elif existing.team_id != chosen_team:
+            roster[player_id] = PlayerRosterEntry(
+                player_id=existing.player_id,
+                team_id=chosen_team,
+                jersey_number=existing.jersey_number,
+                player_name=existing.player_name,
+                position=existing.position,
             )
     if not roster:
         raise ValueError("Game has no player-tagged events to collect.")
     return roster
+
+
+def _event_with_team(event: MatchEvent, team_id: UUID) -> MatchEvent:
+    """Return ``event`` locked onto ``team_id`` when kit/team tags disagree."""
+
+    if event.team_id == team_id:
+        return event
+    return event.model_copy(update={"team_id": team_id})
 
 
 def _apply_possession(
@@ -186,16 +215,23 @@ def collect_game(payload: GamePayload) -> MatchRundown:
     }
 
     event_counts: dict[UUID, int] = defaultdict(int)
+    normalized: list[MatchEvent] = []
     for event in ordered:
         if event.match_id != match_id:
             raise ValueError("All events must belong to a single match_id.")
         if event.player_id is None:
+            normalized.append(event)
             continue
-        collector = collectors.get(event.player_id)
-        if collector is None:
+        entry = roster.get(event.player_id)
+        if entry is None:
+            normalized.append(event)
             continue
-        collector.apply(event)
+        fixed = _event_with_team(event, entry.team_id)
+        normalized.append(fixed)
+        collectors[event.player_id].apply(fixed)
         event_counts[event.player_id] += 1
+
+    ordered = normalized
 
     match_minutes = max((event_clock_minutes(event) for event in ordered), default=0.0)
     if match_minutes <= 0:

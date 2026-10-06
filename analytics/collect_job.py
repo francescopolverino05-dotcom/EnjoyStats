@@ -137,22 +137,40 @@ def run_collect_job(film: Path, status_path: Path) -> MatchRundown:
         _write_json(status_path, status)
 
     try:
-        rundown = collect_from_film_path(
-            film,
-            on_progress=_progress,
-            home_kit_hex=home_kit,
-            away_kit_hex=away_kit,
-            home_team_name=home_name,
-            away_team_name=away_name,
-            lineup_json=lineup_json,
+        # Prefer finishing a saved tag sheet when the last run died at the fold.
+        from analytics.video_auto_collect import (
+            finish_collect_from_checkpoint,
+            load_collect_checkpoint,
         )
+
+        prior_sheet = load_collect_checkpoint(film)
+        if prior_sheet is not None and str(prior_sheet.get("stage") or "") == "pre_collect_game":
+            _progress("Finishing from saved tags (no re-watch)…", 0.95)
+            rundown = finish_collect_from_checkpoint(film)
+        else:
+            rundown = collect_from_film_path(
+                film,
+                on_progress=_progress,
+                home_kit_hex=home_kit,
+                away_kit_hex=away_kit,
+                home_team_name=home_name,
+                away_team_name=away_name,
+                lineup_json=lineup_json,
+            )
     except (ValueError, OSError) as exc:
-        status["state"] = "error"
-        status["error"] = str(exc)
-        status["label"] = f"Collect failed ({exc})"
-        status["updated_at"] = _now()
-        _write_json(status_path, status)
-        raise
+        # Last chance: fold whatever was checkpointed before the crash.
+        try:
+            from analytics.video_auto_collect import finish_collect_from_checkpoint
+
+            _progress("Recovering from saved tags…", 0.96)
+            rundown = finish_collect_from_checkpoint(film)
+        except (ValueError, OSError):
+            status["state"] = "error"
+            status["error"] = str(exc)
+            status["label"] = f"Collect failed ({exc})"
+            status["updated_at"] = _now()
+            _write_json(status_path, status)
+            raise
 
     rundown_path = status_path.with_name(status_path.name.replace(JOB_SUFFIX, RUNDOWN_SUFFIX))
     if rundown_path == status_path:

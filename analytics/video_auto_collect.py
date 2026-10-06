@@ -100,6 +100,102 @@ class VideoCollectError(ValueError):
     """Raised when a match film cannot be opened, is too large, or yields no play."""
 
 
+def film_checkpoint_path(film: Path) -> Path:
+    """Sidecar JSON that holds tagged events before the final stats fold."""
+
+    resolved = film.expanduser().resolve()
+    return resolved.with_name(f"{resolved.stem}.collect.checkpoint.json")
+
+
+def write_collect_checkpoint(
+    film: Path,
+    *,
+    match_id: UUID,
+    home_name: str,
+    away_name: str,
+    events: Sequence[MatchEvent],
+    roster: Sequence[PlayerRosterEntry],
+    stage: str,
+) -> Path:
+    """Persist events/roster so a final-fold crash can finish without re-watching."""
+
+    import json
+
+    path = film_checkpoint_path(film)
+    payload = {
+        "film": str(film.expanduser().resolve()),
+        "stage": stage,
+        "match_id": str(match_id),
+        "home_team_name": home_name,
+        "away_team_name": away_name,
+        "tag_source": "film",
+        "players": [entry.model_dump(mode="json") for entry in roster],
+        "events": [event.model_dump(mode="json") for event in events],
+    }
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload), encoding="utf-8")
+    tmp.replace(path)
+    return path
+
+
+def load_collect_checkpoint(film: Path) -> dict[str, object] | None:
+    """Load a checkpoint for ``film`` when present and matching."""
+
+    import json
+
+    path = film_checkpoint_path(film)
+    if not path.is_file():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    if str(payload.get("film") or "") != str(film.expanduser().resolve()):
+        return None
+    events = payload.get("events")
+    if not isinstance(events, list) or not events:
+        return None
+    return payload
+
+
+def finish_collect_from_checkpoint(film: Path) -> MatchRundown:
+    """Fold a saved event sheet into the rundown — no film watch."""
+
+    payload = load_collect_checkpoint(film)
+    if payload is None:
+        raise VideoCollectError(
+            f"No saved tag sheet to finish for {film.name}. "
+            "The previous analyse died before writing a checkpoint."
+        )
+    rundown = collect_game(
+        GamePayload(
+            match_id=UUID(str(payload["match_id"])),
+            players=[PlayerRosterEntry.model_validate(row) for row in payload["players"]],  # type: ignore[arg-type]
+            events=[MatchEvent.model_validate(row) for row in payload["events"]],  # type: ignore[arg-type]
+            home_team_name=str(payload.get("home_team_name") or "Home"),
+            away_team_name=str(payload.get("away_team_name") or "Away"),
+            tag_source="film",
+        )
+    )
+    info_path = film.expanduser().resolve()
+    try:
+        write_sidecar_xml(rundown, info_path)
+    except OSError:
+        pass
+    try:
+        write_oncesport_pair(
+            rundown,
+            info_path.parent,
+            stem=info_path.stem,
+            video_path=str(info_path),
+        )
+    except OSError:
+        pass
+    return rundown
+
+
 def _emit(on_progress: ProgressFn | None, label: str, fraction: float) -> None:
     if on_progress is None:
         return
@@ -1075,6 +1171,7 @@ def events_from_tracks(
         goal_x=goal_x,
         lineups=lineups,
     )
+    locked_team_by_player = {entry.player_id: entry.team_id for entry in roster}
 
     frame_indexes = sorted({frame for track in players for frame in track.frames})
     if ball is not None:
@@ -1125,10 +1222,11 @@ def events_from_tracks(
         gap_ok = (now_s - last_event_s) >= MIN_EVENT_GAP_S
         due = (now_s - last_event_s) >= TARGET_EVENT_GAP_S
         actor = last_owner if last_owner is not None else owner
+        actor_player_id = player_ids[actor.track_id]
         payload: dict[str, object] = {
             "match_id": match_id,
-            "team_id": team_ids[actor.team],
-            "player_id": player_ids[actor.track_id],
+            "team_id": locked_team_by_player.get(actor_player_id, team_ids[actor.team]),
+            "player_id": actor_player_id,
             "period": period,
             "minute": minute,
             "second": second,
@@ -1437,6 +1535,21 @@ def collect_from_video(
         lineups: Optional real Home/Away sheets (names + shirt numbers).
     """
 
+    # A prior watch that died at the final fold can finish here — no re-watch.
+    prior = load_collect_checkpoint(path)
+    if prior is not None and str(prior.get("stage") or "") == "pre_collect_game":
+        _emit(on_progress, "Finishing from saved tags (no re-watch)…", 0.95)
+        rundown = finish_collect_from_checkpoint(path)
+        _emit(
+            on_progress,
+            (
+                f"Rundown ready from checkpoint · {len(rundown.events)} events · "
+                "Home/Away XML written"
+            ),
+            1.0,
+        )
+        return rundown
+
     home_kit_bgr = parse_kit_hex(home_kit_hex)
     away_kit_bgr = parse_kit_hex(away_kit_hex)
     _emit(on_progress, f"Opening match film… ({detector_label()})", 0.02)
@@ -1484,6 +1597,15 @@ def collect_from_video(
         home_kit_bgr=home_kit_bgr,
         away_kit_bgr=away_kit_bgr,
         lineups=lineups,
+    )
+    write_collect_checkpoint(
+        info.path,
+        match_id=match_id,
+        home_name=home_name,
+        away_name=away_name,
+        events=events,
+        roster=roster,
+        stage="after_first_pass",
     )
     duration_minutes = max(minutes, rundown_minutes_from_events(events), 0.1)
     home_team_id = uuid5(AUTO_NAMESPACE, f"{match_id}-team-{home_name}")
@@ -1569,16 +1691,38 @@ def collect_from_video(
                 home_team_ids={home_team_id},
             )
 
-    rundown = collect_game(
-        GamePayload(
-            match_id=match_id,
-            players=roster,
-            events=events,
-            home_team_name=home_name,
-            away_team_name=away_name,
-            tag_source="film",
-        )
+    # Save tags BEFORE the final fold — if collect_game fails, we can finish
+    # without re-watching the film.
+    write_collect_checkpoint(
+        info.path,
+        match_id=match_id,
+        home_name=home_name,
+        away_name=away_name,
+        events=events,
+        roster=roster,
+        stage="pre_collect_game",
     )
+    _emit(on_progress, "Folding tags into the match sheet…", 0.95)
+    try:
+        rundown = collect_game(
+            GamePayload(
+                match_id=match_id,
+                players=roster,
+                events=events,
+                home_team_name=home_name,
+                away_team_name=away_name,
+                tag_source="film",
+            )
+        )
+    except ValueError as exc:
+        # Kit-flip / fold bugs must not throw away a finished watch.
+        try:
+            rundown = finish_collect_from_checkpoint(info.path)
+        except VideoCollectError:
+            raise VideoCollectError(
+                f"Final fold failed ({exc}). Tags are saved — click Analyse again "
+                "to finish from the checkpoint without re-watching."
+            ) from exc
     try:
         write_sidecar_xml(rundown, info.path)
     except OSError:

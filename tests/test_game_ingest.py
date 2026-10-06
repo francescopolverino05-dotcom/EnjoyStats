@@ -244,3 +244,56 @@ def test_bundled_sample_game_file_collects() -> None:
         EventType.SHOT,
         EventType.INTERCEPTION,
     }
+
+
+def test_collect_game_locks_player_that_flips_teams() -> None:
+    """Film kit-flip must not abort a finished watch at the final fold."""
+
+    from analytics.game_ingest import GamePayload, PlayerRosterEntry
+    from data_models.events import MatchEvent
+
+    match_id = uuid4()
+    home = uuid4()
+    away = uuid4()
+    player = uuid4()
+    payload = GamePayload(
+        match_id=match_id,
+        players=[PlayerRosterEntry(player_id=player, team_id=home, jersey_number=10)],
+        events=[
+            MatchEvent(
+                match_id=match_id,
+                team_id=home,
+                player_id=player,
+                period=1,
+                minute=10,
+                second=0,
+                event_type=EventType.PASS,
+                x=30.0,
+                y=40.0,
+                end_x=45.0,
+                end_y=42.0,
+                successful=True,
+            ),
+            MatchEvent(
+                match_id=match_id,
+                team_id=away,
+                player_id=player,
+                period=1,
+                minute=11,
+                second=0,
+                event_type=EventType.PASS,
+                x=50.0,
+                y=40.0,
+                end_x=60.0,
+                end_y=41.0,
+                successful=True,
+            ),
+        ],
+        home_team_name="Home",
+        away_team_name="Away",
+    )
+    rundown = collect_game(payload)
+    assert rundown.summary.event_count == 2
+    profile = next(row for row in rundown.players if row.player_id == player)
+    assert profile.team_id == home
+    assert all(event.team_id == home for event in rundown.events if event.player_id == player)
