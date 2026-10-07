@@ -307,9 +307,6 @@ def is_wyscout_danger_zone(x: float, y: float, *, attack_goal_x: float) -> bool:
     """Wyscout danger zone — central final-third shooting area."""
 
     if attack_goal_x >= 50:
-        return (
-            x >= WYSCOUT_DANGER_X_MIN
-            and WYSCOUT_DANGER_Y_MIN <= y <= WYSCOUT_DANGER_Y_MAX
-        )
+        return x >= WYSCOUT_DANGER_X_MIN and WYSCOUT_DANGER_Y_MIN <= y <= WYSCOUT_DANGER_Y_MAX
     danger_x_max = 100.0 - WYSCOUT_DANGER_X_MIN
     return x <= danger_x_max and WYSCOUT_DANGER_Y_MIN <= y <= WYSCOUT_DANGER_Y_MAX

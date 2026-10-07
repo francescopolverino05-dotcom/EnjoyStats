@@ -56,6 +56,7 @@ from app.ingest import (
     persist_rundown,
     profile_label,
     ready_match_films,
+    save_uploaded_film,
 )
 from analytics.collect_job import (
     latest_job_status_path,
@@ -71,9 +72,11 @@ from analytics.team_collect import (
     team_profiles_from_rundown,
 )
 from analytics.video_auto_collect import (
+    VIDEO_SUFFIXES,
     VideoCollectError,
     film_inbox_dir,
     film_upload_dir,
+    safe_film_name,
     video_limit_label,
 )
 from api.film_upload import upload_page_html
@@ -1368,11 +1371,26 @@ def render_job_progress(status: dict[str, object]) -> None:
     )
     fraction = float(status.get("fraction") or 0.0)
     label = str(status.get("label") or "Watching the film…")
+    state = str(status.get("state") or "").strip().lower()
     st.progress(min(1.0, max(0.0, fraction)), text=label)
     st.caption(f"{fraction * 100:.0f}%  ·  {label}")
     film = str(status.get("film") or "")
     if film:
         st.caption(f"Film: `{Path(film).name}`")
+    if state == "queued":
+        updated = str(status.get("updated_at") or status.get("started_at") or "")
+        jobs_dir = str(status.get("jobs_dir") or "")
+        st.info(
+            "Queued for Analyse. On Railway the Web service runs an **embedded worker** "
+            "that should claim this within a few seconds. "
+            f"Queued since: `{updated or 'unknown'}`. "
+            + (f"Job folder: `{jobs_dir}`." if jobs_dir else "")
+        )
+        st.caption(
+            "Web logs should show `embedded Analyse worker` and "
+            "`[statman-worker] starting ….status.json`. "
+            "A separate Worker service is optional."
+        )
 
 
 def render_statman_panel() -> None:
@@ -1439,18 +1457,33 @@ def render_statman_panel() -> None:
                 )
 
 
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _same_origin_upload() -> bool:
-    return os.environ.get("ENJOYSTATS_SAME_ORIGIN_UPLOAD", "").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
+    return _env_flag("ENJOYSTATS_SAME_ORIGIN_UPLOAD")
+
+
+def _use_streamlit_film_upload() -> bool:
+    """Use Streamlit's uploader only when explicitly enabled.
+
+    On Railway the same-origin portal serves chunked ``/api/.../film/chunk``
+    uploads. Streamlit's built-in uploader often returns AxiosError 502 there.
+    """
+
+    if _same_origin_upload():
+        return False
+    if _env_flag("STATMAN_STREAMLIT_FILM_UPLOAD"):
+        return True
+    return False
 
 
 def _ensure_api_watchdog() -> None:
     """Background loop so Uvicorn is restarted if it dies mid-session."""
 
+    if _use_streamlit_film_upload():
+        return
     if st.session_state.get("_api_watchdog_started"):
         return
     st.session_state["_api_watchdog_started"] = True
@@ -1466,8 +1499,47 @@ def _ensure_api_watchdog() -> None:
     threading.Thread(target=_loop, name="enjoystats-api-watchdog", daemon=True).start()
 
 
+def render_streamlit_film_uploader() -> None:
+    """Save a match film into the shared /data inbox (Railway-safe)."""
+
+    st.markdown("**Upload match film**")
+    st.caption(
+        f"Saved into the shared inbox (up to {video_limit_label()}). "
+        "When it says Saved, click Analyse Stats below."
+    )
+    uploaded = st.file_uploader(
+        "Match film",
+        type=[suffix.lstrip(".") for suffix in VIDEO_SUFFIXES],
+        key="analyse_streamlit_film",
+    )
+    if uploaded is None:
+        return
+    if st.button(
+        "Save film to inbox", type="primary", use_container_width=True, key="save_st_film"
+    ):
+        try:
+            name = safe_film_name(getattr(uploaded, "name", "") or "match.mp4")
+            destination = film_inbox_dir() / name
+            progress = st.progress(0, text="Saving film…")
+
+            def _on_progress(done: int, total: int) -> None:
+                if total > 0:
+                    progress.progress(min(done / total, 1.0), text=f"Saving… {_format_bytes(done)}")
+
+            saved = save_uploaded_film(uploaded, destination, on_progress=_on_progress)
+            progress.progress(1.0, text="Saved")
+            st.success(f"Saved: **{saved.name}** · {_format_bytes(saved.stat().st_size)}")
+            st.rerun()
+        except (ValueError, OSError, VideoCollectError) as exc:
+            st.error(str(exc))
+
+
 def render_film_uploader_panel(base_url: str) -> None:
-    """The only match-film upload path: chunked FastAPI uploader."""
+    """Match-film upload: Streamlit on Railway, chunked FastAPI locally/portal."""
+
+    if _use_streamlit_film_upload():
+        render_streamlit_film_uploader()
+        return
 
     _ensure_api_watchdog()
     status = ensure_api_running(wait_s=20.0)
@@ -1486,10 +1558,15 @@ def render_film_uploader_panel(base_url: str) -> None:
             f"{status.get('message') or 'Check .local-run/uvicorn.log'}."
         )
         return
-    if not same_origin and not remote_ok and base_url.rstrip("/") not in {
-        "http://127.0.0.1:8000",
-        "http://localhost:8000",
-    }:
+    if (
+        not same_origin
+        and not remote_ok
+        and base_url.rstrip("/")
+        not in {
+            "http://127.0.0.1:8000",
+            "http://localhost:8000",
+        }
+    ):
         st.warning(
             "Sidebar FastAPI URL is unreachable from this machine. "
             "Uploads still go to the always-on local API on :8000 "
@@ -2011,25 +2088,48 @@ def render_api_demo(base_url: str, fetch: FetchFn) -> None:
         render_dashboard(fetch(base_url, match_id, player_id))
 
 
+def _site_password_ok() -> bool:
+    """Optional shared password for the Railway website (STATMAN_SITE_PASSWORD)."""
+
+    expected = os.environ.get("STATMAN_SITE_PASSWORD", "").strip()
+    if not expected:
+        return True
+    if st.session_state.get("_statman_authed"):
+        return True
+    st.markdown("### StatMan")
+    st.caption("Restricted access")
+    entered = st.text_input("Password", type="password", key="statman_site_password")
+    if st.button("Enter", type="primary", use_container_width=True):
+        if entered == expected:
+            st.session_state["_statman_authed"] = True
+            st.rerun()
+        st.error("Wrong password.")
+    return False
+
+
 def main(*, fetch: FetchFn = _run_fetch) -> None:
     """Streamlit entry point. ``fetch`` is injectable for tests."""
 
     st.set_page_config(
-        page_title="EnjoyStats · Analyse Stats",
+        page_title="StatMan · Analyse Stats",
         page_icon="⚽",
         layout="wide",
         initial_sidebar_state="collapsed",
     )
     _inject_styles()
-    # Film upload must never depend on someone remembering to start Uvicorn.
-    ensure_api_running(wait_s=15.0)
-    _ensure_api_watchdog()
+    if not _site_password_ok():
+        return
+    # On Railway, skip local Uvicorn — the public port is Streamlit only.
+    # Blocking here for 15s caused Railway's "Application failed to respond".
+    if not _use_streamlit_film_upload():
+        ensure_api_running(wait_s=15.0)
+        _ensure_api_watchdog()
     _hydrate_collect_job()
     base_url = render_sidebar()
     rundown = _stored_rundown()
     job_path_raw = str(st.session_state.get(JOB_KEY, "") or "")
     job_status = read_job_status(Path(job_path_raw)) if job_path_raw else None
-    analysing = bool(job_status and job_status.get("state") in {"queued", "running"})
+    analysing = bool(job_status and job_status.get("state") in {"queued", "claimed", "running"})
     section = render_app_nav(has_match=rundown is not None, analysing=analysing)
 
     if section == "Match rundown" and rundown is not None:

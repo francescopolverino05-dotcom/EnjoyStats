@@ -1,0 +1,15 @@
+# Web service only. Worker → railway.worker.toml
+#
+# Domain target port must match Railway PORT (currently 8080 for statman.up.railway.app).
+# Film upload uses same-origin chunked API via the portal (not Streamlit axios).
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile.dashboard"
+
+[deploy]
+startCommand = "/bin/sh /app/scripts/statman_web_entrypoint.sh"
+restartPolicyType = "ON_FAILURE"
+restartPolicyMaxRetries = 10
+healthcheckPath = "/_stcore/health"
+healthcheckTimeout = 300

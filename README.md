@@ -19,6 +19,20 @@ Analyse always uses the newest film in the inbox.
 If you only run Streamlit by hand, the dashboard still calls `ensure_api_running()`
 and boots Uvicorn on `:8000` automatically. For phones / try-links, use the portal.
 
+## Railway (website + background worker)
+
+See **[RAILWAY.md](RAILWAY.md)** for the full checklist.
+
+Short version: deploy **two** services from this repo, share one volume at `/data`:
+
+| Service | Role | Start |
+|---------|------|--------|
+| **Web** | Password site, upload, pick match, download PDF | Streamlit (`Dockerfile.dashboard` / `railway.toml`) |
+| **Worker** | Runs Analyse off the web dyno | `python -m analytics.collect_worker` (`Dockerfile.worker`) |
+
+Set `STATMAN_USE_EXTERNAL_WORKER=1` on Web so Analyse is only queued.
+The worker claims jobs from `/data/jobs` and writes progress the site already shows.
+
 ## Game-week batch
 
 After several films are in the inbox via the same uploader:

@@ -83,9 +83,7 @@ def create_portal(
         if query:
             target = f"{target}?{query}"
         headers = {
-            key: value
-            for key, value in request.headers.items()
-            if key.lower() not in HOP_BY_HOP
+            key: value for key, value in request.headers.items() if key.lower() not in HOP_BY_HOP
         }
         body = await request.body()
         try:
@@ -233,9 +231,10 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--ui", default=_env_url("ENJOYSTATS_UI_UPSTREAM", DEFAULT_UI))
     args = parser.parse_args(argv)
 
-    status = ensure_api_running()
+    status = ensure_api_running(wait_s=20.0)
     if not status["ok"]:
-        raise SystemExit(status["message"])
+        # Entrypoint may already have started the slim upload API; keep serving UI.
+        LOGGER.error("Portal API not ready yet: %s", status["message"])
 
     os.environ["ENJOYSTATS_SAME_ORIGIN_UPLOAD"] = "1"
     app = create_portal(api_origin=args.api, ui_origin=args.ui)
