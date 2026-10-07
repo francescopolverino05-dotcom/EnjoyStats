@@ -31,11 +31,15 @@ not StatMan code.
 
 7. Open the new URL.
 
-### Worker (keep as-is)
+### Worker (Analyse / “Queued for StatMan”)
 
-- Config-as-code: `railway.worker.toml`
-- Volume at `/data` (same volume as Web)
+- Config-as-code: `railway.worker.toml` (not `railway.toml`)
+- Volume at `/data` (**same** volume as Web)
 - No public domain
+- Logs must show: `[statman-worker] watching /data/jobs`
+- Then after Analyse Stats: `[statman-worker] starting ….status.json`
+- If jobs stay **queued** overnight, Worker is not reading `/data/jobs`
+  (wrong Dockerfile, wrong volume, or Worker crashed). Redeploy Worker.
 
 ### Shared env (both)
 

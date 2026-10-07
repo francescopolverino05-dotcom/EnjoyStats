@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +29,8 @@ from analytics.collect_job import (
     read_job_status,
     run_collect_job,
 )
+
+STALE_CLAIM_S = 120.0
 
 
 def worker_poll_seconds() -> float:
@@ -46,6 +49,84 @@ def use_external_worker() -> bool:
     return flag in {"1", "true", "yes", "on"}
 
 
+def _parse_iso(raw: str) -> float | None:
+    text = (raw or "").strip()
+    if not text:
+        return None
+    try:
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        return datetime.fromisoformat(text).timestamp()
+    except ValueError:
+        return None
+
+
+def _pid_alive(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
+
+
+def _age_seconds(status: dict[str, Any]) -> float:
+    stamp = _parse_iso(str(status.get("updated_at") or status.get("started_at") or ""))
+    if stamp is None:
+        return 0.0
+    return max(0.0, time.time() - stamp)
+
+
+def reclaim_stale_jobs(folder: Path | None = None) -> int:
+    """Clear orphaned claim locks and re-queue dead claimed/running jobs."""
+
+    root = folder or collect_jobs_dir()
+    if not root.is_dir():
+        return 0
+    fixed = 0
+    for path in root.glob(f"*{JOB_SUFFIX}"):
+        status = read_job_status(path)
+        if status is None:
+            continue
+        state = str(status.get("state") or "").strip().lower()
+        lock_path = path.with_suffix(path.suffix + ".claim")
+        age = _age_seconds(status)
+        pid = int(status.get("pid") or 0)
+
+        # Queued forever because a crashed worker left the .claim lock behind.
+        if state == "queued" and lock_path.is_file():
+            lock_age = time.time() - lock_path.stat().st_mtime
+            if lock_age >= STALE_CLAIM_S or not _pid_alive(pid):
+                try:
+                    lock_path.unlink(missing_ok=True)
+                    fixed += 1
+                    sys.stdout.write(
+                        f"[statman-worker] cleared stale claim lock {lock_path.name}\n"
+                    )
+                    sys.stdout.flush()
+                except OSError:
+                    pass
+
+        # Claimed/running with a dead worker — put back on the queue.
+        # Long-running collects are fine while the worker pid is still alive.
+        if state in {"claimed", "running"} and age >= STALE_CLAIM_S and not _pid_alive(pid):
+            status["state"] = "queued"
+            status["label"] = "Re-queued after worker restart…"
+            status["pid"] = 0
+            status["error"] = ""
+            status["updated_at"] = _now()
+            _write_json(path, status)
+            try:
+                lock_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+            fixed += 1
+            sys.stdout.write(f"[statman-worker] re-queued stale {path.name} (was {state})\n")
+            sys.stdout.flush()
+    return fixed
+
+
 def list_queued_job_paths(folder: Path | None = None) -> list[Path]:
     """Oldest queued status files first."""
 
@@ -58,6 +139,9 @@ def list_queued_job_paths(folder: Path | None = None) -> list[Path]:
         if status is None:
             continue
         if str(status.get("state") or "").strip().lower() != "queued":
+            continue
+        lock_path = path.with_suffix(path.suffix + ".claim")
+        if lock_path.is_file():
             continue
         queued.append((path.stat().st_mtime, path))
     queued.sort(key=lambda item: item[0])
@@ -118,6 +202,21 @@ def process_one(status_path: Path) -> bool:
         return True
 
     film = Path(film_raw)
+    if not film.is_file():
+        status["state"] = "error"
+        status["error"] = (
+            f"Film not found at {film}. "
+            "Web and Worker must share the same /data volume "
+            "(inbox + jobs)."
+        )
+        status["label"] = "Collect failed (film missing on worker)"
+        status["updated_at"] = _now()
+        _write_json(status_path, status)
+        release_claim(status_path)
+        sys.stderr.write(f"[statman-worker] {status['error']}\n")
+        sys.stderr.flush()
+        return True
+
     sys.stdout.write(f"[statman-worker] starting {status_path.name} · {film.name}\n")
     sys.stdout.flush()
     try:
@@ -133,6 +232,7 @@ def process_one(status_path: Path) -> bool:
 def poll_once() -> bool:
     """Process the oldest queued job if any. Returns True when work ran."""
 
+    reclaim_stale_jobs()
     paths = list_queued_job_paths()
     for path in paths:
         if process_one(path):
@@ -141,7 +241,7 @@ def poll_once() -> bool:
 
 
 def ensure_jobs_dir() -> Path:
-    """Create the jobs directory, falling back if the volume is not writable."""
+    """Create the shared jobs directory. Never silently switch off /data."""
 
     primary = collect_jobs_dir()
     try:
@@ -151,15 +251,14 @@ def ensure_jobs_dir() -> Path:
         probe.unlink(missing_ok=True)
         return primary
     except OSError as exc:
-        fallback = Path(os.environ.get("TMPDIR") or "/tmp") / "statman" / "jobs"
+        # Falling back to /tmp would desync Web (writes /data) from Worker.
         sys.stderr.write(
-            f"[statman-worker] {primary} not writable ({exc}); using {fallback}\n"
-            "Attach the same Railway volume at /data on Web + Worker.\n"
+            f"[statman-worker] FATAL: cannot write {primary} ({exc}). "
+            "Attach the SAME Railway volume at /data on Web and Worker, "
+            "then redeploy Worker.\n"
         )
         sys.stderr.flush()
-        fallback.mkdir(parents=True, exist_ok=True)
-        os.environ["ENJOYSTATS_JOBS_DIR"] = str(fallback)
-        return fallback
+        raise
 
 
 def run_forever(*, poll_s: float | None = None) -> None:
@@ -167,11 +266,13 @@ def run_forever(*, poll_s: float | None = None) -> None:
 
     interval = worker_poll_seconds() if poll_s is None else max(0.5, float(poll_s))
     jobs = ensure_jobs_dir()
+    queued_n = len(list_queued_job_paths(jobs))
     sys.stdout.write(
         f"[statman-worker] watching {jobs} every {interval:.1f}s "
-        f"(external_worker={use_external_worker()})\n"
+        f"(queued={queued_n}, utc={datetime.now(timezone.utc).isoformat()})\n"
     )
     sys.stdout.flush()
+    idle_loops = 0
     while True:
         try:
             worked = poll_once()
@@ -179,7 +280,14 @@ def run_forever(*, poll_s: float | None = None) -> None:
             sys.stderr.write(f"[statman-worker] poll error: {exc}\n")
             sys.stderr.flush()
             worked = False
-        if not worked:
+        if worked:
+            idle_loops = 0
+        else:
+            idle_loops += 1
+            if idle_loops % 20 == 0:
+                n = len(list_queued_job_paths(jobs))
+                sys.stdout.write(f"[statman-worker] idle · watching {jobs} · queued={n}\n")
+                sys.stdout.flush()
             time.sleep(interval)
 
 

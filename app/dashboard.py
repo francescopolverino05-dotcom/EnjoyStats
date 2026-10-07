@@ -1371,11 +1371,21 @@ def render_job_progress(status: dict[str, object]) -> None:
     )
     fraction = float(status.get("fraction") or 0.0)
     label = str(status.get("label") or "Watching the film…")
+    state = str(status.get("state") or "").strip().lower()
     st.progress(min(1.0, max(0.0, fraction)), text=label)
     st.caption(f"{fraction * 100:.0f}%  ·  {label}")
     film = str(status.get("film") or "")
     if film:
         st.caption(f"Film: `{Path(film).name}`")
+    if state == "queued":
+        updated = str(status.get("updated_at") or status.get("started_at") or "")
+        st.warning(
+            "Still **queued for the StatMan worker**. "
+            "The website only enqueues the job — the **Worker** service must claim it. "
+            "Check Railway → Worker → Deployments → Logs for "
+            "`[statman-worker] watching /data/jobs` and `starting …`. "
+            f"Queued since: `{updated or 'unknown'}`."
+        )
 
 
 def render_statman_panel() -> None:
