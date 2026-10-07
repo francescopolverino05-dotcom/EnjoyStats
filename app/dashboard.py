@@ -1379,12 +1379,16 @@ def render_job_progress(status: dict[str, object]) -> None:
         st.caption(f"Film: `{Path(film).name}`")
     if state == "queued":
         updated = str(status.get("updated_at") or status.get("started_at") or "")
+        jobs_dir = str(status.get("jobs_dir") or "")
         st.warning(
             "Still **queued for the StatMan worker**. "
             "The website only enqueues the job — the **Worker** service must claim it. "
             "Check Railway → Worker → Deployments → Logs for "
             "`[statman-worker] watching /data/jobs` and `starting …`. "
-            f"Queued since: `{updated or 'unknown'}`."
+            f"Queued since: `{updated or 'unknown'}`. "
+            + (f"Job folder: `{jobs_dir}`. " if jobs_dir else "")
+            + "If Worker logs say `queued=0` and `web_heartbeat=NO`, "
+            "Web and Worker are not on the **same** Railway volume at `/data`."
         )
 
 

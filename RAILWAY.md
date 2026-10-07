@@ -38,8 +38,10 @@ not StatMan code.
 - No public domain
 - Logs must show: `[statman-worker] watching /data/jobs`
 - Then after Analyse Stats: `[statman-worker] starting ….status.json`
-- If jobs stay **queued** overnight, Worker is not reading `/data/jobs`
-  (wrong Dockerfile, wrong volume, or Worker crashed). Redeploy Worker.
+- If UI says queued but Worker logs `queued=0` + `web_heartbeat=NO`,
+  Web and Worker are on **different** volumes. Both must mount the **same**
+  volume at `/data`. Redeploy **Web and Worker** after fixing the mount.
+- Healthy idle line: `web_heartbeat=yes · files=…`
 
 ### Shared env (both)
 

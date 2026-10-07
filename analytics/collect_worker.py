@@ -261,6 +261,22 @@ def ensure_jobs_dir() -> Path:
         raise
 
 
+def _describe_jobs_dir(jobs: Path) -> str:
+    """One-line inventory for Railway logs (shared-volume debugging)."""
+
+    heartbeat = jobs / ".web_enqueue_heartbeat"
+    hb = "yes" if heartbeat.is_file() else "NO — Web may be on a different volume"
+    statuses = sorted(jobs.glob(f"*{JOB_SUFFIX}"))
+    states: list[str] = []
+    for path in statuses[:12]:
+        doc = read_job_status(path)
+        state = str((doc or {}).get("state") or "?")
+        states.append(f"{path.name}:{state}")
+    extra = "" if len(statuses) <= 12 else f" (+{len(statuses) - 12} more)"
+    listing = ", ".join(states) if states else "(none)"
+    return f"web_heartbeat={hb} · files={len(statuses)} [{listing}]{extra}"
+
+
 def run_forever(*, poll_s: float | None = None) -> None:
     """Block forever, claiming queued Analyse jobs."""
 
@@ -271,6 +287,7 @@ def run_forever(*, poll_s: float | None = None) -> None:
         f"[statman-worker] watching {jobs} every {interval:.1f}s "
         f"(queued={queued_n}, utc={datetime.now(timezone.utc).isoformat()})\n"
     )
+    sys.stdout.write(f"[statman-worker] {_describe_jobs_dir(jobs)}\n")
     sys.stdout.flush()
     idle_loops = 0
     while True:
@@ -287,6 +304,7 @@ def run_forever(*, poll_s: float | None = None) -> None:
             if idle_loops % 20 == 0:
                 n = len(list_queued_job_paths(jobs))
                 sys.stdout.write(f"[statman-worker] idle · watching {jobs} · queued={n}\n")
+                sys.stdout.write(f"[statman-worker] {_describe_jobs_dir(jobs)}\n")
                 sys.stdout.flush()
             time.sleep(interval)
 

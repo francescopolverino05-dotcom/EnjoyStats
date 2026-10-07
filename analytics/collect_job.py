@@ -23,10 +23,33 @@ JOB_SUFFIX = ".status.json"
 RUNDOWN_SUFFIX = ".rundown.json"
 
 
+def _railway_data_root() -> Path | None:
+    """Return ``/data`` when a Railway/Docker shared volume is present."""
+
+    root = Path(os.environ.get("STATMAN_DATA_ROOT", "").strip() or "/data")
+    try:
+        if root.is_dir():
+            return root
+    except OSError:
+        return None
+    return None
+
+
 def collect_jobs_dir() -> Path:
-    """Directory for job status files (gitignored under ``.local-run``)."""
+    """Directory for job status files (gitignored under ``.local-run``).
+
+    On Railway, Web and Worker **must** share ``/data/jobs``. Prefer that
+    whenever ``/data`` exists so a missing env var cannot enqueue into
+    ephemeral ``.local-run/jobs`` that the Worker never sees.
+    """
 
     override = os.environ.get("ENJOYSTATS_JOBS_DIR", "").strip()
+    data_root = _railway_data_root()
+    if data_root is not None:
+        # Shared volume wins over a stale/wrong override that points off-volume.
+        if not override or not override.startswith(str(data_root)):
+            return data_root / "jobs"
+        return Path(override).expanduser()
     if override:
         return Path(override).expanduser()
     return Path(__file__).resolve().parents[1] / ".local-run" / "jobs"
@@ -210,12 +233,18 @@ def start_collect_job(
     job_id = uuid4().hex[:12]
     status_path = folder / f"{job_id}{JOB_SUFFIX}"
     log_path = folder / f"{job_id}.log"
+    # Heartbeat so Worker logs can prove Web and Worker share one volume.
+    try:
+        (folder / ".web_enqueue_heartbeat").write_text(_now(), encoding="utf-8")
+    except OSError:
+        pass
     _write_json(
         status_path,
         {
             "job_id": job_id,
             "state": "queued",
             "film": str(resolved),
+            "jobs_dir": str(folder),
             "label": "Queued full-match collect…",
             "fraction": 0.0,
             "pid": 0,
@@ -237,8 +266,13 @@ def start_collect_job(
         # Worker service will claim this job — do not spawn on the web dyno.
         status = read_job_status(status_path) or {}
         status["label"] = "Queued for StatMan worker…"
+        status["jobs_dir"] = str(folder)
         status["updated_at"] = _now()
         _write_json(status_path, status)
+        sys.stdout.write(
+            f"[statman-web] enqueued {status_path.name} in {folder} " f"film={resolved.name}\n"
+        )
+        sys.stdout.flush()
         return status_path
 
     root = Path(__file__).resolve().parents[1]

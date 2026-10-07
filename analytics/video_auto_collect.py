@@ -245,10 +245,25 @@ def safe_film_name(name: str) -> str:
     return cleaned
 
 
+def _shared_data_root() -> Path | None:
+    root = Path(os.environ.get("STATMAN_DATA_ROOT", "").strip() or "/data")
+    try:
+        if root.is_dir():
+            return root
+    except OSError:
+        return None
+    return None
+
+
 def film_inbox_dir() -> Path:
     """Directory that operators drop match films into (no HTTP transfer)."""
 
     override = os.environ.get("ENJOYSTATS_FILM_INBOX", "").strip()
+    data_root = _shared_data_root()
+    if data_root is not None:
+        if not override or not override.startswith(str(data_root)):
+            return data_root / "inbox"
+        return Path(override).expanduser()
     if override:
         return Path(override).expanduser()
     return Path(__file__).resolve().parents[1] / ".local-run" / "inbox"
@@ -258,6 +273,11 @@ def film_upload_dir() -> Path:
     """Directory used for streamed browser uploads and Streamlit saves."""
 
     override = os.environ.get("ENJOYSTATS_FILM_UPLOADS", "").strip()
+    data_root = _shared_data_root()
+    if data_root is not None:
+        if not override or not override.startswith(str(data_root)):
+            return data_root / "uploads"
+        return Path(override).expanduser()
     if override:
         return Path(override).expanduser()
     return Path(__file__).resolve().parents[1] / ".local-run" / "uploads"

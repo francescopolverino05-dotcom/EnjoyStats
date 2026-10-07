@@ -43,6 +43,12 @@ if [ "$(id -u)" = "0" ]; then
   chmod -R a+rwX "$DATA_ROOT" /app/.local-run "$LOG_DIR" 2>/dev/null || true
 fi
 
+# Prove the Web dyno can write the shared jobs dir (Worker should see this file).
+echo "web-boot $(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$ENJOYSTATS_JOBS_DIR/.web_enqueue_heartbeat" \
+  || echo "statman-web: WARNING cannot write $ENJOYSTATS_JOBS_DIR"
+echo "statman-web: jobs_dir=$ENJOYSTATS_JOBS_DIR inbox=$ENJOYSTATS_FILM_INBOX"
+ls -la "$ENJOYSTATS_JOBS_DIR" 2>/dev/null || true
+
 echo "statman-web: upload API on 127.0.0.1:${API_PORT}"
 python -m uvicorn "$ENJOYSTATS_UVICORN_APP" \
   --host 127.0.0.1 \
