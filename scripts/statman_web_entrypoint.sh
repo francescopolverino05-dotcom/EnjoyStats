@@ -1,5 +1,9 @@
 #!/bin/sh
-# Railway Web: public $PORT = same-origin portal (UI + chunked film upload).
+# Railway Web: portal on $PORT + embedded Analyse worker (same disk as uploads).
+#
+# A separate Worker service is optional. Shared volumes kept failing for us
+# (web_heartbeat=NO). Embedding the worker here makes Analyse claim jobs on
+# the same filesystem the site writes to.
 set -eu
 
 DATA_ROOT="${STATMAN_DATA_ROOT:-/data}"
@@ -7,6 +11,7 @@ PUBLIC_PORT="${PORT:?PORT must be set by Railway}"
 UI_PORT="${ENJOYSTATS_UI_PORT:-18501}"
 API_PORT="${ENJOYSTATS_PORT:-18000}"
 LOG_DIR="${STATMAN_WEB_LOG_DIR:-/tmp/statman-web}"
+EMBED_WORKER="${STATMAN_EMBED_WORKER:-1}"
 
 if [ "$UI_PORT" = "$PUBLIC_PORT" ]; then UI_PORT=18501; fi
 if [ "$API_PORT" = "$PUBLIC_PORT" ]; then API_PORT=18000; fi
@@ -26,9 +31,10 @@ export STATMAN_USE_EXTERNAL_WORKER=1
 export STATMAN_UPLOAD_ONLY=1
 export ENJOYSTATS_UVICORN_APP="${ENJOYSTATS_UVICORN_APP:-api.upload_app:app}"
 export STATMAN_STREAMLIT_FILM_UPLOAD=0
+export STATMAN_WORKER_POLL_S="${STATMAN_WORKER_POLL_S:-3}"
+export MPLBACKEND="${MPLBACKEND:-Agg}"
 
-echo "statman-web: checking shared volume at ${DATA_ROOT}"
-echo "statman-web: mounts mentioning data:"
+echo "statman-web: checking volume at ${DATA_ROOT}"
 awk '{print "  " $0}' /proc/mounts 2>/dev/null | grep -i data || echo "  (none)"
 
 if ! awk -v root="$DATA_ROOT" '$2 == root { found=1 } END { exit !found }' /proc/mounts \
@@ -47,18 +53,10 @@ mkdir -p \
 
 chmod -R a+rwX "$DATA_ROOT" "$LOG_DIR" /app/.local-run 2>/dev/null || true
 
-# Fingerprint so you can compare Web vs Worker logs character-for-character.
-FP_FILE="$DATA_ROOT/STATMAN_VOLUME_FINGERPRINT.txt"
 FP="web host=$(hostname) utc=$(date -u +%Y-%m-%dT%H:%M:%SZ) rnd=$RANDOM$RANDOM"
-echo "$FP" >"$FP_FILE"
-echo "statman-web: VOLUME FINGERPRINT → $FP"
-echo "statman-web: (Worker logs must show this exact fingerprint)"
-
-HB="$ENJOYSTATS_JOBS_DIR/.web_enqueue_heartbeat"
-echo "$FP" >"$HB"
-echo "statman-web: wrote heartbeat → $HB"
-ls -la "$DATA_ROOT" || true
-ls -la "$ENJOYSTATS_JOBS_DIR" || true
+echo "$FP" >"$DATA_ROOT/STATMAN_VOLUME_FINGERPRINT.txt"
+echo "$FP" >"$ENJOYSTATS_JOBS_DIR/.web_enqueue_heartbeat"
+echo "statman-web: wrote heartbeat → $ENJOYSTATS_JOBS_DIR/.web_enqueue_heartbeat"
 
 echo "statman-web: upload API on 127.0.0.1:${API_PORT}"
 python -m uvicorn "$ENJOYSTATS_UVICORN_APP" \
@@ -79,6 +77,13 @@ streamlit run app/dashboard.py \
   --browser.gatherUsageStats=false \
   >"$LOG_DIR/streamlit.log" 2>&1 &
 
+if [ "$EMBED_WORKER" = "1" ] || [ "$EMBED_WORKER" = "true" ] || [ "$EMBED_WORKER" = "yes" ]; then
+  echo "statman-web: embedded Analyse worker on ${ENJOYSTATS_JOBS_DIR}"
+  python -m analytics.collect_worker \
+    >"$LOG_DIR/embed-worker.log" 2>&1 &
+  echo "statman-web: embed-worker pid $! (logs: $LOG_DIR/embed-worker.log)"
+fi
+
 i=0
 while [ "$i" -lt 90 ]; do
   if python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:${UI_PORT}/_stcore/health', timeout=1)" \
@@ -91,11 +96,7 @@ while [ "$i" -lt 90 ]; do
   sleep 0.5
 done
 
-echo "$FP ready=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$HB"
-echo "$FP ready=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$FP_FILE"
-
-echo "statman-web: portal on 0.0.0.0:${PUBLIC_PORT} (UI ${UI_PORT} · API ${API_PORT})"
-
+echo "statman-web: portal on 0.0.0.0:${PUBLIC_PORT}"
 exec python -m api.portal \
   --host 0.0.0.0 \
   --port "$PUBLIC_PORT" \
