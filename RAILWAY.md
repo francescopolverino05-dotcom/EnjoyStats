@@ -38,10 +38,13 @@ not StatMan code.
 - No public domain
 - Logs must show: `[statman-worker] watching /data/jobs`
 - Then after Analyse Stats: `[statman-worker] starting ….status.json`
-- If UI says queued but Worker logs `queued=0` + `web_heartbeat=NO`,
-  Web and Worker are on **different** volumes. Both must mount the **same**
-  volume at `/data`. Redeploy **Web and Worker** after fixing the mount.
-- Healthy idle line: `web_heartbeat=yes · files=…`
+- If Worker logs `web_heartbeat=NO`, volumes are wrong or Web never wrote.
+  Both services need the **same volume name**, mount path exactly `/data`.
+  Redeploy **Web first**, then Worker.
+- Web deploy must show: `statman-web: wrote heartbeat → /data/jobs/...`
+  If Web instead says `FATAL — /data is NOT a Railway volume mount`,
+  the Web service still has no volume (or wrong mount path).
+- Healthy Worker line: `web_heartbeat=yes`
 
 ### Shared env (both)
 
