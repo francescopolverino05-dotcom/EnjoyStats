@@ -62,7 +62,8 @@ mkdir -p \
 
 chmod -R a+rwX "$DATA_ROOT" "$LOG_DIR" /app/.local-run 2>/dev/null || true
 
-FP="web host=$(hostname) utc=$(date -u +%Y-%m-%dT%H:%M:%SZ) rnd=$RANDOM$RANDOM vol=${VOLUME_OK}"
+# Do not use bash-only RANDOM here: /bin/sh (dash) + set -u crashes the container.
+FP="web host=$(hostname) utc=$(date -u +%Y-%m-%dT%H:%M:%SZ) rnd=$$-$(date -u +%s) vol=${VOLUME_OK}"
 echo "$FP" >"$DATA_ROOT/STATMAN_VOLUME_FINGERPRINT.txt"
 echo "$FP" >"$ENJOYSTATS_JOBS_DIR/.web_enqueue_heartbeat"
 echo "statman-web: wrote heartbeat → $ENJOYSTATS_JOBS_DIR/.web_enqueue_heartbeat"
