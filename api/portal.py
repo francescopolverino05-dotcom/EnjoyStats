@@ -65,6 +65,12 @@ def pick_upstream(path: str, *, api: str, ui: str) -> str:
     return ui
 
 
+async def _readyz(_request: Request) -> Response:
+    """Railway healthcheck — answered by the portal itself (no Streamlit wait)."""
+
+    return Response(content=b"ok\n", status_code=200, media_type="text/plain")
+
+
 def create_portal(
     *,
     api_origin: str | None = None,
@@ -201,6 +207,7 @@ def create_portal(
             await client.aclose()
 
     routes = [
+        Route("/readyz", _readyz, methods=["GET", "HEAD"]),
         WebSocketRoute("/{path:path}", ws_proxy),
         Route(
             "/{path:path}",

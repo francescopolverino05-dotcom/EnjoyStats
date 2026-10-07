@@ -17,16 +17,18 @@ A separate Worker service is optional. If you keep it, it must mount the
 ## Domain / port
 
 - Site: https://statman.up.railway.app
-- Web logs must say: `portal on 0.0.0.0:8080` (or whatever NNNN is)
-- Networking domain target port must be **that same NNNN**
-- Variables → set `PORT=8080` if the domain target is 8080
+- Web **Deploy Logs** (not Build Logs) must say: `statman-web: boot begin` then `portal on 0.0.0.0:NNNN`
+- Clear the log search box — “no logs found on this filter” means the search text matched nothing
+- Networking → domain **target port** must be **that same NNNN**
+- Variables → set `PORT=8080` if the domain target is 8080 (or leave PORT unset and set the domain target to whatever Railway assigned)
 - Mismatch = “Application failed to respond” even when deploy is Success
+- Custom Start Command empty is OK (`railway.toml` / image CMD starts the entrypoint)
 
 ## Web volume
 
 - Web → Settings → Volumes → mount path exactly `/data`
 - Web must start with: `wrote heartbeat → /data/jobs/...`
-- If `FATAL — /data is NOT a Railway volume mount`, fix the Web volume first
+- If `WARN — /data is NOT a Railway volume mount`, fix the Web volume (site can still boot)
 
 ## Env (Web)
 

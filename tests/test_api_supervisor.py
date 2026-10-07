@@ -10,6 +10,19 @@ from api.portal import create_portal, pick_upstream
 from api.supervisor import api_is_healthy, ensure_api_running
 
 
+def test_portal_readyz_is_local() -> None:
+    from starlette.testclient import TestClient
+
+    portal = create_portal(
+        api_origin="http://127.0.0.1:18000",
+        ui_origin="http://127.0.0.1:18501",
+    )
+    client = TestClient(portal)
+    response = client.get("/readyz")
+    assert response.status_code == 200
+    assert response.text.strip() == "ok"
+
+
 def test_pick_upstream_routes_film_to_api() -> None:
     api = "http://127.0.0.1:8000"
     ui = "http://127.0.0.1:8501"
