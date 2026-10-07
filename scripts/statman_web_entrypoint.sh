@@ -6,8 +6,11 @@
 # the same filesystem the site writes to.
 set -eu
 
+# First line must always appear in Railway Deploy Logs (not Build Logs).
+echo "statman-web: boot begin pid=$$ PORT=${PORT:-unset} hostname=$(hostname 2>/dev/null || echo '?')"
+
 DATA_ROOT="${STATMAN_DATA_ROOT:-/data}"
-PUBLIC_PORT="${PORT:?PORT must be set by Railway}"
+PUBLIC_PORT="${PORT:?PORT must be set by Railway — set Variables PORT to match Networking domain target}"
 UI_PORT="${ENJOYSTATS_UI_PORT:-18501}"
 API_PORT="${ENJOYSTATS_PORT:-18000}"
 LOG_DIR="${STATMAN_WEB_LOG_DIR:-/tmp/statman-web}"
@@ -37,11 +40,17 @@ export MPLBACKEND="${MPLBACKEND:-Agg}"
 echo "statman-web: checking volume at ${DATA_ROOT}"
 awk '{print "  " $0}' /proc/mounts 2>/dev/null | grep -i data || echo "  (none)"
 
-if ! awk -v root="$DATA_ROOT" '$2 == root { found=1 } END { exit !found }' /proc/mounts \
-  && ! awk -v root="$DATA_ROOT" 'index($2, root "/") == 1 { found=1 } END { exit !found }' /proc/mounts; then
-  echo "statman-web: FATAL — ${DATA_ROOT} is NOT a Railway volume mount."
-  echo "statman-web: Web → Settings → Volumes → mount path = /data"
-  exit 1
+VOLUME_OK=0
+if awk -v root="$DATA_ROOT" '$2 == root { found=1 } END { exit !found }' /proc/mounts \
+  || awk -v root="$DATA_ROOT" 'index($2, root "/") == 1 { found=1 } END { exit !found }' /proc/mounts; then
+  VOLUME_OK=1
+fi
+
+# Do not exit here — a hard exit crash-loops and Railway only shows 502 with
+# no portal line. Keep serving HTTP; warn loudly if /data is not a volume.
+if [ "$VOLUME_OK" != "1" ]; then
+  echo "statman-web: WARN — ${DATA_ROOT} is NOT a Railway volume mount (ephemeral disk)."
+  echo "statman-web: Web → Settings → Volumes → mount path = /data  (then Redeploy)"
 fi
 
 mkdir -p \
@@ -53,7 +62,8 @@ mkdir -p \
 
 chmod -R a+rwX "$DATA_ROOT" "$LOG_DIR" /app/.local-run 2>/dev/null || true
 
-FP="web host=$(hostname) utc=$(date -u +%Y-%m-%dT%H:%M:%SZ) rnd=$RANDOM$RANDOM"
+# Do not use bash-only RANDOM here: /bin/sh (dash) + set -u crashes the container.
+FP="web host=$(hostname) utc=$(date -u +%Y-%m-%dT%H:%M:%SZ) rnd=$$-$(date -u +%s) vol=${VOLUME_OK}"
 echo "$FP" >"$DATA_ROOT/STATMAN_VOLUME_FINGERPRINT.txt"
 echo "$FP" >"$ENJOYSTATS_JOBS_DIR/.web_enqueue_heartbeat"
 echo "statman-web: wrote heartbeat → $ENJOYSTATS_JOBS_DIR/.web_enqueue_heartbeat"
@@ -97,7 +107,8 @@ while [ "$i" -lt 90 ]; do
 done
 
 echo "statman-web: portal on 0.0.0.0:${PUBLIC_PORT}"
-echo "statman-web: set Networking domain target port = ${PUBLIC_PORT}"
+echo "statman-web: Networking → domain target port MUST be ${PUBLIC_PORT} (else Application failed to respond)"
+echo "statman-web: healthcheck http://0.0.0.0:${PUBLIC_PORT}/readyz"
 exec python -m api.portal \
   --host 0.0.0.0 \
   --port "$PUBLIC_PORT" \

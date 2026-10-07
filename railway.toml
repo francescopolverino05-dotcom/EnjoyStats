@@ -8,8 +8,10 @@ builder = "DOCKERFILE"
 dockerfilePath = "Dockerfile.dashboard"
 
 [deploy]
+# Empty Custom Start Command in the Railway UI is fine — this startCommand runs.
 startCommand = "/bin/sh /app/scripts/statman_web_entrypoint.sh"
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 10
-healthcheckPath = "/_stcore/health"
+# Portal-local readiness (does not wait on Streamlit).
+healthcheckPath = "/readyz"
 healthcheckTimeout = 300
