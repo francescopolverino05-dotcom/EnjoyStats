@@ -1,6 +1,6 @@
 # Web service only. Worker → railway.worker.toml
 #
-# Domain target port must match Railway PORT (yours is 8000).
+# Domain target port must match Railway PORT (currently 8080 for statman.up.railway.app).
 # Film upload uses same-origin chunked API via the portal (not Streamlit axios).
 
 [build]

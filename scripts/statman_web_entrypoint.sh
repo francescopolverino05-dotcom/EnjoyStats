@@ -97,6 +97,7 @@ while [ "$i" -lt 90 ]; do
 done
 
 echo "statman-web: portal on 0.0.0.0:${PUBLIC_PORT}"
+echo "statman-web: set Networking domain target port = ${PUBLIC_PORT}"
 exec python -m api.portal \
   --host 0.0.0.0 \
   --port "$PUBLIC_PORT" \

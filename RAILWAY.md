@@ -16,8 +16,11 @@ A separate Worker service is optional. If you keep it, it must mount the
 
 ## Domain / port
 
-- Web logs: `portal on 0.0.0.0:NNNN` → Networking target port = **NNNN**
-- Site: https://statman-production.up.railway.app
+- Site: https://statman.up.railway.app
+- Web logs must say: `portal on 0.0.0.0:8080` (or whatever NNNN is)
+- Networking domain target port must be **that same NNNN**
+- Variables → set `PORT=8080` if the domain target is 8080
+- Mismatch = “Application failed to respond” even when deploy is Success
 
 ## Web volume
 
