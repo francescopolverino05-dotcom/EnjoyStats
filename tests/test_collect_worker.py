@@ -64,6 +64,34 @@ def test_claim_is_exclusive(tmp_path: Path, monkeypatch) -> None:
     assert second is None
 
 
+def test_stale_running_job_reclaimed_even_if_pid_alive(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Frozen progress (stuck at ~29%) must re-queue even when pid looks alive."""
+
+    monkeypatch.setenv("ENJOYSTATS_JOBS_DIR", str(tmp_path))
+    monkeypatch.setenv("STATMAN_STALE_PROGRESS_S", "120")
+    status_path = tmp_path / "salernitana.status.json"
+    status_path.write_text(
+        (
+            '{"state":"running","film":"x.mp4","label":"Watching minute 12",'
+            '"fraction":0.29,"pid":1,"stall_restarts":0,'
+            '"updated_at":"2020-01-01T00:00:00+00:00"}'
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "analytics.collect_worker._pid_alive",
+        lambda _pid: True,
+    )
+    monkeypatch.setattr("analytics.collect_worker._kill_pid", lambda _pid: None)
+    assert reclaim_stale_jobs() >= 1
+    status = read_job_status(status_path)
+    assert status is not None
+    assert status["state"] == "queued"
+    assert int(status["stall_restarts"]) == 1
+
+
 def test_stale_claim_lock_is_reclaimed(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("ENJOYSTATS_JOBS_DIR", str(tmp_path))
     status_path = tmp_path / "stuck.status.json"

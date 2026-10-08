@@ -96,6 +96,26 @@ def test_uvicorn_app_target_upload_only(monkeypatch) -> None:
     assert uvicorn_app_target() == "api.main:app"
 
 
+def test_upload_app_lists_jobs(tmp_path, monkeypatch) -> None:
+    jobs = tmp_path / "jobs"
+    jobs.mkdir()
+    (jobs / "match.status.json").write_text(
+        '{"state":"running","fraction":0.29,"label":"Watching","film":"/data/inbox/a.mp4",'
+        '"updated_at":"2020-01-01T00:00:00+00:00"}',
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("ENJOYSTATS_JOBS_DIR", str(jobs))
+    from api.upload_app import app
+
+    with TestClient(app) as client:
+        response = client.get("/api/v1/jobs")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["count"] == 1
+        assert body["jobs"][0]["fraction"] == 0.29
+        assert body["jobs"][0]["film"] == "a.mp4"
+
+
 def test_upload_app_serves_film_chunk(tmp_path, monkeypatch) -> None:
     inbox = tmp_path / "inbox"
     monkeypatch.setenv("ENJOYSTATS_FILM_INBOX", str(inbox))

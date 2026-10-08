@@ -9,7 +9,9 @@ volume *name*. That kept failing, so **Web now embeds the Analyse worker**
 1. Redeploy **Web**
 2. Web logs must show: `statman-web: embedded Analyse worker`
 3. After Analyse Stats: `[statman-worker] starting ….status.json`
-   (in Web deploy logs / embed-worker.log)
+   (in Web Deploy Logs — worker output is teed to stdout)
+4. Stuck bar (e.g. 29% for hours): redeploy Web — worker re-queues jobs with
+   no progress for 15+ minutes. Check `https://…/api/v1/jobs` for state/age.
 
 A separate Worker service is optional. If you keep it, it must mount the
 **same** volume name as Web at `/data` (not a second new volume).

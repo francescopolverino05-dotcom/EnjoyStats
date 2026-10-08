@@ -89,9 +89,10 @@ streamlit run app/dashboard.py \
 
 if [ "$EMBED_WORKER" = "1" ] || [ "$EMBED_WORKER" = "true" ] || [ "$EMBED_WORKER" = "yes" ]; then
   echo "statman-web: embedded Analyse worker on ${ENJOYSTATS_JOBS_DIR}"
+  # Tee so Railway Deploy Logs show [statman-worker] lines (not only a file under /tmp).
   python -m analytics.collect_worker \
-    >"$LOG_DIR/embed-worker.log" 2>&1 &
-  echo "statman-web: embed-worker pid $! (logs: $LOG_DIR/embed-worker.log)"
+    2>&1 | tee -a "$LOG_DIR/embed-worker.log" &
+  echo "statman-web: embed-worker logger pid $! (also: $LOG_DIR/embed-worker.log)"
 fi
 
 i=0

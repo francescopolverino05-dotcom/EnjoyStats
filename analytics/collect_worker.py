@@ -14,7 +14,9 @@ Both services must share the same jobs + inbox paths (Railway volume), e.g.
 
 from __future__ import annotations
 
+import multiprocessing as mp
 import os
+import signal
 import sys
 import time
 from datetime import datetime, timezone
@@ -31,6 +33,9 @@ from analytics.collect_job import (
 )
 
 STALE_CLAIM_S = 120.0
+# No progress file update for this long ⇒ treat as hung (even if pid still alive).
+DEFAULT_STALE_PROGRESS_S = 900.0
+MAX_STALL_RESTARTS = 2
 
 
 def worker_poll_seconds() -> float:
@@ -40,6 +45,15 @@ def worker_poll_seconds() -> float:
     except ValueError:
         value = 3.0
     return max(0.5, value)
+
+
+def stale_progress_seconds() -> float:
+    raw = os.environ.get("STATMAN_STALE_PROGRESS_S", "").strip()
+    try:
+        value = float(raw) if raw else DEFAULT_STALE_PROGRESS_S
+    except ValueError:
+        value = DEFAULT_STALE_PROGRESS_S
+    return max(120.0, value)
 
 
 def use_external_worker() -> bool:
@@ -71,27 +85,105 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
-def _age_seconds(status: dict[str, Any]) -> float:
+def job_age_seconds(status: dict[str, Any]) -> float:
+    """Seconds since status ``updated_at`` (or ``started_at``)."""
+
     stamp = _parse_iso(str(status.get("updated_at") or status.get("started_at") or ""))
     if stamp is None:
         return 0.0
     return max(0.0, time.time() - stamp)
 
 
+# Back-compat alias for older imports/tests.
+_age_seconds = job_age_seconds
+
+
+def _kill_pid(pid: int) -> None:
+    """Best-effort terminate a hung collect child (never signal ourselves)."""
+
+    if pid <= 1 or pid == os.getpid():
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError:
+        return
+    deadline = time.time() + 15.0
+    while time.time() < deadline:
+        if not _pid_alive(pid):
+            return
+        time.sleep(0.2)
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
+
+
+def _requeue_status(
+    path: Path,
+    status: dict[str, Any],
+    *,
+    reason: str,
+    kill_pid: bool = False,
+    count_stall: bool = False,
+) -> None:
+    pid = int(status.get("pid") or 0)
+    if kill_pid:
+        _kill_pid(pid)
+    stalls = int(status.get("stall_restarts") or 0)
+    if count_stall:
+        stalls += 1
+    lock_path = path.with_suffix(path.suffix + ".claim")
+    if count_stall and stalls > MAX_STALL_RESTARTS:
+        status["state"] = "error"
+        status["error"] = (
+            f"Analyse stalled {stalls} times with no progress update "
+            f"({reason}). Redeploy Web or re-upload the film."
+        )
+        status["label"] = "Collect failed (stalled)"
+        status["pid"] = 0
+        status["stall_restarts"] = stalls
+        status["updated_at"] = _now()
+        _write_json(path, status)
+        try:
+            lock_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        sys.stdout.write(f"[statman-worker] gave up on {path.name} after {stalls} stalls\n")
+        sys.stdout.flush()
+        return
+
+    status["state"] = "queued"
+    status["label"] = f"Re-queued ({reason})…"
+    status["pid"] = 0
+    status["error"] = ""
+    status["stall_restarts"] = stalls
+    status["updated_at"] = _now()
+    _write_json(path, status)
+    try:
+        lock_path.unlink(missing_ok=True)
+    except OSError:
+        pass
+    sys.stdout.write(
+        f"[statman-worker] re-queued {path.name} ({reason}, stall={stalls})\n"
+    )
+    sys.stdout.flush()
+
+
 def reclaim_stale_jobs(folder: Path | None = None) -> int:
-    """Clear orphaned claim locks and re-queue dead claimed/running jobs."""
+    """Clear orphaned claim locks and re-queue dead/hung claimed/running jobs."""
 
     root = folder or collect_jobs_dir()
     if not root.is_dir():
         return 0
     fixed = 0
+    progress_limit = stale_progress_seconds()
     for path in root.glob(f"*{JOB_SUFFIX}"):
         status = read_job_status(path)
         if status is None:
             continue
         state = str(status.get("state") or "").strip().lower()
         lock_path = path.with_suffix(path.suffix + ".claim")
-        age = _age_seconds(status)
+        age = job_age_seconds(status)
         pid = int(status.get("pid") or 0)
 
         # Queued forever because a crashed worker left the .claim lock behind.
@@ -108,22 +200,26 @@ def reclaim_stale_jobs(folder: Path | None = None) -> int:
                 except OSError:
                     pass
 
-        # Claimed/running with a dead worker — put back on the queue.
-        # Long-running collects are fine while the worker pid is still alive.
-        if state in {"claimed", "running"} and age >= STALE_CLAIM_S and not _pid_alive(pid):
-            status["state"] = "queued"
-            status["label"] = "Re-queued after worker restart…"
-            status["pid"] = 0
-            status["error"] = ""
-            status["updated_at"] = _now()
-            _write_json(path, status)
-            try:
-                lock_path.unlink(missing_ok=True)
-            except OSError:
-                pass
+        if state not in {"claimed", "running"}:
+            continue
+
+        # Dead worker process — put back on the queue.
+        if age >= STALE_CLAIM_S and not _pid_alive(pid):
+            _requeue_status(path, status, reason="worker dead")
             fixed += 1
-            sys.stdout.write(f"[statman-worker] re-queued stale {path.name} (was {state})\n")
-            sys.stdout.flush()
+            continue
+
+        # Hung collect: pid may still be alive but progress file is frozen
+        # (classic “stuck at 29% overnight”).
+        if age >= progress_limit:
+            _requeue_status(
+                path,
+                status,
+                reason=f"no progress for {int(age)}s",
+                kill_pid=True,
+                count_stall=True,
+            )
+            fixed += 1
     return fixed
 
 
@@ -185,6 +281,17 @@ def release_claim(status_path: Path) -> None:
         pass
 
 
+def _collect_child(film: str, status_path: str) -> None:
+    """Subprocess entry: run collect and exit (parent watches progress)."""
+
+    try:
+        run_collect_job(Path(film), Path(status_path))
+    except (ValueError, OSError) as exc:
+        sys.stderr.write(f"[statman-worker] child failed: {exc}\n")
+        sys.stderr.flush()
+        raise SystemExit(1) from exc
+
+
 def process_one(status_path: Path) -> bool:
     """Claim and run one job. Returns True if a job was processed."""
 
@@ -219,11 +326,59 @@ def process_one(status_path: Path) -> bool:
 
     sys.stdout.write(f"[statman-worker] starting {status_path.name} · {film.name}\n")
     sys.stdout.flush()
+    # Child process so a hung OpenCV/YOLO call cannot freeze reclaim forever.
+    ctx = mp.get_context("fork")
+    proc = ctx.Process(
+        target=_collect_child,
+        args=(str(film), str(status_path)),
+        name=f"statman-collect-{status_path.stem}",
+        daemon=True,
+    )
+    proc.start()
+    live = read_job_status(status_path) or status
+    live["pid"] = int(proc.pid or 0)
+    live["updated_at"] = _now()
+    _write_json(status_path, live)
+
+    progress_limit = stale_progress_seconds()
     try:
-        run_collect_job(film, status_path)
-    except (ValueError, OSError) as exc:
-        sys.stderr.write(f"[statman-worker] failed {status_path.name}: {exc}\n")
-        sys.stderr.flush()
+        while proc.is_alive():
+            proc.join(timeout=5.0)
+            if not proc.is_alive():
+                break
+            doc = read_job_status(status_path) or {}
+            state = str(doc.get("state") or "").strip().lower()
+            if state in {"done", "error"}:
+                break
+            age = job_age_seconds(doc)
+            if age >= progress_limit:
+                sys.stderr.write(
+                    f"[statman-worker] hung {status_path.name} "
+                    f"(no progress {int(age)}s) — killing pid={proc.pid}\n"
+                )
+                sys.stderr.flush()
+                proc.terminate()
+                proc.join(timeout=20)
+                if proc.is_alive():
+                    proc.kill()
+                    proc.join(timeout=5)
+                doc = read_job_status(status_path) or live
+                _requeue_status(
+                    status_path,
+                    doc,
+                    reason=f"watchdog no progress {int(age)}s",
+                    kill_pid=False,
+                    count_stall=True,
+                )
+                return True
+        if proc.exitcode not in (0, None):
+            doc = read_job_status(status_path) or live
+            if str(doc.get("state") or "").strip().lower() not in {"done", "error"}:
+                doc["state"] = "error"
+                doc["error"] = f"Collect process exited with code {proc.exitcode}"
+                doc["label"] = "Collect failed (worker exit)"
+                doc["updated_at"] = _now()
+                _write_json(status_path, doc)
     finally:
         release_claim(status_path)
     return True
@@ -269,9 +424,15 @@ def _describe_jobs_dir(jobs: Path) -> str:
     statuses = sorted(jobs.glob(f"*{JOB_SUFFIX}"))
     states: list[str] = []
     for path in statuses[:12]:
-        doc = read_job_status(path)
-        state = str((doc or {}).get("state") or "?")
-        states.append(f"{path.name}:{state}")
+        doc = read_job_status(path) or {}
+        state = str(doc.get("state") or "?")
+        frac = doc.get("fraction")
+        try:
+            pct = f"{float(frac) * 100:.0f}%"
+        except (TypeError, ValueError):
+            pct = "?"
+        age = int(job_age_seconds(doc))
+        states.append(f"{path.name}:{state}@{pct}/{age}s")
     extra = "" if len(statuses) <= 12 else f" (+{len(statuses) - 12} more)"
     listing = ", ".join(states) if states else "(none)"
     return f"web_heartbeat={hb} · files={len(statuses)} [{listing}]{extra}"

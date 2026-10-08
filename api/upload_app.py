@@ -10,6 +10,7 @@ from __future__ import annotations
 from fastapi import FastAPI
 
 from api.film_upload import film_router
+from api.job_status import job_status_router
 
 app = FastAPI(
     title="StatMan film upload",
@@ -27,3 +28,4 @@ def health() -> dict[str, bool]:
 
 
 app.include_router(film_router)
+app.include_router(job_status_router)

@@ -1377,6 +1377,21 @@ def render_job_progress(status: dict[str, object]) -> None:
     film = str(status.get("film") or "")
     if film:
         st.caption(f"Film: `{Path(film).name}`")
+    updated = str(status.get("updated_at") or status.get("started_at") or "")
+    if updated:
+        st.caption(f"Last progress update: `{updated}`")
+    if state in {"running", "claimed"} and updated:
+        try:
+            from analytics.collect_worker import job_age_seconds, stale_progress_seconds
+
+            age = job_age_seconds(status)
+            if age >= stale_progress_seconds():
+                st.warning(
+                    f"No progress for {int(age // 60)} minutes — the worker looks stuck. "
+                    "Redeploy **Web** (or wait for the watchdog) so the job is re-queued."
+                )
+        except Exception:  # noqa: BLE001 — UI must not crash on age parse
+            pass
     if state == "queued":
         updated = str(status.get("updated_at") or status.get("started_at") or "")
         jobs_dir = str(status.get("jobs_dir") or "")
