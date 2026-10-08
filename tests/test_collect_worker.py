@@ -127,6 +127,34 @@ def test_missing_film_marks_error(tmp_path: Path, monkeypatch) -> None:
     assert "not found" in str(status["error"]).lower()
 
 
+def test_film_stops_after_three_crashes(tmp_path: Path, monkeypatch) -> None:
+    from analytics.collect_worker import (
+        MAX_FILM_CRASHES,
+        film_crash_count,
+        record_film_crash,
+        stop_film_jobs,
+    )
+
+    monkeypatch.setenv("ENJOYSTATS_JOBS_DIR", str(tmp_path))
+    film = tmp_path / "match.mp4"
+    film.write_bytes(b"x")
+    for i in range(MAX_FILM_CRASHES):
+        assert record_film_crash(str(film), detail=f"boom{i}", fraction=0.2) == i + 1
+    assert film_crash_count(str(film)) == MAX_FILM_CRASHES
+    status_path = tmp_path / "z.status.json"
+    status_path.write_text(
+        (
+            f'{{"state":"queued","film":"{film}","label":"q","fraction":0,"pid":0}}'
+        ),
+        encoding="utf-8",
+    )
+    assert stop_film_jobs(str(film), reason="Stopped after 3 crashes") == 1
+    status = read_job_status(status_path)
+    assert status is not None
+    assert status["state"] == "error"
+    assert "3 crashes" in str(status["error"])
+
+
 def test_poll_once_defers_duplicate_film(tmp_path: Path, monkeypatch) -> None:
     import json
     from datetime import datetime, timezone

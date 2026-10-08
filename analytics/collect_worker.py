@@ -36,6 +36,8 @@ STALE_CLAIM_S = 120.0
 # No progress file update for this long ⇒ treat as hung (even if pid still alive).
 DEFAULT_STALE_PROGRESS_S = 900.0
 MAX_STALL_RESTARTS = 2
+# Hard stop after this many crashes for the same film (across job files).
+MAX_FILM_CRASHES = 3
 
 
 def worker_poll_seconds() -> float:
@@ -314,6 +316,110 @@ def _film_key(film: str) -> str:
         return str(Path(film))
 
 
+def _film_crash_ledger_path(film: str, folder: Path | None = None) -> Path:
+    root = folder or collect_jobs_dir()
+    safe = Path(film).name.replace(" ", "_")
+    return root / f".crashes.{safe}.json"
+
+
+def read_film_crash_ledger(film: str, folder: Path | None = None) -> dict[str, Any]:
+    path = _film_crash_ledger_path(film, folder)
+    if not path.is_file():
+        return {"film": Path(film).name, "count": 0, "events": []}
+    try:
+        import json
+
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return {"film": Path(film).name, "count": 0, "events": []}
+    if not isinstance(raw, dict):
+        return {"film": Path(film).name, "count": 0, "events": []}
+    return raw
+
+
+def film_crash_count(film: str, folder: Path | None = None) -> int:
+    try:
+        return max(0, int(read_film_crash_ledger(film, folder).get("count") or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def record_film_crash(
+    film: str,
+    *,
+    detail: str,
+    fraction: float | None = None,
+    folder: Path | None = None,
+) -> int:
+    """Increment per-film crash count. Returns the new count."""
+
+    root = folder or collect_jobs_dir()
+    root.mkdir(parents=True, exist_ok=True)
+    path = _film_crash_ledger_path(film, root)
+    doc = read_film_crash_ledger(film, root)
+    events = list(doc.get("events") or [])
+    events.append(
+        {
+            "at": _now(),
+            "detail": str(detail)[:500],
+            "fraction": fraction,
+        }
+    )
+    count = len(events)
+    payload = {
+        "film": Path(film).name,
+        "film_key": _film_key(film),
+        "count": count,
+        "stopped": count >= MAX_FILM_CRASHES,
+        "events": events[-20:],
+        "updated_at": _now(),
+    }
+    _write_json(path, payload)
+    sys.stdout.write(
+        f"[statman-worker] film crash {count}/{MAX_FILM_CRASHES} · {Path(film).name} · {detail[:120]}\n"
+    )
+    sys.stdout.flush()
+    return count
+
+
+def stop_film_jobs(
+    film: str,
+    *,
+    reason: str,
+    folder: Path | None = None,
+) -> int:
+    """Mark queued/claimed/running jobs for ``film`` as stopped. Returns count."""
+
+    root = folder or collect_jobs_dir()
+    if not root.is_dir():
+        return 0
+    key = _film_key(film)
+    stopped = 0
+    for path in root.glob(f"*{JOB_SUFFIX}"):
+        status = read_job_status(path)
+        if status is None:
+            continue
+        other = str(status.get("film") or "").strip()
+        if not other or _film_key(other) != key:
+            continue
+        state = str(status.get("state") or "").strip().lower()
+        if state not in {"queued", "claimed", "running"}:
+            continue
+        pid = int(status.get("pid") or 0)
+        _kill_pid(pid)
+        status["state"] = "error"
+        status["error"] = reason
+        status["label"] = "Stopped after 3 crashes"
+        status["pid"] = 0
+        status["updated_at"] = _now()
+        _write_json(path, status)
+        release_claim(path)
+        stopped += 1
+        sys.stdout.write(f"[statman-worker] stopped {path.name}: {reason}\n")
+        sys.stdout.flush()
+    return stopped
+
+
 def _active_films(folder: Path | None = None) -> set[str]:
     """Films already claimed/running — do not start a second collect on them."""
 
@@ -364,6 +470,20 @@ def process_one(status_path: Path) -> bool:
         release_claim(status_path)
         sys.stderr.write(f"[statman-worker] {status['error']}\n")
         sys.stderr.flush()
+        return True
+
+    crashes = film_crash_count(film_raw)
+    if crashes >= MAX_FILM_CRASHES:
+        status["state"] = "error"
+        status["error"] = (
+            f"Stopped: this film already crashed {crashes} times. "
+            "Fix the worker, then delete "
+            f"`{_film_crash_ledger_path(film_raw).name}` under jobs to retry."
+        )
+        status["label"] = "Stopped after 3 crashes"
+        status["updated_at"] = _now()
+        _write_json(status_path, status)
+        release_claim(status_path)
         return True
 
     # Another job is already watching this film (duplicates from re-queue storms).
@@ -429,36 +549,62 @@ def process_one(status_path: Path) -> bool:
                     proc.kill()
                     proc.join(timeout=5)
                 doc = read_job_status(status_path) or live
-                _requeue_status(
-                    status_path,
-                    doc,
-                    reason=f"watchdog no progress {int(age)}s",
-                    kill_pid=False,
-                    count_stall=True,
-                )
+                detail = f"watchdog no progress {int(age)}s"
+                frac = None
+                try:
+                    frac = float(doc.get("fraction"))
+                except (TypeError, ValueError):
+                    frac = None
+                count = record_film_crash(str(film), detail=detail, fraction=frac)
+                if count >= MAX_FILM_CRASHES:
+                    stop_film_jobs(
+                        str(film),
+                        reason=(
+                            f"Stopped after {count} crashes "
+                            f"(last: {detail}). Diagnosing before retry."
+                        ),
+                    )
+                else:
+                    _requeue_status(
+                        status_path,
+                        doc,
+                        reason=detail,
+                        kill_pid=False,
+                        count_stall=True,
+                    )
                 return True
         if proc.exitcode not in (0, None):
             doc = read_job_status(status_path) or live
             state = str(doc.get("state") or "").strip().lower()
+            code = proc.exitcode
             if state == "error" and str(doc.get("error") or "").strip():
-                # Child already wrote the real exception (MemoryError, etc.).
-                pass
-            elif state not in {"done", "error"}:
-                # OOM / SIGKILL often leaves state=running — re-queue once.
-                code = proc.exitcode
-                doc["error"] = f"Collect process exited with code {code}"
-                if int(doc.get("stall_restarts") or 0) < MAX_STALL_RESTARTS:
-                    _requeue_status(
-                        status_path,
-                        doc,
-                        reason=f"exit code {code}",
-                        count_stall=True,
-                    )
-                else:
-                    doc["state"] = "error"
-                    doc["label"] = "Collect failed (worker exit)"
-                    doc["updated_at"] = _now()
-                    _write_json(status_path, doc)
+                detail = str(doc.get("error"))
+            else:
+                detail = f"Collect process exited with code {code}"
+                doc["error"] = detail
+            frac = None
+            try:
+                frac = float(doc.get("fraction"))
+            except (TypeError, ValueError):
+                frac = None
+            count = record_film_crash(str(film), detail=detail, fraction=frac)
+            if count >= MAX_FILM_CRASHES:
+                stop_film_jobs(
+                    str(film),
+                    reason=(
+                        f"Stopped after {count} crashes "
+                        f"(last: {detail}). Diagnosing before retry."
+                    ),
+                )
+            else:
+                # Retry (child may already have set state=error).
+                doc["state"] = "queued"
+                _requeue_status(
+                    status_path,
+                    doc,
+                    reason=f"exit code {code}",
+                    count_stall=True,
+                )
     finally:
         release_claim(status_path)
     return True
@@ -527,11 +673,55 @@ def _describe_jobs_dir(jobs: Path) -> str:
     return f"web_heartbeat={hb} · files={len(statuses)} [{listing}]{extra}"
 
 
+def seed_film_crash_ledgers_from_errors(folder: Path | None = None) -> int:
+    """Count existing error jobs so prior crashes count toward the 3-strike stop."""
+
+    root = folder or collect_jobs_dir()
+    if not root.is_dir():
+        return 0
+    by_film: dict[str, list[dict[str, Any]]] = {}
+    for path in root.glob(f"*{JOB_SUFFIX}"):
+        status = read_job_status(path)
+        if status is None:
+            continue
+        if str(status.get("state") or "").strip().lower() != "error":
+            continue
+        err = str(status.get("error") or status.get("label") or "")
+        if "duplicate" in err.lower() or "Stopped after" in err:
+            continue
+        film = str(status.get("film") or "").strip()
+        if not film:
+            continue
+        by_film.setdefault(_film_key(film), []).append(status)
+    seeded = 0
+    for _key, statuses in by_film.items():
+        film = str(statuses[0].get("film") or "")
+        if film_crash_count(film, root) > 0:
+            continue
+        for status in statuses[:MAX_FILM_CRASHES]:
+            try:
+                frac = float(status.get("fraction"))
+            except (TypeError, ValueError):
+                frac = None
+            record_film_crash(
+                film,
+                detail=str(status.get("error") or status.get("label") or "prior error"),
+                fraction=frac,
+                folder=root,
+            )
+            seeded += 1
+    return seeded
+
+
 def run_forever(*, poll_s: float | None = None) -> None:
     """Block forever, claiming queued Analyse jobs."""
 
     interval = worker_poll_seconds() if poll_s is None else max(0.5, float(poll_s))
     jobs = ensure_jobs_dir()
+    seeded = seed_film_crash_ledgers_from_errors(jobs)
+    if seeded:
+        sys.stdout.write(f"[statman-worker] seeded {seeded} prior crash(es) into ledgers\n")
+        sys.stdout.flush()
     queued_n = len(list_queued_job_paths(jobs))
     sys.stdout.write(
         f"[statman-worker] watching {jobs} every {interval:.1f}s "
