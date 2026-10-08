@@ -89,6 +89,7 @@ python -m uvicorn "$ENJOYSTATS_UVICORN_APP" \
   --port "$API_PORT" \
   --log-level warning \
   >"$LOG_DIR/upload-api.log" 2>&1 &
+echo $! >"$LOG_DIR/upload-api.pid"
 
 echo "statman-web: Streamlit on 127.0.0.1:${UI_PORT}"
 streamlit run app/dashboard.py \
@@ -101,6 +102,7 @@ streamlit run app/dashboard.py \
   --server.maxMessageSize=5120 \
   --browser.gatherUsageStats=false \
   >"$LOG_DIR/streamlit.log" 2>&1 &
+echo $! >"$LOG_DIR/streamlit.pid"
 
 if [ "$EMBED_WORKER" = "1" ] || [ "$EMBED_WORKER" = "true" ] || [ "$EMBED_WORKER" = "yes" ]; then
   echo "statman-web: embedded Analyse worker on ${ENJOYSTATS_JOBS_DIR}"
@@ -108,6 +110,12 @@ if [ "$EMBED_WORKER" = "1" ] || [ "$EMBED_WORKER" = "true" ] || [ "$EMBED_WORKER
   python -m analytics.collect_worker \
     2>&1 | tee -a "$LOG_DIR/embed-worker.log" &
   echo "statman-web: embed-worker logger pid $! (also: $LOG_DIR/embed-worker.log)"
+fi
+
+# Keep Streamlit/API alive after Analyse RAM spikes kill them.
+if [ -x /app/scripts/statman_web_watchdog.sh ] || [ -f /app/scripts/statman_web_watchdog.sh ]; then
+  /bin/sh /app/scripts/statman_web_watchdog.sh >>"$LOG_DIR/watchdog.log" 2>&1 &
+  echo "statman-web: watchdog pid $! (restarts UI/API if they die)"
 fi
 
 i=0

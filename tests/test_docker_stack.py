@@ -50,6 +50,7 @@ def test_dockerfiles_are_multistage_slim_python() -> None:
     assert "COPY api ./api" in dashboard
     assert "/src/api" in dashboard
     assert "statman_web_entrypoint.sh" in dashboard
+    assert "statman_web_watchdog.sh" in dashboard
     assert "ENJOYSTATS_SAME_ORIGIN_UPLOAD=1" in dashboard
     assert "api.upload_app:app" in dashboard
     assert "STATMAN_EMBED_WORKER=1" in dashboard
@@ -69,7 +70,11 @@ def test_railway_web_entrypoint_runs_on_port() -> None:
     assert "$RANDOM" not in script  # dash + set -u: RANDOM: parameter not set
     assert "STATMAN_SAMPLE_HZ" in script
     assert "STATMAN_COLLECT_INPROCESS" in script
+    assert "statman_web_watchdog.sh" in script
     assert "su " not in script
+    watchdog = (ROOT / "scripts" / "statman_web_watchdog.sh").read_text(encoding="utf-8")
+    assert "_stcore/health" in watchdog
+    assert "starting Streamlit" in watchdog
     railway = (ROOT / "railway.toml").read_text(encoding="utf-8")
     assert "statman_web_entrypoint.sh" in railway
     assert "Dockerfile.dashboard" in railway
