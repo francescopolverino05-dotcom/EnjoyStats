@@ -180,17 +180,17 @@ def run_collect_job(film: Path, status_path: Path) -> MatchRundown:
                 away_team_name=away_name,
                 lineup_json=lineup_json,
             )
-    except (ValueError, OSError) as exc:
+    except Exception as exc:  # noqa: BLE001 — persist any crash for the UI/worker
         # Last chance: fold whatever was checkpointed before the crash.
         try:
             from analytics.video_auto_collect import finish_collect_from_checkpoint
 
             _progress("Recovering from saved tags…", 0.96)
             rundown = finish_collect_from_checkpoint(film)
-        except (ValueError, OSError):
+        except Exception:
             status["state"] = "error"
-            status["error"] = str(exc)
-            status["label"] = f"Collect failed ({exc})"
+            status["error"] = f"{type(exc).__name__}: {exc}"
+            status["label"] = f"Collect failed ({type(exc).__name__})"
             status["updated_at"] = _now()
             _write_json(status_path, status)
             raise

@@ -127,6 +127,47 @@ def test_missing_film_marks_error(tmp_path: Path, monkeypatch) -> None:
     assert "not found" in str(status["error"]).lower()
 
 
+def test_poll_once_defers_duplicate_film(tmp_path: Path, monkeypatch) -> None:
+    import json
+    from datetime import datetime, timezone
+
+    monkeypatch.setenv("ENJOYSTATS_JOBS_DIR", str(tmp_path))
+    film = tmp_path / "same.mp4"
+    film.write_bytes(b"x")
+    now = datetime.now(timezone.utc).isoformat()
+    running = tmp_path / "a.status.json"
+    running.write_text(
+        json.dumps(
+            {
+                "state": "running",
+                "film": str(film),
+                "label": "w",
+                "fraction": 0.2,
+                "pid": 9,
+                "updated_at": now,
+            }
+        ),
+        encoding="utf-8",
+    )
+    queued = tmp_path / "b.status.json"
+    queued.write_text(
+        json.dumps(
+            {
+                "state": "queued",
+                "film": str(film),
+                "label": "q",
+                "fraction": 0,
+                "pid": 0,
+            }
+        ),
+        encoding="utf-8",
+    )
+    assert poll_once() is False
+    status = read_job_status(queued)
+    assert status is not None
+    assert status["state"] == "queued"
+
+
 def test_poll_once_no_work(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("ENJOYSTATS_JOBS_DIR", str(tmp_path))
     assert poll_once() is False

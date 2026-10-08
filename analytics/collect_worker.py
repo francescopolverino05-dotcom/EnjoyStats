@@ -284,12 +284,54 @@ def release_claim(status_path: Path) -> None:
 def _collect_child(film: str, status_path: str) -> None:
     """Subprocess entry: run collect and exit (parent watches progress)."""
 
+    import traceback
+
     try:
         run_collect_job(Path(film), Path(status_path))
-    except (ValueError, OSError) as exc:
-        sys.stderr.write(f"[statman-worker] child failed: {exc}\n")
+    except BaseException as exc:  # noqa: BLE001 — persist real crash reason for UI
+        detail = f"{type(exc).__name__}: {exc}"
+        sys.stderr.write(f"[statman-worker] child failed: {detail}\n")
+        traceback.print_exc(file=sys.stderr)
         sys.stderr.flush()
+        path = Path(status_path)
+        doc = read_job_status(path) or {}
+        if str(doc.get("state") or "").strip().lower() not in {"done", "error"}:
+            doc["state"] = "error"
+            doc["error"] = detail[:800]
+            doc["label"] = f"Collect failed ({type(exc).__name__})"
+            doc["updated_at"] = _now()
+            try:
+                _write_json(path, doc)
+            except OSError:
+                pass
         raise SystemExit(1) from exc
+
+
+def _film_key(film: str) -> str:
+    try:
+        return str(Path(film).resolve())
+    except OSError:
+        return str(Path(film))
+
+
+def _active_films(folder: Path | None = None) -> set[str]:
+    """Films already claimed/running — do not start a second collect on them."""
+
+    root = folder or collect_jobs_dir()
+    active: set[str] = set()
+    if not root.is_dir():
+        return active
+    for path in root.glob(f"*{JOB_SUFFIX}"):
+        status = read_job_status(path)
+        if status is None:
+            continue
+        state = str(status.get("state") or "").strip().lower()
+        if state not in {"claimed", "running"}:
+            continue
+        film = str(status.get("film") or "").strip()
+        if film:
+            active.add(_film_key(film))
+    return active
 
 
 def process_one(status_path: Path) -> bool:
@@ -323,6 +365,30 @@ def process_one(status_path: Path) -> bool:
         sys.stderr.write(f"[statman-worker] {status['error']}\n")
         sys.stderr.flush()
         return True
+
+    # Another job is already watching this film (duplicates from re-queue storms).
+    for path in collect_jobs_dir().glob(f"*{JOB_SUFFIX}"):
+        if path.resolve() == status_path.resolve():
+            continue
+        doc = read_job_status(path)
+        if doc is None:
+            continue
+        if str(doc.get("state") or "").strip().lower() not in {"claimed", "running"}:
+            continue
+        other_film = str(doc.get("film") or "").strip()
+        if other_film and _film_key(other_film) == _film_key(film_raw):
+            status["state"] = "error"
+            status["error"] = (
+                f"Skipped duplicate — already analysing {film.name} "
+                f"via {path.name}."
+            )
+            status["label"] = "Skipped (duplicate job)"
+            status["updated_at"] = _now()
+            _write_json(status_path, status)
+            release_claim(status_path)
+            sys.stdout.write(f"[statman-worker] skip duplicate {status_path.name}\n")
+            sys.stdout.flush()
+            return True
 
     sys.stdout.write(f"[statman-worker] starting {status_path.name} · {film.name}\n")
     sys.stdout.flush()
@@ -373,12 +439,26 @@ def process_one(status_path: Path) -> bool:
                 return True
         if proc.exitcode not in (0, None):
             doc = read_job_status(status_path) or live
-            if str(doc.get("state") or "").strip().lower() not in {"done", "error"}:
-                doc["state"] = "error"
-                doc["error"] = f"Collect process exited with code {proc.exitcode}"
-                doc["label"] = "Collect failed (worker exit)"
-                doc["updated_at"] = _now()
-                _write_json(status_path, doc)
+            state = str(doc.get("state") or "").strip().lower()
+            if state == "error" and str(doc.get("error") or "").strip():
+                # Child already wrote the real exception (MemoryError, etc.).
+                pass
+            elif state not in {"done", "error"}:
+                # OOM / SIGKILL often leaves state=running — re-queue once.
+                code = proc.exitcode
+                doc["error"] = f"Collect process exited with code {code}"
+                if int(doc.get("stall_restarts") or 0) < MAX_STALL_RESTARTS:
+                    _requeue_status(
+                        status_path,
+                        doc,
+                        reason=f"exit code {code}",
+                        count_stall=True,
+                    )
+                else:
+                    doc["state"] = "error"
+                    doc["label"] = "Collect failed (worker exit)"
+                    doc["updated_at"] = _now()
+                    _write_json(status_path, doc)
     finally:
         release_claim(status_path)
     return True
@@ -389,7 +469,16 @@ def poll_once() -> bool:
 
     reclaim_stale_jobs()
     paths = list_queued_job_paths()
+    busy = _active_films()
     for path in paths:
+        doc = read_job_status(path) or {}
+        film = str(doc.get("film") or "").strip()
+        if film and _film_key(film) in busy:
+            sys.stdout.write(
+                f"[statman-worker] defer {path.name} — same film already running\n"
+            )
+            sys.stdout.flush()
+            continue
         if process_one(path):
             return True
     return False
