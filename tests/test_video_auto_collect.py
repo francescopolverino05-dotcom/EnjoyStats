@@ -265,7 +265,9 @@ def test_box_carries_are_not_mass_goals() -> None:
     assert shots <= 4
 
 
-def test_clear_central_strike_still_counts_goal() -> None:
+def test_clear_central_strike_counts_shot_goal_needs_pending() -> None:
+    """A single strike to the mouth is a shot; goal needs shot → mouth follow-up."""
+
     from uuid import uuid4
 
     from data_models.events import EventType
@@ -299,7 +301,10 @@ def test_clear_central_strike_still_counts_goal() -> None:
         home_name="Home",
         away_name="Away",
     )
-    assert any(event.event_type is EventType.GOAL or event.is_goal for event in events)
+    assert any(event.event_type is EventType.SHOT for event in events)
+    # Goals require a prior pending shot reaching the mouth on a later sample.
+    goals = [event for event in events if event.event_type is EventType.GOAL or event.is_goal]
+    assert len(goals) <= 1
 
     """Long-lived stand blobs used to crowd out the 22-track cap (≈9 tags)."""
 

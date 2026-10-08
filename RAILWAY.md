@@ -11,10 +11,11 @@ volume *name*. That kept failing, so **Web now embeds the Analyse worker**
 3. After Analyse Stats: `[statman-worker] starting ….status.json`
    (in Web Deploy Logs — worker output is teed to stdout)
 4. Stuck bar / site 502 during Analyse: usually **OOM** on a small Web dyno.
-   Defaults now: **in-process** collect (no fork), `STATMAN_SAMPLE_HZ=3`,
-   `STATMAN_MAX_SIDE=640`, YOLO on (HOG is missing in OpenCV 5), 1 thread.
+   Defaults: **in-process** collect, `STATMAN_SAMPLE_HZ=5`, `STATMAN_MAX_SIDE=720`,
+   YOLO on, 1 thread. Goals only count after shot→mouth (stops 20-goal nonsense).
 5. Give the Web service **≥8 GB RAM** in Railway (Settings → Resources).
    Analyse + Streamlit on 1–2 GB will keep dying no matter what.
+6. After a bad collect: Redeploy, then click **Analyse Stats** again on the film.
 6. After 3 crashes for the same film the worker **stops** that film (and only
    retries one job per film on fix boots). Check `https://…/api/v1/jobs`.
 

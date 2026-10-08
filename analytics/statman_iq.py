@@ -22,13 +22,14 @@ from data_models.events import EventType, ShotOutcome
 
 # --- Shot / goal gates (football, not NBA) ---------------------------------
 SHOT_MIN_GAP_S: Final[float] = 10.0
-GOAL_MIN_GAP_S: Final[float] = 30.0
+GOAL_MIN_GAP_S: Final[float] = 45.0
 SHOT_MIN_TRAVEL: Final[float] = 12.0
 SHOT_MIN_SPEED: Final[float] = 22.0
 GOAL_MOUTH_X: Final[float] = 3.5
 GOAL_POST_Y_MIN: Final[float] = 36.0
 GOAL_POST_Y_MAX: Final[float] = 64.0
-PENDING_SHOT_TTL_S: Final[float] = 2.5
+# Sparse film (3–5 Hz) needs a longer window to link shot → mouth.
+PENDING_SHOT_TTL_S: Final[float] = 4.0
 
 # Half-spaces (Halbraum): between wing and centre — Spielverlagerung / CV.
 HALF_SPACE_Y_LO: Final[tuple[float, float]] = (20.0, 40.0)
@@ -218,10 +219,13 @@ def classify_strike(
         and (gap_ok or at_mouth)
     )
 
+    # Goals only after a prior shot tag reaches the mouth. Instant
+    # "strike_at_mouth" produced 20-goal nonsense on sparse Railway film.
     if pending_shot and at_mouth and toward_goal and goal_gap_ok and pending_fresh:
         return StrikeVerdict(True, True, True, "pending_shot_to_mouth")
     if shot_like and at_mouth and goal_gap_ok:
-        return StrikeVerdict(True, True, True, "strike_at_mouth")
+        # Count as a shot on target — not a goal — unless we already had a shot.
+        return StrikeVerdict(True, False, True, "strike_at_mouth_shot")
     if shot_like:
         on_target = between_posts and abs(point[0] - attack_goal_x) <= 12.0
         return StrikeVerdict(True, False, on_target, "strike")

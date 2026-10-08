@@ -45,7 +45,7 @@ def test_gk_rule_blocks_shots_and_goals() -> None:
     assert verdict.reason == "gk_rule"
 
 
-def test_central_strike_still_goals() -> None:
+def test_central_strike_without_pending_is_shot_not_goal() -> None:
     verdict = classify_strike(
         start=(78.0, 50.0),
         point=(98.0, 50.0),
@@ -59,8 +59,28 @@ def test_central_strike_still_goals() -> None:
         pending_shot=False,
         pending_fresh=False,
     )
+    assert verdict.is_shot
+    assert not verdict.is_goal
+    assert verdict.on_target
+
+
+def test_pending_shot_to_mouth_is_goal() -> None:
+    verdict = classify_strike(
+        start=(90.0, 50.0),
+        point=(98.0, 50.0),
+        travel=8.0,
+        speed=20.0,
+        attack_goal_x=100.0,
+        shot_gap_ok=True,
+        goal_gap_ok=True,
+        gap_ok=True,
+        actor_is_gk=False,
+        pending_shot=True,
+        pending_fresh=True,
+    )
     assert verdict.is_goal
     assert verdict.on_target
+    assert verdict.reason == "pending_shot_to_mouth"
 
 
 def test_box_dribble_is_not_a_shot() -> None:
