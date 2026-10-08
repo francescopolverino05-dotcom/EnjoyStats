@@ -67,6 +67,8 @@ def test_railway_web_entrypoint_runs_on_port() -> None:
     assert "boot begin" in script
     assert "exit 1" not in script  # missing volume must not crash-loop the site
     assert "$RANDOM" not in script  # dash + set -u: RANDOM: parameter not set
+    assert "STATMAN_SAMPLE_HZ" in script
+    assert "STATMAN_COLLECT_INPROCESS" in script
     assert "su " not in script
     railway = (ROOT / "railway.toml").read_text(encoding="utf-8")
     assert "statman_web_entrypoint.sh" in railway

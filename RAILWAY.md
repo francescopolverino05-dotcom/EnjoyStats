@@ -10,8 +10,11 @@ volume *name*. That kept failing, so **Web now embeds the Analyse worker**
 2. Web logs must show: `statman-web: embedded Analyse worker`
 3. After Analyse Stats: `[statman-worker] starting ….status.json`
    (in Web Deploy Logs — worker output is teed to stdout)
-4. Stuck bar (e.g. 29% for hours): redeploy Web — worker re-queues jobs with
-   no progress for 15+ minutes. Check `https://…/api/v1/jobs` for state/age.
+4. Stuck bar / site 502 during Analyse: usually **OOM** (YOLO + fork on the
+   Web dyno). Embed defaults: in-process collect, `STATMAN_SAMPLE_HZ=3`,
+   `STATMAN_MAX_SIDE=640`, `STATMAN_DISABLE_YOLO=1`.
+5. After 3 crashes for the same film the worker **stops** that film. Check
+   `https://…/api/v1/jobs` (`film_crashes` / `crash_ledgers`).
 
 A separate Worker service is optional. If you keep it, it must mount the
 **same** volume name as Web at `/data` (not a second new volume).

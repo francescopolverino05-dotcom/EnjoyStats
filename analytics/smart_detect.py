@@ -9,6 +9,7 @@ Step B — split Home / Away by shirt colour when the operator gives kit hexes.
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Sequence
@@ -170,8 +171,11 @@ def detect_people_hog(frame: np.ndarray) -> list[SmartDetection]:
 
 
 def yolo_available() -> bool:
-    """True when ultralytics is installed."""
+    """True when ultralytics is installed and not disabled via env."""
 
+    flag = os.environ.get("STATMAN_DISABLE_YOLO", "").strip().lower()
+    if flag in {"1", "true", "yes", "on"}:
+        return False
     try:
         import ultralytics  # noqa: F401
     except ImportError:

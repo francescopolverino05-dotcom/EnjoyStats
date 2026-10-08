@@ -38,6 +38,19 @@ DEFAULT_STALE_PROGRESS_S = 900.0
 MAX_STALL_RESTARTS = 2
 # Hard stop after this many crashes for the same film (across job files).
 MAX_FILM_CRASHES = 3
+OOM_FIX_MARKER = ".oom_fix_v1_cleared_crashes"
+
+
+def collect_in_process() -> bool:
+    """Prefer in-process collect on the embed Web dyno (fork+YOLO OOMs Railway)."""
+
+    flag = os.environ.get("STATMAN_COLLECT_INPROCESS", "").strip().lower()
+    if flag in {"0", "false", "no", "off"}:
+        return False
+    if flag in {"1", "true", "yes", "on"}:
+        return True
+    emb = os.environ.get("STATMAN_EMBED_WORKER", "").strip().lower()
+    return emb in {"1", "true", "yes", "on"}
 
 
 def worker_poll_seconds() -> float:
@@ -512,7 +525,58 @@ def process_one(status_path: Path) -> bool:
 
     sys.stdout.write(f"[statman-worker] starting {status_path.name} · {film.name}\n")
     sys.stdout.flush()
-    # Child process so a hung OpenCV/YOLO call cannot freeze reclaim forever.
+
+    # Embed Web dyno: run collect in-process. Fork + YOLO doubled RAM and
+    # OOM-killed the whole Railway container (site 502).
+    if collect_in_process():
+        sys.stdout.write(
+            f"[statman-worker] in-process collect "
+            f"(hz={os.environ.get('STATMAN_SAMPLE_HZ', '?')} "
+            f"side={os.environ.get('STATMAN_MAX_SIDE', '?')} "
+            f"yolo_off={os.environ.get('STATMAN_DISABLE_YOLO', '0')})\n"
+        )
+        sys.stdout.flush()
+        live = read_job_status(status_path) or status
+        live["pid"] = os.getpid()
+        live["updated_at"] = _now()
+        _write_json(status_path, live)
+        try:
+            run_collect_job(film, status_path)
+        except Exception as exc:  # noqa: BLE001 — count toward film crash budget
+            doc = read_job_status(status_path) or live
+            detail = f"{type(exc).__name__}: {exc}"
+            if not str(doc.get("error") or "").strip():
+                doc["error"] = detail[:800]
+                doc["state"] = "error"
+                doc["label"] = f"Collect failed ({type(exc).__name__})"
+                doc["updated_at"] = _now()
+                _write_json(status_path, doc)
+            try:
+                frac = float(doc.get("fraction"))
+            except (TypeError, ValueError):
+                frac = None
+            count = record_film_crash(str(film), detail=detail, fraction=frac)
+            if count >= MAX_FILM_CRASHES:
+                stop_film_jobs(
+                    str(film),
+                    reason=(
+                        f"Stopped after {count} crashes "
+                        f"(last: {detail}). Diagnosing before retry."
+                    ),
+                )
+            else:
+                doc = read_job_status(status_path) or doc
+                _requeue_status(
+                    status_path,
+                    doc,
+                    reason=detail[:120],
+                    count_stall=True,
+                )
+        finally:
+            release_claim(status_path)
+        return True
+
+    # Dedicated worker (more RAM): child process + progress watchdog.
     ctx = mp.get_context("fork")
     proc = ctx.Process(
         target=_collect_child,
@@ -577,10 +641,14 @@ def process_one(status_path: Path) -> bool:
             doc = read_job_status(status_path) or live
             state = str(doc.get("state") or "").strip().lower()
             code = proc.exitcode
+            if code in (-9, 137) or (isinstance(code, int) and code < 0):
+                oom_hint = " (likely OOM / SIGKILL — lower STATMAN_SAMPLE_HZ)"
+            else:
+                oom_hint = ""
             if state == "error" and str(doc.get("error") or "").strip():
                 detail = str(doc.get("error"))
             else:
-                detail = f"Collect process exited with code {code}"
+                detail = f"Collect process exited with code {code}{oom_hint}"
                 doc["error"] = detail
             frac = None
             try:
@@ -597,7 +665,6 @@ def process_one(status_path: Path) -> bool:
                     ),
                 )
             else:
-                # Retry (child may already have set state=error).
                 doc["state"] = "queued"
                 _requeue_status(
                     status_path,
@@ -673,6 +740,34 @@ def _describe_jobs_dir(jobs: Path) -> str:
     return f"web_heartbeat={hb} · files={len(statuses)} [{listing}]{extra}"
 
 
+def clear_film_crash_ledgers_once(folder: Path | None = None) -> int:
+    """One-shot clear after the embed OOM fix so Salernitana can retry."""
+
+    root = folder or collect_jobs_dir()
+    if not root.is_dir():
+        return 0
+    marker = root / OOM_FIX_MARKER
+    if marker.is_file():
+        return 0
+    removed = 0
+    for path in root.glob(".crashes.*.json"):
+        try:
+            path.unlink()
+            removed += 1
+        except OSError:
+            pass
+    try:
+        marker.write_text(_now(), encoding="utf-8")
+    except OSError:
+        pass
+    if removed:
+        sys.stdout.write(
+            f"[statman-worker] cleared {removed} film crash ledger(s) after OOM fix\n"
+        )
+        sys.stdout.flush()
+    return removed
+
+
 def seed_film_crash_ledgers_from_errors(folder: Path | None = None) -> int:
     """Count existing error jobs so prior crashes count toward the 3-strike stop."""
 
@@ -718,10 +813,15 @@ def run_forever(*, poll_s: float | None = None) -> None:
 
     interval = worker_poll_seconds() if poll_s is None else max(0.5, float(poll_s))
     jobs = ensure_jobs_dir()
-    seeded = seed_film_crash_ledgers_from_errors(jobs)
-    if seeded:
-        sys.stdout.write(f"[statman-worker] seeded {seeded} prior crash(es) into ledgers\n")
-        sys.stdout.flush()
+    cleared = clear_film_crash_ledgers_once(jobs)
+    # After the OOM fix wipe, do not re-seed from the old exit-code-1 errors.
+    if not cleared:
+        seeded = seed_film_crash_ledgers_from_errors(jobs)
+        if seeded:
+            sys.stdout.write(
+                f"[statman-worker] seeded {seeded} prior crash(es) into ledgers\n"
+            )
+            sys.stdout.flush()
     queued_n = len(list_queued_job_paths(jobs))
     sys.stdout.write(
         f"[statman-worker] watching {jobs} every {interval:.1f}s "

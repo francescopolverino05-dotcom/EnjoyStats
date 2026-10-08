@@ -74,6 +74,38 @@ STREAMLIT_MAX_UPLOAD_MB: int = MAX_VIDEO_GIB * 1024
 DEFAULT_SAMPLE_HZ: float = 8.0
 DEFAULT_MAX_SIDE: int = 960
 DEFAULT_MAX_SAMPLE_FRAMES: int = 72_000
+
+
+def env_sample_hz(default: float = DEFAULT_SAMPLE_HZ) -> float:
+    """``STATMAN_SAMPLE_HZ`` override (Railway embed uses a lower value)."""
+
+    raw = os.environ.get("STATMAN_SAMPLE_HZ", "").strip()
+    if not raw:
+        return float(default)
+    try:
+        return max(0.5, float(raw))
+    except ValueError:
+        return float(default)
+
+
+def env_max_side(default: int = DEFAULT_MAX_SIDE) -> int:
+    raw = os.environ.get("STATMAN_MAX_SIDE", "").strip()
+    if not raw:
+        return int(default)
+    try:
+        return max(320, int(raw))
+    except ValueError:
+        return int(default)
+
+
+def env_max_sample_frames(default: int = DEFAULT_MAX_SAMPLE_FRAMES) -> int:
+    raw = os.environ.get("STATMAN_MAX_SAMPLE_FRAMES", "").strip()
+    if not raw:
+        return int(default)
+    try:
+        return max(500, int(raw))
+    except ValueError:
+        return int(default)
 # Arsenal v Palace (1-1) Wyscout analysis: 736 actions over 97.5 minutes.
 WYSCOUT_ACTIONS_PER_MINUTE: float = 7.55
 TARGET_EVENT_GAP_S: float = 60.0 / WYSCOUT_ACTIONS_PER_MINUTE
@@ -1622,6 +1654,14 @@ def collect_from_video(
             1.0,
         )
         return rundown
+
+    # Railway Web embed sets STATMAN_SAMPLE_HZ / MAX_SIDE to stay under RAM.
+    if sample_hz == DEFAULT_SAMPLE_HZ:
+        sample_hz = env_sample_hz()
+    if max_side == DEFAULT_MAX_SIDE:
+        max_side = env_max_side()
+    if max_sample_frames == DEFAULT_MAX_SAMPLE_FRAMES:
+        max_sample_frames = env_max_sample_frames()
 
     home_kit_bgr = parse_kit_hex(home_kit_hex)
     away_kit_bgr = parse_kit_hex(away_kit_hex)

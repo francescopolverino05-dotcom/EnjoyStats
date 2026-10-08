@@ -36,6 +36,13 @@ export ENJOYSTATS_UVICORN_APP="${ENJOYSTATS_UVICORN_APP:-api.upload_app:app}"
 export STATMAN_STREAMLIT_FILM_UPLOAD=0
 export STATMAN_WORKER_POLL_S="${STATMAN_WORKER_POLL_S:-3}"
 export MPLBACKEND="${MPLBACKEND:-Agg}"
+# Embed Web dyno has little RAM — fork+YOLO was OOM-killing the whole site.
+export STATMAN_COLLECT_INPROCESS="${STATMAN_COLLECT_INPROCESS:-1}"
+export STATMAN_SAMPLE_HZ="${STATMAN_SAMPLE_HZ:-3}"
+export STATMAN_MAX_SIDE="${STATMAN_MAX_SIDE:-640}"
+export STATMAN_DISABLE_YOLO="${STATMAN_DISABLE_YOLO:-1}"
+export STATMAN_MAX_SAMPLE_FRAMES="${STATMAN_MAX_SAMPLE_FRAMES:-36000}"
+echo "statman-web: collect knobs inprocess=${STATMAN_COLLECT_INPROCESS} hz=${STATMAN_SAMPLE_HZ} side=${STATMAN_MAX_SIDE} yolo_off=${STATMAN_DISABLE_YOLO}"
 
 echo "statman-web: checking volume at ${DATA_ROOT}"
 awk '{print "  " $0}' /proc/mounts 2>/dev/null | grep -i data || echo "  (none)"

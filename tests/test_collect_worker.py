@@ -127,6 +127,16 @@ def test_missing_film_marks_error(tmp_path: Path, monkeypatch) -> None:
     assert "not found" in str(status["error"]).lower()
 
 
+def test_collect_in_process_defaults_for_embed(monkeypatch) -> None:
+    from analytics.collect_worker import collect_in_process
+
+    monkeypatch.delenv("STATMAN_COLLECT_INPROCESS", raising=False)
+    monkeypatch.setenv("STATMAN_EMBED_WORKER", "1")
+    assert collect_in_process() is True
+    monkeypatch.setenv("STATMAN_COLLECT_INPROCESS", "0")
+    assert collect_in_process() is False
+
+
 def test_film_stops_after_three_crashes(tmp_path: Path, monkeypatch) -> None:
     from analytics.collect_worker import (
         MAX_FILM_CRASHES,
