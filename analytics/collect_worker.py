@@ -38,7 +38,7 @@ DEFAULT_STALE_PROGRESS_S = 900.0
 MAX_STALL_RESTARTS = 2
 # Hard stop after this many crashes for the same film (across job files).
 MAX_FILM_CRASHES = 3
-OOM_FIX_MARKER = ".oom_fix_v1_cleared_crashes"
+OOM_FIX_MARKER = ".oom_fix_v2_cleared_crashes"
 
 
 def collect_in_process() -> bool:
@@ -741,7 +741,7 @@ def _describe_jobs_dir(jobs: Path) -> str:
 
 
 def clear_film_crash_ledgers_once(folder: Path | None = None) -> int:
-    """One-shot clear after the embed OOM fix so Salernitana can retry."""
+    """One-shot clear after memory/detector fixes so films can retry."""
 
     root = folder or collect_jobs_dir()
     if not root.is_dir():
@@ -756,16 +756,73 @@ def clear_film_crash_ledgers_once(folder: Path | None = None) -> int:
             removed += 1
         except OSError:
             pass
+    # Re-queue at most ONE recoverable error job per film (many duplicates used
+    # to burn the 3-crash budget in one boot).
+    requeued = 0
+    seen_films: set[str] = set()
+    candidates: list[tuple[float, Path, dict[str, Any]]] = []
+    for path in root.glob(f"*{JOB_SUFFIX}"):
+        status = read_job_status(path)
+        if status is None:
+            continue
+        if str(status.get("state") or "").strip().lower() != "error":
+            continue
+        err = str(status.get("error") or "")
+        label = str(status.get("label") or "")
+        blob = f"{err} {label}".lower()
+        if not any(
+            needle in blob
+            for needle in (
+                "stopped after 3",
+                "hogdescriptor",
+                "no saved tag sheet",
+                "exited with code",
+                "collect failed",
+            )
+        ):
+            continue
+        film = str(status.get("film") or "").strip()
+        if not film or not Path(film).is_file():
+            continue
+        try:
+            mtime = path.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        candidates.append((mtime, path, status))
+    candidates.sort(key=lambda item: item[0], reverse=True)
+    for _mtime, path, status in candidates:
+        film = str(status.get("film") or "").strip()
+        key = _film_key(film)
+        if key in seen_films:
+            status["state"] = "error"
+            status["error"] = f"Skipped duplicate — retrying via newer job for {Path(film).name}"
+            status["label"] = "Skipped (duplicate job)"
+            status["pid"] = 0
+            status["updated_at"] = _now()
+            _write_json(path, status)
+            release_claim(path)
+            continue
+        seen_films.add(key)
+        status["state"] = "queued"
+        status["label"] = "Re-queued after detector/OOM fix…"
+        status["error"] = ""
+        status["pid"] = 0
+        status["stall_restarts"] = 0
+        status["updated_at"] = _now()
+        _write_json(path, status)
+        release_claim(path)
+        requeued += 1
     try:
         marker.write_text(_now(), encoding="utf-8")
     except OSError:
         pass
-    if removed:
+    if removed or requeued:
         sys.stdout.write(
-            f"[statman-worker] cleared {removed} film crash ledger(s) after OOM fix\n"
+            f"[statman-worker] OOM/detector fix: cleared {removed} crash ledger(s), "
+            f"re-queued {requeued} job(s)\n"
         )
         sys.stdout.flush()
-    return removed
+    return removed + requeued
 
 
 def seed_film_crash_ledgers_from_errors(folder: Path | None = None) -> int:

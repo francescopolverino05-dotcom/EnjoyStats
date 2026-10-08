@@ -36,12 +36,19 @@ export ENJOYSTATS_UVICORN_APP="${ENJOYSTATS_UVICORN_APP:-api.upload_app:app}"
 export STATMAN_STREAMLIT_FILM_UPLOAD=0
 export STATMAN_WORKER_POLL_S="${STATMAN_WORKER_POLL_S:-3}"
 export MPLBACKEND="${MPLBACKEND:-Agg}"
-# Embed Web dyno has little RAM — fork+YOLO was OOM-killing the whole site.
+# Embed Web dyno: no fork (OOM). Keep YOLO — OpenCV 5 often has no HOGDescriptor.
 export STATMAN_COLLECT_INPROCESS="${STATMAN_COLLECT_INPROCESS:-1}"
 export STATMAN_SAMPLE_HZ="${STATMAN_SAMPLE_HZ:-3}"
 export STATMAN_MAX_SIDE="${STATMAN_MAX_SIDE:-640}"
-export STATMAN_DISABLE_YOLO="${STATMAN_DISABLE_YOLO:-1}"
+export STATMAN_DISABLE_YOLO="${STATMAN_DISABLE_YOLO:-0}"
 export STATMAN_MAX_SAMPLE_FRAMES="${STATMAN_MAX_SAMPLE_FRAMES:-36000}"
+# Keep OpenCV / BLAS / torch from spawning thread storms on a small dyno.
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
+export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-1}"
+export TORCH_NUM_THREADS="${TORCH_NUM_THREADS:-1}"
+export CV_NUM_THREADS="${CV_NUM_THREADS:-1}"
 echo "statman-web: collect knobs inprocess=${STATMAN_COLLECT_INPROCESS} hz=${STATMAN_SAMPLE_HZ} side=${STATMAN_MAX_SIDE} yolo_off=${STATMAN_DISABLE_YOLO}"
 
 echo "statman-web: checking volume at ${DATA_ROOT}"

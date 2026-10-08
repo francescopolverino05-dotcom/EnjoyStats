@@ -181,12 +181,19 @@ def run_collect_job(film: Path, status_path: Path) -> MatchRundown:
                 lineup_json=lineup_json,
             )
     except Exception as exc:  # noqa: BLE001 — persist any crash for the UI/worker
-        # Last chance: fold whatever was checkpointed before the crash.
+        # Last chance: fold a real checkpoint only (missing sheet must not
+        # become a second/third "crash" that trips the 3-strike stop).
         try:
-            from analytics.video_auto_collect import finish_collect_from_checkpoint
+            from analytics.video_auto_collect import (
+                finish_collect_from_checkpoint,
+                load_collect_checkpoint,
+            )
 
-            _progress("Recovering from saved tags…", 0.96)
-            rundown = finish_collect_from_checkpoint(film)
+            if load_collect_checkpoint(film) is not None:
+                _progress("Recovering from saved tags…", 0.96)
+                rundown = finish_collect_from_checkpoint(film)
+            else:
+                raise exc
         except Exception:
             status["state"] = "error"
             status["error"] = f"{type(exc).__name__}: {exc}"

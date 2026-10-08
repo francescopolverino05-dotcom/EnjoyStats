@@ -1549,6 +1549,10 @@ def sample_and_track(
     step = max(1, int(round(info.fps / max(sample_hz, 0.1))))
     planned = int(window_duration * max(sample_hz, 0.1)) + 2
     planned = max(1, min(planned, max_sample_frames))
+    try:
+        cv2.setNumThreads(int(os.environ.get("CV_NUM_THREADS", "1") or "1"))
+    except Exception:  # noqa: BLE001 — optional
+        pass
     capture = cv2.VideoCapture(str(info.path))
     if not capture.isOpened():
         raise VideoCollectError(f"OpenCV could not open the match film: {info.path}")
@@ -1588,7 +1592,10 @@ def sample_and_track(
                 continue
             consecutive_fail = 0
             resized = _resize(frame, max_side)
-            detections = detect_objects(resized)
+            try:
+                detections = detect_objects(resized)
+            except Exception:  # noqa: BLE001 — one bad frame must not kill Analyse
+                detections = []
             next_id = _match_tracks(
                 tracks,
                 detections,
@@ -1605,6 +1612,10 @@ def sample_and_track(
                     (f"Watching minute {watched_min:.1f} " f"· sampled {sampled}/{planned}"),
                     0.08 + 0.82 * (sampled / planned),
                 )
+            if sampled % 50 == 0:
+                import gc
+
+                gc.collect()
             if sampled >= planned:
                 break
     finally:

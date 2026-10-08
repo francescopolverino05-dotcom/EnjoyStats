@@ -10,11 +10,13 @@ volume *name*. That kept failing, so **Web now embeds the Analyse worker**
 2. Web logs must show: `statman-web: embedded Analyse worker`
 3. After Analyse Stats: `[statman-worker] starting ….status.json`
    (in Web Deploy Logs — worker output is teed to stdout)
-4. Stuck bar / site 502 during Analyse: usually **OOM** (YOLO + fork on the
-   Web dyno). Embed defaults: in-process collect, `STATMAN_SAMPLE_HZ=3`,
-   `STATMAN_MAX_SIDE=640`, `STATMAN_DISABLE_YOLO=1`.
-5. After 3 crashes for the same film the worker **stops** that film. Check
-   `https://…/api/v1/jobs` (`film_crashes` / `crash_ledgers`).
+4. Stuck bar / site 502 during Analyse: usually **OOM** on a small Web dyno.
+   Defaults now: **in-process** collect (no fork), `STATMAN_SAMPLE_HZ=3`,
+   `STATMAN_MAX_SIDE=640`, YOLO on (HOG is missing in OpenCV 5), 1 thread.
+5. Give the Web service **≥8 GB RAM** in Railway (Settings → Resources).
+   Analyse + Streamlit on 1–2 GB will keep dying no matter what.
+6. After 3 crashes for the same film the worker **stops** that film (and only
+   retries one job per film on fix boots). Check `https://…/api/v1/jobs`.
 
 A separate Worker service is optional. If you keep it, it must mount the
 **same** volume name as Web at `/data` (not a second new volume).

@@ -133,27 +133,38 @@ def _mean_bgr_box(
     return (float(mean[0]), float(mean[1]), float(mean[2]))
 
 
+def hog_available() -> bool:
+    """OpenCV 4 has HOGDescriptor; OpenCV 5 builds often omit it."""
+
+    return hasattr(cv2, "HOGDescriptor")
+
+
 @lru_cache(maxsize=1)
-def _hog_detector() -> cv2.HOGDescriptor:
+def _hog_detector():  # type: ignore[no-untyped-def]
+    if not hog_available():
+        raise RuntimeError("cv2.HOGDescriptor is not available in this OpenCV build")
     hog = cv2.HOGDescriptor()
     hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
     return hog
 
 
 def detect_people_hog(frame: np.ndarray) -> list[SmartDetection]:
-    """OpenCV HOG people finder — no extra packages."""
+    """OpenCV HOG people finder when the build includes it; else empty."""
 
-    if frame.size == 0:
+    if frame.size == 0 or not hog_available():
         return []
     height, width = frame.shape[:2]
-    hog = _hog_detector()
-    # winStride / scale tuned for broadcast-ish frames (and tiny synthetic clips).
-    boxes, weights = hog.detectMultiScale(
-        frame,
-        winStride=(8, 8),
-        padding=(8, 8),
-        scale=1.05,
-    )
+    try:
+        hog = _hog_detector()
+        # winStride / scale tuned for broadcast-ish frames (and tiny synthetic clips).
+        boxes, weights = hog.detectMultiScale(
+            frame,
+            winStride=(8, 8),
+            padding=(8, 8),
+            scale=1.05,
+        )
+    except Exception:  # noqa: BLE001 — optional path must never break collect
+        return []
     found: list[SmartDetection] = []
     for (bx, by, bw, bh), weight in zip(boxes, weights, strict=False):
         if float(weight) < 0.3:
@@ -283,9 +294,10 @@ def detect_objects_smart(
         if yolo_hits:
             return merge_detections(yolo_hits, blob_hits)
 
-    hog_hits = detect_people_hog(frame)
-    if hog_hits:
-        return merge_detections(hog_hits, blob_hits)
+    if hog_available():
+        hog_hits = detect_people_hog(frame)
+        if hog_hits:
+            return merge_detections(hog_hits, blob_hits)
     return blob_hits
 
 
@@ -294,4 +306,6 @@ def detector_label() -> str:
 
     if yolo_available():
         return "YOLO person finder"
-    return "HOG person finder + pitch blobs"
+    if hog_available():
+        return "HOG person finder + pitch blobs"
+    return "pitch blobs only"
