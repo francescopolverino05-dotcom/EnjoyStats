@@ -46,6 +46,58 @@ def test_parse_distinti_score_and_players() -> None:
     assert payload["away_goals"] == 4
 
 
+def test_clean_film_rundown_cuts_shot_noise(monkeypatch) -> None:
+    monkeypatch.setenv("STATMAN_MAX_SHOTS", "6")
+    monkeypatch.setenv("STATMAN_MAX_SHOTS_PER_TEAM", "6")
+    monkeypatch.setenv("STATMAN_MAX_GOALS", "2")
+    monkeypatch.setenv("STATMAN_MAX_GOALS_PER_TEAM", "2")
+    from analytics.distinti import clean_film_rundown
+    from analytics.game_ingest import GamePayload, PlayerRosterEntry, collect_game
+
+    match_id = uuid4()
+    home_id = uuid4()
+    player = uuid4()
+    events = [
+        MatchEvent.model_validate(
+            {
+                "match_id": match_id,
+                "team_id": home_id,
+                "player_id": player,
+                "period": 1,
+                "minute": i % 45,
+                "second": 0,
+                "event_type": EventType.SHOT,
+                "is_goal": False,
+                "shot_outcome": ShotOutcome.MISSED,
+                "x": 88.0,
+                "y": 50.0,
+            }
+        )
+        for i in range(40)
+    ]
+    rundown = collect_game(
+        GamePayload(
+            match_id=match_id,
+            players=[
+                PlayerRosterEntry(
+                    player_id=player,
+                    team_id=home_id,
+                    jersey_number=9,
+                    player_name="Striker",
+                    position="ST",
+                )
+            ],
+            events=events,
+            home_team_name="Home",
+            away_team_name="Away",
+            tag_source="film",
+        )
+    )
+    assert rundown.summary.shots == 40
+    cleaned = clean_film_rundown(rundown)
+    assert cleaned.summary.shots <= 6
+
+
 def test_pin_rundown_score_fixes_bogus_film_score() -> None:
     from analytics.distinti import pin_rundown_score
     from analytics.game_ingest import GamePayload, PlayerRosterEntry, collect_game

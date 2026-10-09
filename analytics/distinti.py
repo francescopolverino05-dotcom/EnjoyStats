@@ -360,6 +360,36 @@ def _home_away_team_ids(rundown: Any) -> tuple[Any, Any]:
     return team_ids[0], team_ids[1]
 
 
+def clean_film_rundown(rundown: Any) -> Any:
+    """Re-fold a film sheet after scrubbing fake goals/shots (no re-watch)."""
+
+    from analytics.game_ingest import GamePayload, PlayerRosterEntry, collect_game
+    from analytics.statman_iq import sanitize_film_events
+
+    events = sanitize_film_events(list(rundown.events))
+    roster = [
+        PlayerRosterEntry(
+            player_id=player.player_id,
+            team_id=player.team_id,
+            jersey_number=player.jersey_number,
+            player_name=player.player_name or "",
+            position=player.position or "",
+        )
+        for player in rundown.players
+    ]
+    tag_source = getattr(rundown.summary, "tag_source", "film") or "film"
+    return collect_game(
+        GamePayload(
+            match_id=rundown.match_id,
+            players=roster,
+            events=events,
+            home_team_name=rundown.summary.home_team_name or "Home",
+            away_team_name=rundown.summary.away_team_name or "Away",
+            tag_source=tag_source,  # type: ignore[arg-type]
+        )
+    )
+
+
 def pin_rundown_score(
     rundown: Any,
     *,

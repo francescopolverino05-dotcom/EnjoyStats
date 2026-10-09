@@ -34,18 +34,26 @@ IQ_SOURCES: Final[tuple[tuple[str, str], ...]] = (
 )
 
 # --- Shot / goal gates (football, not NBA) ---------------------------------
-SHOT_MIN_GAP_S: Final[float] = 12.0
+# Real matches: ~8–25 shots. 12s gaps + loose geometry → 100+ fake shots.
+SHOT_MIN_GAP_S: Final[float] = 28.0
 GOAL_MIN_GAP_S: Final[float] = 60.0
-SHOT_MIN_TRAVEL: Final[float] = 14.0
-SHOT_MIN_SPEED: Final[float] = 24.0
+SHOT_MIN_TRAVEL: Final[float] = 16.0
+SHOT_MIN_SPEED: Final[float] = 32.0
+SHOT_MIN_X_PROGRESS: Final[float] = 8.0
 GOAL_MOUTH_X: Final[float] = 3.0
 GOAL_POST_Y_MIN: Final[float] = 38.0
 GOAL_POST_Y_MAX: Final[float] = 62.0
+# Central channel toward the posts (wider than the mouth, tighter than wings).
+SHOT_CHANNEL_Y_MIN: Final[float] = 28.0
+SHOT_CHANNEL_Y_MAX: Final[float] = 72.0
 # Sparse film needs a longer window to link shot → mouth.
 PENDING_SHOT_TTL_S: Final[float] = 5.0
 # Film CV hard caps — re-pass used to remint goals past the first-pass sanitize.
 DEFAULT_MAX_FILM_GOALS: Final[int] = 6
 DEFAULT_MAX_FILM_GOALS_PER_TEAM: Final[int] = 4
+# Shots (incl. goals) — 113 was box-traffic noise, not Opta shots.
+DEFAULT_MAX_FILM_SHOTS: Final[int] = 24
+DEFAULT_MAX_FILM_SHOTS_PER_TEAM: Final[int] = 16
 
 
 def max_film_goals() -> int:
@@ -76,6 +84,26 @@ def _demote_goal(event: MatchEvent) -> MatchEvent:
             "shot_outcome": event.shot_outcome or ShotOutcome.ON_TARGET,
         }
     )
+
+
+def max_film_shots() -> int:
+    raw = os.environ.get("STATMAN_MAX_SHOTS", "").strip()
+    if not raw:
+        return DEFAULT_MAX_FILM_SHOTS
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return DEFAULT_MAX_FILM_SHOTS
+
+
+def max_film_shots_per_team() -> int:
+    raw = os.environ.get("STATMAN_MAX_SHOTS_PER_TEAM", "").strip()
+    if not raw:
+        return DEFAULT_MAX_FILM_SHOTS_PER_TEAM
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return DEFAULT_MAX_FILM_SHOTS_PER_TEAM
 
 
 def sanitize_film_goals(events: list[MatchEvent]) -> list[MatchEvent]:
@@ -109,6 +137,72 @@ def sanitize_film_goals(events: list[MatchEvent]) -> list[MatchEvent]:
         total_kept += 1
         cleaned.append(event)
     return cleaned
+
+
+def _demote_shot_to_pass(event: MatchEvent) -> MatchEvent:
+    end_x = event.end_x if event.end_x is not None else min(99.0, float(event.x) + 5.0)
+    end_y = event.end_y if event.end_y is not None else float(event.y)
+    return event.model_copy(
+        update={
+            "event_type": EventType.PASS,
+            "is_goal": False,
+            "shot_outcome": None,
+            "successful": True,
+            "end_x": end_x,
+            "end_y": end_y,
+        }
+    )
+
+
+def sanitize_film_shots(events: list[MatchEvent]) -> list[MatchEvent]:
+    """Demote excess film shots to passes (Wyscout: shot = attempt to score).
+
+    Goals are kept (already goal-capped). Extra ``SHOT`` tags from box traffic
+    become passes. Cap is on shot attempts including goals.
+    """
+
+    per_team = max_film_shots_per_team()
+    total_limit = max_film_shots()
+    if per_team <= 0 and total_limit <= 0:
+        return events
+
+    kept_by_team: dict[object, int] = {}
+    total_kept = 0
+    cleaned: list[MatchEvent] = []
+    for event in events:
+        is_attempt = event.event_type in {EventType.SHOT, EventType.GOAL} or event.is_goal
+        if not is_attempt:
+            cleaned.append(event)
+            continue
+        team_key = event.team_id
+        team_count = kept_by_team.get(team_key, 0)
+        over_team = per_team > 0 and team_count >= per_team
+        over_total = total_limit > 0 and total_kept >= total_limit
+        # Never demote a kept goal here — goals already ran through sanitize_film_goals.
+        if (event.event_type is EventType.GOAL or event.is_goal) and not over_team and not over_total:
+            kept_by_team[team_key] = team_count + 1
+            total_kept += 1
+            cleaned.append(event)
+            continue
+        if event.event_type is EventType.GOAL or event.is_goal:
+            # Over shot budget but still a goal — keep the goal, count it.
+            kept_by_team[team_key] = team_count + 1
+            total_kept += 1
+            cleaned.append(event)
+            continue
+        if over_team or over_total:
+            cleaned.append(_demote_shot_to_pass(event))
+            continue
+        kept_by_team[team_key] = team_count + 1
+        total_kept += 1
+        cleaned.append(event)
+    return cleaned
+
+
+def sanitize_film_events(events: list[MatchEvent]) -> list[MatchEvent]:
+    """Full film noise scrub: goals first, then shot attempts."""
+
+    return sanitize_film_shots(sanitize_film_goals(events))
 
 # Half-spaces (Halbraum): between wing and centre — Spielverlagerung / CV.
 HALF_SPACE_Y_LO: Final[tuple[float, float]] = (20.0, 40.0)
@@ -299,24 +393,29 @@ def classify_strike(
         return StrikeVerdict(False, False, False, "gk_rule")
 
     toward_goal = abs(point[0] - attack_goal_x) < abs(start[0] - attack_goal_x)
+    x_progress = abs(start[0] - attack_goal_x) - abs(point[0] - attack_goal_x)
     box_x = 82.0 if attack_goal_x >= 50 else 18.0
-    in_box = point[0] >= box_x if attack_goal_x >= 50 else point[0] <= box_x
     start_in_box = start[0] >= box_x if attack_goal_x >= 50 else start[0] <= box_x
-    in_danger = is_wyscout_danger_zone(point[0], point[1], attack_goal_x=attack_goal_x)
     start_in_danger = is_wyscout_danger_zone(start[0], start[1], attack_goal_x=attack_goal_x)
     between_posts = GOAL_POST_Y_MIN <= point[1] <= GOAL_POST_Y_MAX
+    in_shot_channel = SHOT_CHANNEL_Y_MIN <= point[1] <= SHOT_CHANNEL_Y_MAX
+    start_central = SHOT_CHANNEL_Y_MIN <= start[1] <= SHOT_CHANNEL_Y_MAX
     at_mouth = abs(point[0] - attack_goal_x) <= GOAL_MOUTH_X and between_posts
-    wide = is_wing(point[1]) or is_wing(start[1])
-    strike = travel >= SHOT_MIN_TRAVEL or speed >= SHOT_MIN_SPEED
-    # Wyscout: scoring intent in box or danger zone; Opta: deliberate attempt on target.
-    shooting_zone = in_box or start_in_box or in_danger or start_in_danger
+    # Require a real strike: travel AND speed (noisy frame-steps alone are not shots).
+    strike = travel >= SHOT_MIN_TRAVEL and speed >= SHOT_MIN_SPEED
+    hard_strike = travel >= (SHOT_MIN_TRAVEL + 6.0) or speed >= (SHOT_MIN_SPEED + 12.0)
+    # Wyscout: attempt toward goal with scoring intent — must START in the
+    # shooting area. Ending in the box after a carry is not a shot.
+    take_off_zone = start_in_box or start_in_danger
     shot_like = (
         toward_goal
-        and shooting_zone
-        and strike
-        and not wide
+        and take_off_zone
+        and start_central
+        and in_shot_channel
+        and x_progress >= SHOT_MIN_X_PROGRESS
+        and (strike or (hard_strike and travel >= 12.0))
         and shot_gap_ok
-        and (gap_ok or at_mouth)
+        and gap_ok
     )
 
     # Goals only after a prior shot tag reaches the mouth. Instant

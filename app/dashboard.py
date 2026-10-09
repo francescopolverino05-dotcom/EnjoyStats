@@ -933,6 +933,10 @@ def render_perspective_banner(
     )
 
 
+def summary_shots_bogus(rundown: MatchRundown) -> bool:
+    return int(getattr(rundown.summary, "shots", 0) or 0) > 30
+
+
 def render_score_repin(rundown: MatchRundown) -> None:
     """Fix a wrong film scoreboard (e.g. 16–4) without re-watching."""
 
@@ -951,12 +955,31 @@ def render_score_repin(rundown: MatchRundown) -> None:
         # Names mismatched — fall back to sheet order for the default inputs only.
         cur_home = sheets[0].goals
         cur_away = sheets[1].goals if len(sheets) > 1 else 0
-    bogus = cur_home + cur_away > 8
-    with st.expander("Fix scoreline (distinti)", expanded=bogus):
+    bogus = cur_home + cur_away > 8 or summary_shots_bogus(rundown)
+    with st.expander("Fix film tags (shots / score)", expanded=bogus):
         st.caption(
-            "Film tagged too many goals. Enter the official result "
-            "(e.g. 0–4) to demote extras to shots — no re-analyse needed."
+            "Film CV invents box traffic as shots and goals. "
+            "Clean noise and/or pin the official score — no re-analyse needed."
         )
+        if st.button(
+            "Clean fake shots & goals",
+            use_container_width=True,
+            key="clean_film_noise",
+        ):
+            try:
+                from analytics.distinti import clean_film_rundown
+
+                updated = clean_film_rundown(rundown)
+                st.session_state[RUNDOWN_KEY] = rundown_to_json(updated)
+                history_msg = _remember_collection(updated)
+                st.session_state[PERSIST_KEY] = f"Film tags cleaned · {history_msg}"
+                st.success(
+                    f"Cleaned · {updated.summary.shots} shots · "
+                    f"{updated.summary.goals} goals"
+                )
+                st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
         cols = st.columns(2)
         with cols[0]:
             fix_home = st.number_input(
