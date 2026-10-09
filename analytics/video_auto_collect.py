@@ -1481,6 +1481,9 @@ def events_from_tracks(
                 if other.team != owner.team and dist < closest_opp:
                     closest_opp = dist
                     opponent = other
+            possession_changed = (
+                last_owner is not None and owner.team != last_owner.team
+            )
             if opponent is not None and closest_opp <= 9.0 and due and travel < 8.0:
                 _emit(
                     {
@@ -1494,14 +1497,68 @@ def events_from_tracks(
                     }
                 )
                 tagged = True
-            elif last_owner is not None and owner.team != last_owner.team and due:
-                # One recovery tag — not lost+intercept+recovery every 2.8s.
+            elif (
+                possession_changed
+                and travel >= 6.0
+                and gap_ok
+            ):
+                # Ball left team A and the next touch is team B → misplaced pass
+                # (Wyscout: unsuccessful if next touch is not a teammate), then
+                # one recovery for the new owner — not a completed A→A pass.
+                kind = classify_distribution(
+                    start=start,
+                    point=point,
+                    travel=travel,
+                    toward_goal=toward_goal,
+                    in_box=in_box,
+                    touchline=touchline,
+                    corner=corner,
+                    actor_is_gk=actor_is_gk,
+                )
+                if kind in {EventType.CORNER, EventType.THROW_IN, EventType.FREE_KICK}:
+                    kind = EventType.PASS
+                passer_id = player_ids[last_owner.track_id]
                 _emit(
                     {
                         **payload,
-                        "team_id": team_ids[owner.team],
+                        "team_id": locked_team_by_player.get(
+                            passer_id, team_ids[last_owner.team]
+                        ),
+                        "player_id": passer_id,
+                        "event_type": kind,
+                        "successful": False,
+                        "is_progressive": False,
+                    }
+                )
+                _emit(
+                    {
+                        **payload,
+                        "team_id": locked_team_by_player.get(
+                            player_ids[owner.track_id], team_ids[owner.team]
+                        ),
                         "player_id": player_ids[owner.track_id],
                         "event_type": EventType.BALL_RECOVERY,
+                        "successful": True,
+                        "is_progressive": False,
+                        "end_x": None,
+                        "end_y": None,
+                        "x": point[0],
+                        "y": point[1],
+                    }
+                )
+                tagged = True
+            elif possession_changed and due:
+                # Short steal / loose ball — recovery only (no pass attempt).
+                _emit(
+                    {
+                        **payload,
+                        "team_id": locked_team_by_player.get(
+                            player_ids[owner.track_id], team_ids[owner.team]
+                        ),
+                        "player_id": player_ids[owner.track_id],
+                        "event_type": EventType.BALL_RECOVERY,
+                        "successful": True,
+                        "is_progressive": False,
                         "end_x": None,
                         "end_y": None,
                         "x": point[0],
@@ -1511,6 +1568,7 @@ def events_from_tracks(
                 tagged = True
             elif (
                 last_owner is not None
+                and not possession_changed
                 and not _same_actor(last_owner, owner, lookup, frame_index)
                 and travel >= 6.0
                 and gap_ok
@@ -1529,13 +1587,16 @@ def events_from_tracks(
                     payload["is_progressive"] = True
                 elif kind is EventType.PASS and travel >= 18.0 and toward_goal:
                     payload["is_progressive"] = True
-                extra: dict[str, object] = {"event_type": kind}
+                extra: dict[str, object] = {
+                    "event_type": kind,
+                    "successful": True,
+                }
                 if kind in {EventType.CORNER, EventType.THROW_IN}:
                     extra["end_x"] = point[0]
                     extra["end_y"] = point[1]
                 _emit({**payload, **extra})
                 tagged = True
-            elif due and travel >= 12.0 and toward_goal:
+            elif due and travel >= 12.0 and toward_goal and not possession_changed:
                 # Sparse film: only recycle a possession pass on a clear advance.
                 kind = classify_distribution(
                     start=start,
@@ -1549,7 +1610,7 @@ def events_from_tracks(
                 )
                 if kind is EventType.CROSS and actor_is_gk:
                     kind = EventType.PASS
-                _emit({**payload, "event_type": kind})
+                _emit({**payload, "event_type": kind, "successful": True})
                 tagged = True
 
         if tagged:
