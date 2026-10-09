@@ -17,7 +17,7 @@ from typing import Final
 from analytics.event_registry import is_wyscout_danger_zone
 from data_models.events import EventType, MatchEvent, ShotOutcome
 
-# Feed these into the agent / glossary when tightening rules further.
+# Operator-fed sources (ingested into glossary + classifiers).
 IQ_SOURCES: Final[tuple[tuple[str, str], ...]] = (
     ("Wyscout Data Glossary", "https://dataglossary.wyscout.com/"),
     ("Wyscout Shot", "https://dataglossary.wyscout.com/shot/"),
@@ -31,7 +31,6 @@ IQ_SOURCES: Final[tuple[tuple[str, str], ...]] = (
     ),
     ("Spielverlagerung (tactics)", "https://spielverlagerung.com/"),
     ("Coaches' Voice", "https://www.coachesvoice.com/"),
-    ("Kloppy event types (cross-provider)", "https://kloppy.pysport.org/"),
 )
 
 # --- Shot / goal gates (football, not NBA) ---------------------------------
@@ -96,6 +95,9 @@ HALF_SPACE_Y_LO: Final[tuple[float, float]] = (20.0, 40.0)
 HALF_SPACE_Y_HI: Final[tuple[float, float]] = (60.0, 80.0)
 WING_Y_LO: Final[float] = 18.0
 WING_Y_HI: Final[float] = 82.0
+# Wyscout cross flanks: pitch width in thirds (~68m → leftmost / rightmost third).
+CROSS_FLANK_Y_LO: Final[float] = 33.8
+CROSS_FLANK_Y_HI: Final[float] = 66.2
 
 
 class GamePhase(StrEnum):
@@ -154,22 +156,34 @@ GLOSSARY: dict[str, str] = {
     "depth": "Space behind the opponent’s last line.",
     "switch_of_play": "Moving the ball quickly from one wing to the other.",
     "cutback": "A pass pulled back from the byline toward the penalty spot / late runners.",
-    "cross": (
-        "Flank delivery into the penalty area — open play only (Wyscout/Opta). "
-        "Not counted as a pass in Opta pass stats."
-    ),
     "shot": (
-        "Deliberate attempt to score (Wyscout/Opta/StatsBomb). On film: real strike "
-        "in the box or Wyscout danger zone — not a dribble."
+        "Wyscout: attempt towards the opposition goal with intent to score "
+        "(blocked / penalties / direct FK count). On film: real strike in the box "
+        "or danger zone — not a dribble. Keepers never shoot."
     ),
-    "goal": "Ball reaches the goal mouth between the posts after a shot.",
-    "pass": ("Delivery to a teammate (Wyscout/Opta). Crosses and throw-ins are separate."),
+    "goal": (
+        "Wyscout: shot with Goal=Yes. On film: only after a shot reaches the mouth, "
+        "then capped to the distinti scoreline (extra film goals → shots)."
+    ),
+    "pass": (
+        "Wyscout: attempt to pass to a teammate; successful if next touch is a "
+        "teammate. Excludes throw-ins / corner crosses / FK crosses from pass totals. "
+        "Opta counts crosses separately from pass totals."
+    ),
+    "cross": (
+        "Wyscout: open-play ball from the offensive flanks (outer thirds of width) "
+        "aimed at a teammate in front of the opponent goal — not corners/FK."
+    ),
     "interception": "Cutting out a pass by reading the lane (Opta/StatsBomb).",
     "ball_recovery": (
         "First touch starting your possession after winning the ball in open play "
         "(Wyscout recovery / Opta ball recovery)."
     ),
     "danger_zone": ("Wyscout central shooting band (x≥84.29, y 36.29–63.71 on 0–100 pitch)."),
+    "distinti_score": (
+        "Official home–away goals from the match sheet are law for film Analyse. "
+        "Never let every shot near the net become a goal."
+    ),
 }
 
 
@@ -204,6 +218,12 @@ def is_half_space(y: float) -> bool:
 
 def is_wing(y: float) -> bool:
     return pitch_lane(y) in {PitchLane.LEFT_WING, PitchLane.RIGHT_WING}
+
+
+def is_cross_flank(y: float) -> bool:
+    """Wyscout flank thirds for open-play crosses (0–100 pitch width)."""
+
+    return y <= CROSS_FLANK_Y_LO or y >= CROSS_FLANK_Y_HI
 
 
 def defensive_block_for_line(
@@ -311,7 +331,6 @@ def classify_distribution(
         return EventType.THROW_IN
 
     start_lane = pitch_lane(start[1])
-    end_lane = pitch_lane(point[1])
     from_byline = start[0] >= 90.0 or start[0] <= 10.0
     pulling_back = (not toward_goal) and in_box and travel >= 8.0
     if (
@@ -327,11 +346,14 @@ def classify_distribution(
     ):
         return EventType.CUTBACK
 
-    wing_delivery = start_lane in {PitchLane.LEFT_WING, PitchLane.RIGHT_WING} or end_lane in {
-        PitchLane.LEFT_WING,
-        PitchLane.RIGHT_WING,
-    }
-    if wing_delivery and in_box and toward_goal and travel >= 10.0 and not actor_is_gk:
+    # Wyscout Cross: open-play delivery from offensive flanks into the box.
+    if (
+        is_cross_flank(start[1])
+        and in_box
+        and toward_goal
+        and travel >= 10.0
+        and not actor_is_gk
+    ):
         return EventType.CROSS
 
     # StatsBomb clearance / Wyscout loss point: GK hoof in own third stays a pass.

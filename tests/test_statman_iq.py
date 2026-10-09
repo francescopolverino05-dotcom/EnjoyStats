@@ -10,6 +10,7 @@ from analytics.statman_iq import (
     PitchLane,
     classify_distribution,
     classify_strike,
+    is_cross_flank,
     is_goalkeeper_actor,
     pitch_lane,
     progressive_from_half_space,
@@ -26,8 +27,40 @@ def test_glossary_has_gk_rule_and_core_terms() -> None:
     assert "goal" in GLOSSARY
     assert "danger_zone" in GLOSSARY
     assert "pass" in GLOSSARY
+    assert "cross" in GLOSSARY
+    assert "distinti_score" in GLOSSARY
     assert any("wyscout.com" in url for _title, url in IQ_SOURCES)
     assert any("opta-event" in url for _title, url in IQ_SOURCES)
+    assert any("coachesvoice.com" in url for _title, url in IQ_SOURCES)
+    assert any("spielverlagerung.com" in url for _title, url in IQ_SOURCES)
+
+
+def test_wyscout_cross_requires_flank_origin() -> None:
+    assert is_cross_flank(10.0)
+    assert is_cross_flank(90.0)
+    assert not is_cross_flank(50.0)
+    cross = classify_distribution(
+        start=(80.0, 10.0),
+        point=(90.0, 50.0),
+        travel=45.0,
+        toward_goal=True,
+        in_box=True,
+        touchline=False,
+        corner=False,
+        actor_is_gk=False,
+    )
+    assert cross is EventType.CROSS
+    centre_pass = classify_distribution(
+        start=(80.0, 50.0),
+        point=(90.0, 50.0),
+        travel=20.0,
+        toward_goal=True,
+        in_box=True,
+        touchline=False,
+        corner=False,
+        actor_is_gk=False,
+    )
+    assert centre_pass is EventType.PASS
 
 
 def test_sanitize_film_goals_demotes_excess(monkeypatch) -> None:

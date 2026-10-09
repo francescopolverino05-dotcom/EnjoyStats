@@ -57,11 +57,14 @@ EVENT_REGISTRY: dict[EventType, EventDefinition] = {
     EventType.CROSS: EventDefinition(
         event_type=EventType.CROSS,
         summary="Delivery from a flank into the box.",
-        wyscout="Cross — from offensive flank into the penalty area; open play only.",
+        wyscout=(
+            "Cross — open-play ball from offensive flanks aimed at a teammate "
+            "in front of the opponent goal; not corners/FK. Flanks = outer thirds."
+        ),
         opta="Cross — wide delivery targeting teammates in front of goal.",
         statsbomb="Pass with cross attribute into the penalty area.",
         coaches_voice="Wide delivery from full-back or winger.",
-        film_note="Wing or half-space origin, into the box, toward goal.",
+        film_note="Start in outer-third flank, end in box, toward goal (open play).",
     ),
     EventType.CUTBACK: EventDefinition(
         event_type=EventType.CUTBACK,
@@ -97,7 +100,10 @@ EVENT_REGISTRY: dict[EventType, EventDefinition] = {
         opta="Goal attributed to scorer or own-goal defender.",
         statsbomb="Goal event following a scoring shot.",
         coaches_voice="Finished attack.",
-        film_note="Ball at goal mouth between the posts after a strike.",
+        film_note=(
+            "Shot→mouth only, then capped to distinti scoreline "
+            "(home–away goals are law; extras demoted to shots)."
+        ),
     ),
     EventType.ASSIST: EventDefinition(
         event_type=EventType.ASSIST,
