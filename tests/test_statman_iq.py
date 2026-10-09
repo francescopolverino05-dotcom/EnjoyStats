@@ -2,16 +2,20 @@
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 from analytics.statman_iq import (
     GLOSSARY,
+    IQ_SOURCES,
     PitchLane,
     classify_distribution,
     classify_strike,
     is_goalkeeper_actor,
     pitch_lane,
     progressive_from_half_space,
+    sanitize_film_goals,
 )
-from data_models.events import EventType
+from data_models.events import EventType, MatchEvent, ShotOutcome
 
 
 def test_glossary_has_gk_rule_and_core_terms() -> None:
@@ -22,6 +26,38 @@ def test_glossary_has_gk_rule_and_core_terms() -> None:
     assert "goal" in GLOSSARY
     assert "danger_zone" in GLOSSARY
     assert "pass" in GLOSSARY
+    assert any("wyscout.com" in url for _title, url in IQ_SOURCES)
+    assert any("opta-event" in url for _title, url in IQ_SOURCES)
+
+
+def test_sanitize_film_goals_demotes_excess(monkeypatch) -> None:
+    monkeypatch.setenv("STATMAN_MAX_GOALS", "2")
+    match_id = uuid4()
+    team_id = uuid4()
+    player_id = uuid4()
+    events = [
+        MatchEvent.model_validate(
+            {
+                "match_id": match_id,
+                "team_id": team_id,
+                "player_id": player_id,
+                "period": 1,
+                "minute": i,
+                "second": 0,
+                "event_type": EventType.GOAL,
+                "is_goal": True,
+                "shot_outcome": ShotOutcome.ON_TARGET,
+                "x": 90.0,
+                "y": 50.0,
+            }
+        )
+        for i in range(5)
+    ]
+    cleaned = sanitize_film_goals(events)
+    goals = [event for event in cleaned if event.is_goal or event.event_type is EventType.GOAL]
+    shots = [event for event in cleaned if event.event_type is EventType.SHOT]
+    assert len(goals) == 2
+    assert len(shots) == 3
 
 
 def test_gk_rule_blocks_shots_and_goals() -> None:

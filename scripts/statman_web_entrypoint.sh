@@ -38,11 +38,12 @@ export STATMAN_WORKER_POLL_S="${STATMAN_WORKER_POLL_S:-3}"
 export MPLBACKEND="${MPLBACKEND:-Agg}"
 # Embed Web dyno: no fork (OOM). Keep YOLO — OpenCV 5 often has no HOGDescriptor.
 export STATMAN_COLLECT_INPROCESS="${STATMAN_COLLECT_INPROCESS:-1}"
-# 5 Hz / 720px: better kit+ball tracks than 3/640 (which minted ~20 false goals).
-export STATMAN_SAMPLE_HZ="${STATMAN_SAMPLE_HZ:-5}"
-export STATMAN_MAX_SIDE="${STATMAN_MAX_SIDE:-720}"
+# Accuracy knobs (needs ≥8 GB Web RAM). Lower Hz = more false goals.
+export STATMAN_SAMPLE_HZ="${STATMAN_SAMPLE_HZ:-6}"
+export STATMAN_MAX_SIDE="${STATMAN_MAX_SIDE:-800}"
 export STATMAN_DISABLE_YOLO="${STATMAN_DISABLE_YOLO:-0}"
-export STATMAN_MAX_SAMPLE_FRAMES="${STATMAN_MAX_SAMPLE_FRAMES:-48000}"
+export STATMAN_MAX_SAMPLE_FRAMES="${STATMAN_MAX_SAMPLE_FRAMES:-54000}"
+export STATMAN_MAX_GOALS="${STATMAN_MAX_GOALS:-8}"
 # Keep OpenCV / BLAS / torch from spawning thread storms on a small dyno.
 export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
 export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"

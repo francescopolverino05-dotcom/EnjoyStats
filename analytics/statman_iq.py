@@ -1,10 +1,6 @@
 """StatMan IQ — tactical glossary + classifiers for match film auto-tag.
 
-Sources (simplified wording for operators and CV rules):
-- Operator tactical glossary (JMftbl, Spielverlagerung, Coaches' Voice)
-- Wyscout Data Glossary — https://dataglossary.wyscout.com/
-- Opta Event Definitions — https://www.statsperform.com/opta-event-definitions/
-- StatsBomb Open Data — https://github.com/statsbomb/open-data
+Sources (simplified wording for operators and CV rules) — see ``IQ_SOURCES``.
 
 Event vocabulary is aligned in :mod:`analytics.event_registry`. Film CV is
 still geometry — StatMan IQ is the football brain that stops nonsense like
@@ -13,23 +9,87 @@ still geometry — StatMan IQ is the football brain that stops nonsense like
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Final
 
 from analytics.event_registry import is_wyscout_danger_zone
-from data_models.events import EventType, ShotOutcome
+from data_models.events import EventType, MatchEvent, ShotOutcome
+
+# Feed these into the agent / glossary when tightening rules further.
+IQ_SOURCES: Final[tuple[tuple[str, str], ...]] = (
+    ("Wyscout Data Glossary", "https://dataglossary.wyscout.com/"),
+    ("Wyscout Shot", "https://dataglossary.wyscout.com/shot/"),
+    ("Wyscout Pass", "https://dataglossary.wyscout.com/pass/"),
+    ("Wyscout Cross", "https://dataglossary.wyscout.com/cross/"),
+    ("Opta Event Definitions", "https://www.statsperform.com/opta-event-definitions/"),
+    ("StatsBomb Open Data", "https://github.com/statsbomb/open-data"),
+    (
+        "StatsBomb Events Spec v4",
+        "https://github.com/statsbomb/open-data/blob/master/doc/Open%20Data%20Events%20v4.0.0.pdf",
+    ),
+    ("Spielverlagerung (tactics)", "https://spielverlagerung.com/"),
+    ("Coaches' Voice", "https://www.coachesvoice.com/"),
+    ("Kloppy event types (cross-provider)", "https://kloppy.pysport.org/"),
+)
 
 # --- Shot / goal gates (football, not NBA) ---------------------------------
-SHOT_MIN_GAP_S: Final[float] = 10.0
-GOAL_MIN_GAP_S: Final[float] = 45.0
-SHOT_MIN_TRAVEL: Final[float] = 12.0
-SHOT_MIN_SPEED: Final[float] = 22.0
-GOAL_MOUTH_X: Final[float] = 3.5
-GOAL_POST_Y_MIN: Final[float] = 36.0
-GOAL_POST_Y_MAX: Final[float] = 64.0
-# Sparse film (3–5 Hz) needs a longer window to link shot → mouth.
-PENDING_SHOT_TTL_S: Final[float] = 4.0
+SHOT_MIN_GAP_S: Final[float] = 12.0
+GOAL_MIN_GAP_S: Final[float] = 60.0
+SHOT_MIN_TRAVEL: Final[float] = 14.0
+SHOT_MIN_SPEED: Final[float] = 24.0
+GOAL_MOUTH_X: Final[float] = 3.0
+GOAL_POST_Y_MIN: Final[float] = 38.0
+GOAL_POST_Y_MAX: Final[float] = 62.0
+# Sparse film needs a longer window to link shot → mouth.
+PENDING_SHOT_TTL_S: Final[float] = 5.0
+# Film CV hard cap — real matches almost never need more; 20 goals was noise.
+DEFAULT_MAX_FILM_GOALS: Final[int] = 8
+
+
+def max_film_goals() -> int:
+    raw = os.environ.get("STATMAN_MAX_GOALS", "").strip()
+    if not raw:
+        return DEFAULT_MAX_FILM_GOALS
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return DEFAULT_MAX_FILM_GOALS
+
+
+def sanitize_film_goals(events: list[MatchEvent]) -> list[MatchEvent]:
+    """Demote excess film goals to shots (Opta: goal = deliberate attempt that scores).
+
+    Sparse tracking invents dozens of mouth hits; keep the earliest goals only.
+    """
+
+    limit = max_film_goals()
+    if limit <= 0:
+        return events
+    goal_idxs = [
+        i
+        for i, event in enumerate(events)
+        if event.event_type is EventType.GOAL or event.is_goal
+    ]
+    if len(goal_idxs) <= limit:
+        return events
+    drop = set(goal_idxs[limit:])
+    cleaned: list[MatchEvent] = []
+    for i, event in enumerate(events):
+        if i not in drop:
+            cleaned.append(event)
+            continue
+        cleaned.append(
+            event.model_copy(
+                update={
+                    "event_type": EventType.SHOT,
+                    "is_goal": False,
+                    "shot_outcome": event.shot_outcome or ShotOutcome.ON_TARGET,
+                }
+            )
+        )
+    return cleaned
 
 # Half-spaces (Halbraum): between wing and centre — Spielverlagerung / CV.
 HALF_SPACE_Y_LO: Final[tuple[float, float]] = (20.0, 40.0)

@@ -1518,7 +1518,9 @@ def events_from_tracks(
             )
     if not events:
         raise VideoCollectError("The film produced no collectable actions.")
-    return events, roster
+    from analytics.statman_iq import sanitize_film_goals
+
+    return sanitize_film_goals(events), roster
 
 
 def sample_and_track(
