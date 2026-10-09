@@ -120,9 +120,10 @@ def test_dashboard_renders_analyse_landing(tmp_path, monkeypatch) -> None:
     at.run()
     assert not at.exception
     titles = [str(element.value) for element in at.title]
-    assert any("EnjoyStats" in title for title in titles)
+    assert not any("EnjoyStats" in title for title in titles)
     sidebar_headers = [str(element.value) for element in at.sidebar.header]
-    assert any("EnjoyStats" in header for header in sidebar_headers)
+    assert any("Settings" in header for header in sidebar_headers)
+    assert not any("EnjoyStats" in header for header in sidebar_headers)
     nav = next(radio for radio in at.radio if set(radio.options) >= {"Home", "History"})
     assert nav.value == "Home"
     select_labels = [str(element.label) for element in at.selectbox]
@@ -130,20 +131,16 @@ def test_dashboard_renders_analyse_landing(tmp_path, monkeypatch) -> None:
     assert not any("Cookies from browser" in label for label in select_labels)
     input_labels = [str(element.label) for element in at.text_input]
     assert not any("Register a link" in label for label in input_labels)
-    captions = [str(element.value) for element in at.caption]
-    assert any("oncesport" in caption.lower() or "xml" in caption.lower() for caption in captions)
-    assert any(
-        "chunk" in caption.lower() or "upload" in caption.lower() or "film" in caption.lower()
-        for caption in captions
-    ) or any("upload match film" in str(element.value).lower() for element in at.markdown)
     buttons = [str(element.label) for element in at.button]
     assert any("Analyse Stats" in label for label in buttons)
-    assert any("Napoleon Bot" in label for label in buttons)
+    assert not any("Napoleon Bot" in label for label in buttons)
     subheaders = [str(element.value) for element in at.subheader]
-    assert any("Analyse Stats" in header for header in subheaders)
+    assert any("Match film" in header for header in subheaders)
+    assert any("Line-up CSV" in header for header in subheaders)
+    assert any("Distinti PDF" in header for header in subheaders)
     expanders = [str(element.label) for element in at.expander]
-    assert any("OnceSport" in label or "XML" in label for label in expanders)
-    assert any("StatMan" in label or "Grok" in label for label in expanders)
+    assert not any("StatMan" in label or "Grok" in label for label in expanders)
+    assert not any("distinti" in label.lower() and "boost" in label.lower() for label in expanders)
     analyse = next(button for button in at.button if str(button.label) == "Analyse Stats")
     analyse.click().run()
     assert not at.exception
@@ -183,7 +180,7 @@ def test_analyse_uses_newest_uploaded_film(tmp_path, monkeypatch) -> None:
     assert "gw1.mp4" in str(status.get("film") or "")
 
 
-def test_landing_sample_opens_tag_inventory(tmp_path, monkeypatch) -> None:
+def test_sidebar_sample_opens_tag_inventory(tmp_path, monkeypatch) -> None:
     from streamlit.testing.v1 import AppTest
 
     from analytics.collection_history import list_history
@@ -196,7 +193,9 @@ def test_landing_sample_opens_tag_inventory(tmp_path, monkeypatch) -> None:
     at = AppTest.from_file(str(script), default_timeout=20)
     at.run()
     assert not at.exception
-    sample = next(button for button in at.button if "Napoleon Bot" in str(button.label))
+    sample = next(
+        button for button in at.sidebar.button if "Load sample match" in str(button.label)
+    )
     sample.click().run()
     assert not at.exception
     subheaders = [str(element.value) for element in at.subheader]
@@ -255,7 +254,9 @@ def test_collected_rundown_shows_match_tags(tmp_path, monkeypatch) -> None:
     buttons = [str(element.label) for element in at.button]
     assert any("Analyse Stats" in label for label in buttons)
     subheaders_home = [str(element.value) for element in at.subheader]
-    assert any("Analyse Stats" in header for header in subheaders_home)
+    assert any("Match film" in header for header in subheaders_home)
+    assert any("Line-up CSV" in header for header in subheaders_home)
+    assert any("Distinti PDF" in header for header in subheaders_home)
 
 
 def test_history_tab_lists_saved_collect_and_opens_match(tmp_path, monkeypatch) -> None:

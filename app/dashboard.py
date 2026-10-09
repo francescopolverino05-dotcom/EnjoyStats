@@ -1,4 +1,4 @@
-"""EnjoyStats Streamlit dashboard — Analyse Stats plus collective team pillars.
+"""StatMan Streamlit dashboard — Analyse Stats plus collective team pillars.
 
 Launch from the repository root::
 
@@ -46,7 +46,6 @@ importlib.reload(_team_collect_mod)
 from app.ingest import (
     UPLOAD_DISCONNECT_HINT,
     collect_from_film_path,
-    collect_official_two_team,
     collect_sample_match,
     collect_uploaded_bytes,
     film_has_official_tags,
@@ -77,7 +76,6 @@ from analytics.video_auto_collect import (
     film_inbox_dir,
     film_upload_dir,
     safe_film_name,
-    video_limit_label,
 )
 from api.film_upload import upload_page_html
 from api.supervisor import api_is_healthy, ensure_api_running
@@ -86,14 +84,6 @@ from analytics.collection_history import (
     list_history,
     load_history_rundown,
     save_rundown_to_history,
-)
-from analytics.smart_detect import detector_label
-from analytics.statman import (
-    statman_bot_url,
-    statman_webhook_key,
-    statman_webhook_url,
-    trigger_statman_analyse,
-    webhook_configured,
 )
 from analytics.game_ingest import MatchRundown, rundown_from_mapping, rundown_to_json
 from analytics.match_report_pdf import build_match_report_pdf
@@ -812,7 +802,6 @@ def render_dashboard(
         header_l, header_r = st.columns([3, 1])
         with header_l:
             jersey = f"#{profile.jersey_number} " if profile.jersey_number else ""
-            st.title("EnjoyStats")
             st.markdown("### Player match dashboard")
             st.write(
                 f"{jersey}{name}  ·  {profile.position or 'Player'}  ·  "
@@ -950,13 +939,7 @@ def render_match_summary(rundown: MatchRundown) -> None:
     summary = rundown.summary
     perspective = analysis_perspective(rundown)
     tag_source = getattr(rundown.summary, "tag_source", "official") or "official"
-    st.title("EnjoyStats")
     st.subheader("Match rundown")
-    st.caption(
-        "These tags are already collected — an analyst does not have to click "
-        "every shot, pass, or corner. Your one-team XML is the analysed-side "
-        "sheet; film Analyse Stats auto-tags both teams from the match film."
-    )
     render_perspective_banner(perspective, tag_source=tag_source)
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Events", summary.event_count)
@@ -1298,12 +1281,7 @@ def render_sidebar() -> str:
     inbox_dir.mkdir(parents=True, exist_ok=True)
     film_upload_dir().mkdir(parents=True, exist_ok=True)
 
-    st.sidebar.header("EnjoyStats")
-    st.sidebar.caption(
-        "Upload the match film on the home page (one path), "
-        "then Analyse Stats. A full film can take hours — "
-        "the tag sheet is waiting when you come back."
-    )
+    st.sidebar.header("Settings")
     base_url = st.sidebar.text_input("FastAPI base URL", value=DEFAULT_BASE_URL).strip()
     if not base_url:
         base_url = DEFAULT_BASE_URL
@@ -1363,13 +1341,7 @@ def render_sidebar() -> str:
 def render_job_progress(status: dict[str, object]) -> None:
     """Main-panel watch for a hours-long background analyse."""
 
-    st.title("EnjoyStats")
     st.subheader("Analysing match")
-    st.caption(
-        "Watching the whole film at Wyscout tag density. "
-        "You can close this tab — come back later and refresh. "
-        "This page also rechecks while it stays open."
-    )
     fraction = float(status.get("fraction") or 0.0)
     label = str(status.get("label") or "Watching the film…")
     state = str(status.get("state") or "").strip().lower()
@@ -1407,70 +1379,6 @@ def render_job_progress(status: dict[str, object]) -> None:
             "`[statman-worker] starting ….status.json`. "
             "A separate Worker service is optional."
         )
-
-
-def render_statman_panel() -> None:
-    """Optional external StatMan import — EnjoyStats collects on its own."""
-
-    bot_url = statman_bot_url()
-    with st.expander("Optional: import XML from StatMan (Grok Bot)", expanded=False):
-        st.caption(
-            "EnjoyStats tags films in-house and exports OnceSport Home/Away XMLs. "
-            "You do not need Grokbot. This panel is only if you already have "
-            "XML from an external tool and want to import it."
-        )
-        st.link_button("Open StatMan (external)", bot_url, use_container_width=True)
-        with st.expander("StatMan webhook (optional)", expanded=False):
-            default_url = str(st.session_state.get("statman_webhook_url") or statman_webhook_url())
-            default_key = str(st.session_state.get("statman_webhook_key") or statman_webhook_key())
-            hook_url = st.text_input(
-                "Webhook URL",
-                value=default_url,
-                placeholder="https://… (from StatMan routine → Webhook → POST to)",
-                key="statman_webhook_url_input",
-            ).strip()
-            hook_key = st.text_input(
-                "Webhook key",
-                value=default_key,
-                type="password",
-                placeholder="Bearer key from the routine",
-                key="statman_webhook_key_input",
-            ).strip()
-            film_hint = st.text_input(
-                "Film path or URL for StatMan",
-                value="",
-                placeholder="https://… or /path/to/match.mp4",
-                key="statman_film_hint",
-            ).strip()
-            home_hint = st.text_input(
-                "Home team (optional)", value="", key="statman_home_hint"
-            ).strip()
-            away_hint = st.text_input(
-                "Away team (optional)", value="", key="statman_away_hint"
-            ).strip()
-            if st.button(
-                "Ask StatMan to analyse",
-                use_container_width=True,
-                key="statman_trigger",
-                disabled=not webhook_configured(url=hook_url, key=hook_key),
-            ):
-                try:
-                    st.session_state["statman_webhook_url"] = hook_url
-                    st.session_state["statman_webhook_key"] = hook_key
-                    result = trigger_statman_analyse(
-                        webhook_url=hook_url,
-                        webhook_key=hook_key,
-                        film=film_hint,
-                        home_team=home_hint,
-                        away_team=away_hint,
-                    )
-                    st.success(str(result["message"]))
-                except ValueError as exc:
-                    st.error(str(exc))
-            if not webhook_configured(url=hook_url, key=hook_key):
-                st.caption(
-                    "No webhook configured — skip this; use Analyse Stats on a film instead."
-                )
 
 
 def _env_flag(name: str) -> bool:
@@ -1518,13 +1426,9 @@ def _ensure_api_watchdog() -> None:
 def render_streamlit_film_uploader() -> None:
     """Save a match film into the shared /data inbox (Railway-safe)."""
 
-    st.markdown("**Upload match film**")
-    st.caption(
-        f"Saved into the shared inbox (up to {video_limit_label()}). "
-        "When it says Saved, click Analyse Stats below."
-    )
+    st.subheader("Match film")
     uploaded = st.file_uploader(
-        "Match film",
+        "Upload match film",
         type=[suffix.lstrip(".") for suffix in VIDEO_SUFFIXES],
         key="analyse_streamlit_film",
     )
@@ -1585,49 +1489,22 @@ def render_film_uploader_panel(base_url: str) -> None:
     ):
         st.warning(
             "Sidebar FastAPI URL is unreachable from this machine. "
-            "Uploads still go to the always-on local API on :8000 "
-            "(or use the portal try-link for phones)."
+            "Uploads still go to the always-on local API on :8000."
         )
-    st.markdown("**Upload match film**")
-    st.caption(
-        f"One path only — 4 MB chunks with retries (up to {video_limit_label()}). "
-        "The upload API is kept running automatically. "
-        "When it says Saved, click Analyse Stats below."
-    )
+    st.subheader("Match film")
     if status.get("started"):
         st.success("Upload API was down — started it automatically.")
     st.link_button("Open uploader full-screen", upload_url)
     import streamlit.components.v1 as components
 
-    components.html(upload_page_html(api_for_browser), height=420, scrolling=False)
+    components.html(upload_page_html(api_for_browser), height=320, scrolling=False)
 
 
 def render_analyse_landing(base_url: str) -> None:
-    """One upload → Analyse Stats → Review → Home/Away XML."""
+    """Home: match film + line-up CSV + distinti PDF, then Analyse."""
 
-    upload_dir = film_upload_dir()
-    st.title("EnjoyStats")
-    st.caption(
-        "Upload a match film → Analyse Stats → "
-        "Review tags (fix only wrong rows) → download Home / Away XMLs."
-    )
-    if st.button(
-        "Load sample · Napoleon Bot vs 80s Jeans",
-        use_container_width=True,
-        key="landing_sample",
-    ):
-        sample_error = _load_sample_match(base_url)
-        if sample_error:
-            st.error(sample_error)
-        else:
-            st.rerun()
+    import json as _json
 
-    st.subheader("Analyse Stats")
-    st.caption(
-        f"Watcher: **{detector_label()}**. "
-        "Set kit colours so Home and Away stay separate. "
-        "Then download Home.xml + Away.xml with your OnceSport buttons."
-    )
     name_cols = st.columns(2)
     with name_cols[0]:
         home_team_name = st.text_input("Home team", value="Home", key="analyse_home_name").strip()
@@ -1638,174 +1515,164 @@ def render_analyse_landing(base_url: str) -> None:
         home_kit_hex = st.color_picker("Home kit colour", value="#1e3a8a", key="analyse_home_kit")
     with kit_cols[1]:
         away_kit_hex = st.color_picker("Away kit colour", value="#dc2626", key="analyse_away_kit")
-    with st.expander(
-        "Line-ups + distinti (boost accuracy) — strongly recommended",
-        expanded=True,
-    ):
-        st.caption(
-            "**Goal rule:** the distinti scoreline is law. "
-            "Film CV may invent shots; goals are capped to that result "
-            "(e.g. 0–4 keeps at most 0 home + 4 away goals — the rest become shots). "
-            "CSV/JSON = player names. Distinti PDF or manual score = official result."
-        )
-        st.download_button(
-            "Download sample line-up CSV",
-            data=example_lineup_csv(),
-            file_name="lineup_sample.csv",
-            mime="text/csv",
-            use_container_width=True,
-            key="dl_lineup_sample",
-        )
-        lineup_file = st.file_uploader(
-            "Upload Home+Away line-up (CSV or JSON)",
-            type=["csv", "json"],
-            key="analyse_lineup_file",
-        )
-        distinti_file = st.file_uploader(
-            "Upload distinti / tabellino (PDF)",
-            type=["pdf"],
-            key="analyse_distinti_pdf",
-        )
-        score_cols = st.columns(2)
-        with score_cols[0]:
-            manual_home_goals = st.number_input(
-                "Official home goals (distinti)",
-                min_value=0,
-                max_value=30,
-                value=0,
-                step=1,
-                key="analyse_official_home_goals",
-            )
-        with score_cols[1]:
-            manual_away_goals = st.number_input(
-                "Official away goals (distinti)",
-                min_value=0,
-                max_value=30,
-                value=0,
-                step=1,
-                key="analyse_official_away_goals",
-            )
-        use_manual_score = st.checkbox(
-            "Pin goals to distinti scoreline (e.g. 0–4) — stops film shots becoming goals",
-            value=False,
-            key="analyse_pin_official_score",
-        )
-        lineup_json_text = ""
-        import json as _json
-
-        payload: dict[str, object] = {
-            "home_team": home_team_name or "Home",
-            "away_team": away_team_name or "Away",
-            "home": [],
-            "away": [],
-        }
-        if lineup_file is not None:
-            try:
-                parsed = parse_lineup_bytes(
-                    lineup_file.getvalue(),
-                    filename=getattr(lineup_file, "name", ""),
-                    home_team=home_team_name or "Home",
-                    away_team=away_team_name or "Away",
-                )
-                payload = {
-                    "home_team": parsed.home_team,
-                    "away_team": parsed.away_team,
-                    "home": [
-                        {
-                            "jersey": p.jersey,
-                            "name": p.name,
-                            "position": p.position,
-                        }
-                        for p in parsed.home
-                    ],
-                    "away": [
-                        {
-                            "jersey": p.jersey,
-                            "name": p.name,
-                            "position": p.position,
-                        }
-                        for p in parsed.away
-                    ],
-                }
-                if parsed.home_team and parsed.home_team != "Home":
-                    home_team_name = parsed.home_team
-                if parsed.away_team and parsed.away_team != "Away":
-                    away_team_name = parsed.away_team
-                st.success(
-                    f"Line-up loaded · Home {len(parsed.home)} · Away {len(parsed.away)}"
-                )
-            except ValueError as exc:
-                st.error(str(exc))
-        if distinti_file is not None:
-            try:
-                facts = parse_distinti_pdf(
-                    distinti_file.getvalue(),
-                    filename=getattr(distinti_file, "name", "distinti.pdf"),
-                )
-                payload["match_facts"] = facts_to_payload(facts)
-                if facts.home_team and facts.home_team != "Home":
-                    payload["home_team"] = facts.home_team
-                    home_team_name = facts.home_team
-                if facts.away_team and facts.away_team != "Away":
-                    payload["away_team"] = facts.away_team
-                    away_team_name = facts.away_team
-                if not payload.get("home") and facts.home:
-                    payload["home"] = [
-                        {
-                            "jersey": p.jersey,
-                            "name": p.name,
-                            "position": p.position,
-                        }
-                        for p in facts.home
-                    ]
-                if not payload.get("away") and facts.away:
-                    payload["away"] = [
-                        {
-                            "jersey": p.jersey,
-                            "name": p.name,
-                            "position": p.position,
-                        }
-                        for p in facts.away
-                    ]
-                st.success(
-                    f"Distinti loaded · {facts.home_team} {facts.score_label()} "
-                    f"{facts.away_team} · "
-                    f"players Home {len(facts.home)} / Away {len(facts.away)}"
-                )
-                if facts.home_goals is not None and facts.away_goals is not None:
-                    # Prefer PDF score when parse succeeded.
-                    manual_home_goals = int(facts.home_goals)
-                    manual_away_goals = int(facts.away_goals)
-            except ValueError as exc:
-                st.error(str(exc))
-        pdf_score = payload.get("match_facts") if isinstance(payload.get("match_facts"), dict) else None
-        if use_manual_score or (
-            isinstance(pdf_score, dict)
-            and pdf_score.get("home_goals") is not None
-            and pdf_score.get("away_goals") is not None
-        ):
-            facts_payload = dict(pdf_score or {})
-            # Manual checkbox overrides / fills score; PDF alone also pins.
-            if use_manual_score:
-                facts_payload["home_goals"] = int(manual_home_goals)
-                facts_payload["away_goals"] = int(manual_away_goals)
-                facts_payload["source"] = facts_payload.get("source") or "manual_distinti_score"
-            facts_payload.setdefault(
-                "home_team", payload.get("home_team") or home_team_name or "Home"
-            )
-            facts_payload.setdefault(
-                "away_team", payload.get("away_team") or away_team_name or "Away"
-            )
-            payload["match_facts"] = facts_payload
-            st.info(
-                f"Goals pinned to distinti **{int(facts_payload['home_goals'])}–"
-                f"{int(facts_payload['away_goals'])}** "
-                "(extra film “goals” become shots)."
-            )
-        if payload.get("home") or payload.get("away") or payload.get("match_facts"):
-            lineup_json_text = _json.dumps(payload)
 
     render_film_uploader_panel(base_url)
+
+    st.subheader("Line-up CSV")
+    st.download_button(
+        "Download sample line-up CSV",
+        data=example_lineup_csv(),
+        file_name="lineup_sample.csv",
+        mime="text/csv",
+        use_container_width=True,
+        key="dl_lineup_sample",
+    )
+    lineup_file = st.file_uploader(
+        "Upload Home+Away line-up (CSV or JSON)",
+        type=["csv", "json"],
+        key="analyse_lineup_file",
+    )
+
+    st.subheader("Distinti PDF")
+    distinti_file = st.file_uploader(
+        "Upload distinti / tabellino (PDF)",
+        type=["pdf"],
+        key="analyse_distinti_pdf",
+    )
+    score_cols = st.columns(2)
+    with score_cols[0]:
+        manual_home_goals = st.number_input(
+            "Official home goals",
+            min_value=0,
+            max_value=30,
+            value=0,
+            step=1,
+            key="analyse_official_home_goals",
+        )
+    with score_cols[1]:
+        manual_away_goals = st.number_input(
+            "Official away goals",
+            min_value=0,
+            max_value=30,
+            value=0,
+            step=1,
+            key="analyse_official_away_goals",
+        )
+    use_manual_score = st.checkbox(
+        "Pin goals to official scoreline",
+        value=False,
+        key="analyse_pin_official_score",
+    )
+
+    lineup_json_text = ""
+    payload: dict[str, object] = {
+        "home_team": home_team_name or "Home",
+        "away_team": away_team_name or "Away",
+        "home": [],
+        "away": [],
+    }
+    if lineup_file is not None:
+        try:
+            parsed = parse_lineup_bytes(
+                lineup_file.getvalue(),
+                filename=getattr(lineup_file, "name", ""),
+                home_team=home_team_name or "Home",
+                away_team=away_team_name or "Away",
+            )
+            payload = {
+                "home_team": parsed.home_team,
+                "away_team": parsed.away_team,
+                "home": [
+                    {
+                        "jersey": p.jersey,
+                        "name": p.name,
+                        "position": p.position,
+                    }
+                    for p in parsed.home
+                ],
+                "away": [
+                    {
+                        "jersey": p.jersey,
+                        "name": p.name,
+                        "position": p.position,
+                    }
+                    for p in parsed.away
+                ],
+            }
+            if parsed.home_team and parsed.home_team != "Home":
+                home_team_name = parsed.home_team
+            if parsed.away_team and parsed.away_team != "Away":
+                away_team_name = parsed.away_team
+            st.success(
+                f"Line-up loaded · Home {len(parsed.home)} · Away {len(parsed.away)}"
+            )
+        except ValueError as exc:
+            st.error(str(exc))
+    if distinti_file is not None:
+        try:
+            facts = parse_distinti_pdf(
+                distinti_file.getvalue(),
+                filename=getattr(distinti_file, "name", "distinti.pdf"),
+            )
+            payload["match_facts"] = facts_to_payload(facts)
+            if facts.home_team and facts.home_team != "Home":
+                payload["home_team"] = facts.home_team
+                home_team_name = facts.home_team
+            if facts.away_team and facts.away_team != "Away":
+                payload["away_team"] = facts.away_team
+                away_team_name = facts.away_team
+            if not payload.get("home") and facts.home:
+                payload["home"] = [
+                    {
+                        "jersey": p.jersey,
+                        "name": p.name,
+                        "position": p.position,
+                    }
+                    for p in facts.home
+                ]
+            if not payload.get("away") and facts.away:
+                payload["away"] = [
+                    {
+                        "jersey": p.jersey,
+                        "name": p.name,
+                        "position": p.position,
+                    }
+                    for p in facts.away
+                ]
+            st.success(
+                f"Distinti loaded · {facts.home_team} {facts.score_label()} "
+                f"{facts.away_team} · "
+                f"players Home {len(facts.home)} / Away {len(facts.away)}"
+            )
+            if facts.home_goals is not None and facts.away_goals is not None:
+                manual_home_goals = int(facts.home_goals)
+                manual_away_goals = int(facts.away_goals)
+        except ValueError as exc:
+            st.error(str(exc))
+    pdf_score = payload.get("match_facts") if isinstance(payload.get("match_facts"), dict) else None
+    if use_manual_score or (
+        isinstance(pdf_score, dict)
+        and pdf_score.get("home_goals") is not None
+        and pdf_score.get("away_goals") is not None
+    ):
+        facts_payload = dict(pdf_score or {})
+        if use_manual_score:
+            facts_payload["home_goals"] = int(manual_home_goals)
+            facts_payload["away_goals"] = int(manual_away_goals)
+            facts_payload["source"] = facts_payload.get("source") or "manual_distinti_score"
+        facts_payload.setdefault(
+            "home_team", payload.get("home_team") or home_team_name or "Home"
+        )
+        facts_payload.setdefault(
+            "away_team", payload.get("away_team") or away_team_name or "Away"
+        )
+        payload["match_facts"] = facts_payload
+        st.info(
+            f"Goals pinned to **{int(facts_payload['home_goals'])}–"
+            f"{int(facts_payload['away_goals'])}**"
+        )
+    if payload.get("home") or payload.get("away") or payload.get("match_facts"):
+        lineup_json_text = _json.dumps(payload)
 
     films = ready_match_films()
     latest = films[0] if films else None
@@ -1814,8 +1681,6 @@ def render_analyse_landing(base_url: str) -> None:
             f"Ready: **{latest.name}** · {_format_bytes(latest.stat().st_size)}"
             + (f" · {len(films)} films in inbox" if len(films) > 1 else "")
         )
-    else:
-        st.info("No match film uploaded yet. Use the uploader above, then Analyse Stats.")
 
     analyse = st.button(
         "Analyse Stats",
@@ -1844,8 +1709,7 @@ def render_analyse_landing(base_url: str) -> None:
                     )
                     st.session_state["batch_status_path"] = str(batch_path)
                     st.session_state[PERSIST_KEY] = (
-                        f"Queued {len(inbox_films)} films for game-week collect. "
-                        "Open Analysing to watch progress. "
+                        f"Queued {len(inbox_films)} films. "
                         f"Batch: {batch_path.name}"
                     )
                     _request_nav("Analysing")
@@ -1864,68 +1728,13 @@ def render_analyse_landing(base_url: str) -> None:
                 f"{summary['running']} running · {summary['error']} errors"
             )
 
-    with st.expander("Or import an existing OnceSport / Wyscout XML", expanded=False):
-        st.caption(
-            "If you already have Home / Away analysis XMLs from OnceSport "
-            "(or another tool), upload them here to collect without re-watching the film."
-        )
-        home_xml = st.file_uploader(
-            "Home / analysed-team XML",
-            type=["xml"],
-            key="official_home_xml",
-        )
-        away_xml = st.file_uploader(
-            "Away-team XML (optional)",
-            type=["xml"],
-            key="official_away_xml",
-        )
-        collect_xml = st.button(
-            "Collect OnceSport XML",
-            use_container_width=True,
-            key="collect_xml",
-        )
-        if collect_xml:
-            try:
-                upload_dir.mkdir(parents=True, exist_ok=True)
-                if home_xml is not None:
-                    home_bytes = home_xml.getvalue()
-                    (upload_dir / "official_home.xml").write_bytes(home_bytes)
-                else:
-                    home_bytes = b""
-                if away_xml is not None:
-                    away_bytes = away_xml.getvalue()
-                    (upload_dir / "official_away.xml").write_bytes(away_bytes)
-                else:
-                    away_bytes = None
-                if home_xml is not None and away_xml is not None:
-                    rundown = collect_official_two_team(home_bytes, away_bytes)
-                elif home_xml is not None:
-                    rundown = collect_official_two_team(home_bytes)
-                elif away_xml is not None:
-                    raise ValueError(
-                        "Upload the home / analysed-team XML first (away is optional)."
-                    )
-                else:
-                    raise ValueError("Upload a home / analysed-team OnceSport XML.")
-                st.session_state[RUNDOWN_KEY] = rundown_to_json(rundown)
-                st.session_state.pop("analyse_cleared", None)
-                _persisted, message = asyncio.run(persist_rundown(base_url, rundown))
-                history_msg = _remember_collection(rundown)
-                st.session_state[PERSIST_KEY] = f"{message} · {history_msg}"
-                _go_match()
-                st.rerun()
-            except ValueError as exc:
-                st.error(str(exc))
-
-    render_statman_panel()
-
     if not analyse:
         return
     try:
         source = latest_ready_film()
         if source is None:
             raise ValueError(
-                "Upload the match film with the uploader above, then click Analyse Stats."
+                "Upload the match film above, then click Analyse Stats."
             )
         update, finish = render_upload_loader()
         update("Preparing the match…", 0.04)
@@ -1966,8 +1775,7 @@ def render_analyse_landing(base_url: str) -> None:
             st.session_state.pop(RUNDOWN_KEY, None)
             st.session_state.pop("analyse_cleared", None)
             st.session_state[PERSIST_KEY] = (
-                "Full-match analyse is running in the background. "
-                "Walk away and refresh later. "
+                "Analyse is running in the background. "
                 f"Status: {status_path.name}"
             )
             _request_nav("Analysing")
@@ -2136,12 +1944,7 @@ def render_collective_rundown(rundown: MatchRundown) -> None:
 def render_history() -> None:
     """Browse auto-saved collection history; reopen matches or download PDFs."""
 
-    st.title("EnjoyStats")
     st.subheader("Collection history")
-    st.caption(
-        "Every finished collect is saved automatically. Open a past match to "
-        "review collective and individual sheets, or download the full PDF report."
-    )
     entries = list_history()
     if not entries:
         st.info(
