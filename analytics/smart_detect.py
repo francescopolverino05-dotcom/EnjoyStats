@@ -9,6 +9,7 @@ Step B — split Home / Away by shirt colour when the operator gives kit hexes.
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from functools import lru_cache
 from typing import Sequence
@@ -100,12 +101,17 @@ def assign_side_by_kit(
     return 0 if d_home <= d_away else 1
 
 
-def _to_pitch(x_px: float, y_px: float, width: int, height: int) -> tuple[float, float]:
-    if width <= 0 or height <= 0:
-        return 50.0, 50.0
-    x = max(0.0, min(100.0, (x_px / width) * 100.0))
-    y = max(0.0, min(100.0, (y_px / height) * 100.0))
-    return x, y
+def _to_pitch(
+    x_px: float,
+    y_px: float,
+    width: int,
+    height: int,
+    *,
+    roi: tuple[int, int, int, int] | None = None,
+) -> tuple[float, float]:
+    from analytics.pitch_map import to_pitch
+
+    return to_pitch(x_px, y_px, width, height, roi=roi)
 
 
 def _mean_bgr_box(
@@ -132,34 +138,53 @@ def _mean_bgr_box(
     return (float(mean[0]), float(mean[1]), float(mean[2]))
 
 
+def hog_available() -> bool:
+    """OpenCV 4 has HOGDescriptor; OpenCV 5 builds often omit it."""
+
+    return hasattr(cv2, "HOGDescriptor")
+
+
 @lru_cache(maxsize=1)
-def _hog_detector() -> cv2.HOGDescriptor:
+def _hog_detector():  # type: ignore[no-untyped-def]
+    if not hog_available():
+        raise RuntimeError("cv2.HOGDescriptor is not available in this OpenCV build")
     hog = cv2.HOGDescriptor()
     hog.setSVMDetector(cv2.HOGDescriptor_getDefaultPeopleDetector())
     return hog
 
 
-def detect_people_hog(frame: np.ndarray) -> list[SmartDetection]:
-    """OpenCV HOG people finder — no extra packages."""
+def detect_people_hog(
+    frame: np.ndarray,
+    *,
+    roi: tuple[int, int, int, int] | None = None,
+) -> list[SmartDetection]:
+    """OpenCV HOG people finder when the build includes it; else empty."""
 
-    if frame.size == 0:
+    if frame.size == 0 or not hog_available():
         return []
     height, width = frame.shape[:2]
-    hog = _hog_detector()
-    # winStride / scale tuned for broadcast-ish frames (and tiny synthetic clips).
-    boxes, weights = hog.detectMultiScale(
-        frame,
-        winStride=(8, 8),
-        padding=(8, 8),
-        scale=1.05,
-    )
+    try:
+        hog = _hog_detector()
+        # winStride / scale tuned for broadcast-ish frames (and tiny synthetic clips).
+        boxes, weights = hog.detectMultiScale(
+            frame,
+            winStride=(8, 8),
+            padding=(8, 8),
+            scale=1.05,
+        )
+    except Exception:  # noqa: BLE001 — optional path must never break collect
+        return []
+    if roi is None:
+        from analytics.pitch_map import grass_roi
+
+        roi = grass_roi(frame)
     found: list[SmartDetection] = []
     for (bx, by, bw, bh), weight in zip(boxes, weights, strict=False):
         if float(weight) < 0.3:
             continue
         cx = bx + bw / 2.0
         cy = by + bh / 2.0
-        x, y = _to_pitch(cx, cy, width, height)
+        x, y = _to_pitch(cx, cy, width, height, roi=roi)
         area = float(bw * bh)
         bgr = _mean_bgr_box(frame, int(bx), int(by), int(bx + bw), int(by + bh))
         jersey = _sparse_jersey(frame, int(bx), int(by), int(bx + bw), int(by + bh))
@@ -170,8 +195,11 @@ def detect_people_hog(frame: np.ndarray) -> list[SmartDetection]:
 
 
 def yolo_available() -> bool:
-    """True when ultralytics is installed."""
+    """True when ultralytics is installed and not disabled via env."""
 
+    flag = os.environ.get("STATMAN_DISABLE_YOLO", "").strip().lower()
+    if flag in {"1", "true", "yes", "on"}:
+        return False
     try:
         import ultralytics  # noqa: F401
     except ImportError:
@@ -187,7 +215,11 @@ def _yolo_model():  # type: ignore[no-untyped-def]
     return YOLO("yolov8n.pt")
 
 
-def detect_people_yolo(frame: np.ndarray) -> list[SmartDetection]:
+def detect_people_yolo(
+    frame: np.ndarray,
+    *,
+    roi: tuple[int, int, int, int] | None = None,
+) -> list[SmartDetection]:
     """Optional YOLOv8 person + sports-ball detector."""
 
     if not yolo_available() or frame.size == 0:
@@ -198,6 +230,10 @@ def detect_people_yolo(frame: np.ndarray) -> list[SmartDetection]:
     except Exception:  # noqa: BLE001 — optional path must never break collect
         return []
     height, width = frame.shape[:2]
+    if roi is None:
+        from analytics.pitch_map import grass_roi
+
+        roi = grass_roi(frame)
     found: list[SmartDetection] = []
     for result in results:
         boxes = getattr(result, "boxes", None)
@@ -211,7 +247,7 @@ def detect_people_yolo(frame: np.ndarray) -> list[SmartDetection]:
             x1, y1, x2, y2 = (int(v) for v in xyxy)
             cx = (x1 + x2) / 2.0
             cy = (y1 + y2) / 2.0
-            x, y = _to_pitch(cx, cy, width, height)
+            x, y = _to_pitch(cx, cy, width, height, roi=roi)
             area = float(max(1, (x2 - x1) * (y2 - y1)))
             kind = "ball" if cls_id == _YOLO_SPORTS_BALL else "player"
             bgr = _mean_bgr_box(frame, x1, y1, x2, y2)
@@ -258,6 +294,7 @@ def detect_objects_smart(
     frame: np.ndarray,
     *,
     blob_fallback,  # Callable[[np.ndarray], list] — avoids circular imports
+    roi: tuple[int, int, int, int] | None = None,
 ) -> list[SmartDetection]:
     """Best available detector: YOLO → HOG+blob → blob only."""
 
@@ -275,13 +312,14 @@ def detect_objects_smart(
         for item in blob_raw
     ]
     if yolo_available():
-        yolo_hits = detect_people_yolo(frame)
+        yolo_hits = detect_people_yolo(frame, roi=roi)
         if yolo_hits:
             return merge_detections(yolo_hits, blob_hits)
 
-    hog_hits = detect_people_hog(frame)
-    if hog_hits:
-        return merge_detections(hog_hits, blob_hits)
+    if hog_available():
+        hog_hits = detect_people_hog(frame, roi=roi)
+        if hog_hits:
+            return merge_detections(hog_hits, blob_hits)
     return blob_hits
 
 
@@ -290,4 +328,6 @@ def detector_label() -> str:
 
     if yolo_available():
         return "YOLO person finder"
-    return "HOG person finder + pitch blobs"
+    if hog_available():
+        return "HOG person finder + pitch blobs"
+    return "pitch blobs only"

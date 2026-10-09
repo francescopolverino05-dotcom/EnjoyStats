@@ -77,12 +77,14 @@ def _score_for_rundown(rundown: MatchRundown) -> tuple[str, str, int, int]:
     sheets = team_sheets_from_rundown(rundown)
     home = rundown.summary.home_team_name or "Home"
     away = rundown.summary.away_team_name or "Away"
+    official_h = getattr(rundown.summary, "official_home_goals", None)
+    official_a = getattr(rundown.summary, "official_away_goals", None)
+    if official_h is not None and official_a is not None:
+        return home, away, int(official_h), int(official_a)
     if len(sheets) >= 2:
-        # Prefer summary names when sheets are Home/Away placeholders.
-        home_name = sheets[0].team_name
-        away_name = sheets[1].team_name
-        if home_name in {"Home", "Away"} and home not in {"Home", "Away"}:
-            home_name, away_name = home, away
+        # Sheets are home-then-away; keep summary labels when they are real clubs.
+        home_name = home if home not in {"Home", "Away"} else sheets[0].team_name
+        away_name = away if away not in {"Home", "Away"} else sheets[1].team_name
         return home_name, away_name, sheets[0].goals, sheets[1].goals
     if len(sheets) == 1:
         perspective = analysis_perspective(rundown)

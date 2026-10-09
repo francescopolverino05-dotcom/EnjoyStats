@@ -36,6 +36,22 @@ export ENJOYSTATS_UVICORN_APP="${ENJOYSTATS_UVICORN_APP:-api.upload_app:app}"
 export STATMAN_STREAMLIT_FILM_UPLOAD=0
 export STATMAN_WORKER_POLL_S="${STATMAN_WORKER_POLL_S:-3}"
 export MPLBACKEND="${MPLBACKEND:-Agg}"
+# Embed Web dyno: no fork (OOM). Keep YOLO — OpenCV 5 often has no HOGDescriptor.
+export STATMAN_COLLECT_INPROCESS="${STATMAN_COLLECT_INPROCESS:-1}"
+# Accuracy knobs (needs ≥8 GB Web RAM). Lower Hz = more false goals.
+export STATMAN_SAMPLE_HZ="${STATMAN_SAMPLE_HZ:-6}"
+export STATMAN_MAX_SIDE="${STATMAN_MAX_SIDE:-800}"
+export STATMAN_DISABLE_YOLO="${STATMAN_DISABLE_YOLO:-0}"
+export STATMAN_MAX_SAMPLE_FRAMES="${STATMAN_MAX_SAMPLE_FRAMES:-54000}"
+export STATMAN_MAX_GOALS="${STATMAN_MAX_GOALS:-8}"
+# Keep OpenCV / BLAS / torch from spawning thread storms on a small dyno.
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-1}"
+export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-1}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-1}"
+export NUMEXPR_NUM_THREADS="${NUMEXPR_NUM_THREADS:-1}"
+export TORCH_NUM_THREADS="${TORCH_NUM_THREADS:-1}"
+export CV_NUM_THREADS="${CV_NUM_THREADS:-1}"
+echo "statman-web: collect knobs inprocess=${STATMAN_COLLECT_INPROCESS} hz=${STATMAN_SAMPLE_HZ} side=${STATMAN_MAX_SIDE} yolo_off=${STATMAN_DISABLE_YOLO}"
 
 echo "statman-web: checking volume at ${DATA_ROOT}"
 awk '{print "  " $0}' /proc/mounts 2>/dev/null | grep -i data || echo "  (none)"
@@ -74,6 +90,7 @@ python -m uvicorn "$ENJOYSTATS_UVICORN_APP" \
   --port "$API_PORT" \
   --log-level warning \
   >"$LOG_DIR/upload-api.log" 2>&1 &
+echo $! >"$LOG_DIR/upload-api.pid"
 
 echo "statman-web: Streamlit on 127.0.0.1:${UI_PORT}"
 streamlit run app/dashboard.py \
@@ -86,12 +103,20 @@ streamlit run app/dashboard.py \
   --server.maxMessageSize=5120 \
   --browser.gatherUsageStats=false \
   >"$LOG_DIR/streamlit.log" 2>&1 &
+echo $! >"$LOG_DIR/streamlit.pid"
 
 if [ "$EMBED_WORKER" = "1" ] || [ "$EMBED_WORKER" = "true" ] || [ "$EMBED_WORKER" = "yes" ]; then
   echo "statman-web: embedded Analyse worker on ${ENJOYSTATS_JOBS_DIR}"
+  # Tee so Railway Deploy Logs show [statman-worker] lines (not only a file under /tmp).
   python -m analytics.collect_worker \
-    >"$LOG_DIR/embed-worker.log" 2>&1 &
-  echo "statman-web: embed-worker pid $! (logs: $LOG_DIR/embed-worker.log)"
+    2>&1 | tee -a "$LOG_DIR/embed-worker.log" &
+  echo "statman-web: embed-worker logger pid $! (also: $LOG_DIR/embed-worker.log)"
+fi
+
+# Keep Streamlit/API alive after Analyse RAM spikes kill them.
+if [ -x /app/scripts/statman_web_watchdog.sh ] || [ -f /app/scripts/statman_web_watchdog.sh ]; then
+  /bin/sh /app/scripts/statman_web_watchdog.sh >>"$LOG_DIR/watchdog.log" 2>&1 &
+  echo "statman-web: watchdog pid $! (restarts UI/API if they die)"
 fi
 
 i=0

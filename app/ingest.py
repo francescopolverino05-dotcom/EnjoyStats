@@ -279,6 +279,7 @@ def collect_from_film_path(
     home_team_name: str | None = None,
     away_team_name: str | None = None,
     lineup_json: str | None = None,
+    force_fresh: bool = False,
 ) -> MatchRundown:
     """Collect tags from a film (both teams) or from an explicit XML path.
 
@@ -288,7 +289,10 @@ def collect_from_film_path(
     itself (or use Official two-team tag sheet) for official tags.
     """
 
-    from analytics.lineups import parse_lineup_json
+    import json
+
+    from analytics.distinti import MatchFacts, merge_lineups_with_facts
+    from analytics.lineups import LineupPlayer, parse_lineup_json
 
     resolved = normalize_film_path(path)
     try:
@@ -307,11 +311,67 @@ def collect_from_film_path(
     if not resolved.is_file():
         raise ValueError(f"Match film not found: {resolved}")
     lineups = None
+    official_home_goals: int | None = None
+    official_away_goals: int | None = None
     if lineup_json and lineup_json.strip():
         try:
             lineups = parse_lineup_json(lineup_json)
         except (ValueError, TypeError) as exc:
             raise ValueError(f"Line-up JSON is invalid ({exc}).") from exc
+        try:
+            payload = json.loads(lineup_json)
+        except json.JSONDecodeError:
+            payload = {}
+        facts_raw = payload.get("match_facts") if isinstance(payload, dict) else None
+        if isinstance(facts_raw, dict):
+            try:
+                hg = facts_raw.get("home_goals")
+                ag = facts_raw.get("away_goals")
+                official_home_goals = int(hg) if hg is not None else None
+                official_away_goals = int(ag) if ag is not None else None
+            except (TypeError, ValueError):
+                official_home_goals = None
+                official_away_goals = None
+            fact_home = []
+            fact_away = []
+            for row in facts_raw.get("home") or []:
+                if isinstance(row, dict) and row.get("jersey") is not None and row.get("name"):
+                    fact_home.append(
+                        LineupPlayer(
+                            side="home",
+                            jersey=int(row["jersey"]),
+                            name=str(row["name"]),
+                            position=str(row.get("position") or ""),
+                        )
+                    )
+            for row in facts_raw.get("away") or []:
+                if isinstance(row, dict) and row.get("jersey") is not None and row.get("name"):
+                    fact_away.append(
+                        LineupPlayer(
+                            side="away",
+                            jersey=int(row["jersey"]),
+                            name=str(row["name"]),
+                            position=str(row.get("position") or ""),
+                        )
+                    )
+            facts = MatchFacts(
+                home_team=str(facts_raw.get("home_team") or home_team_name or "Home"),
+                away_team=str(facts_raw.get("away_team") or away_team_name or "Away"),
+                home_goals=official_home_goals,
+                away_goals=official_away_goals,
+                home=tuple(fact_home),
+                away=tuple(fact_away),
+                source_label=str(facts_raw.get("source") or "distinti"),
+            )
+            lineups = merge_lineups_with_facts(lineups, facts)
+            from analytics.match_tags import prefer_team_name
+
+            home_team_name = prefer_team_name(
+                facts.home_team, home_team_name, fallback=home_team_name or "Home"
+            )
+            away_team_name = prefer_team_name(
+                facts.away_team, away_team_name, fallback=away_team_name or "Away"
+            )
     try:
         return collect_from_video(
             resolved,
@@ -321,6 +381,9 @@ def collect_from_film_path(
             home_team_name=home_team_name,
             away_team_name=away_team_name,
             lineups=lineups,
+            official_home_goals=official_home_goals,
+            official_away_goals=official_away_goals,
+            force_fresh=force_fresh,
         )
     except VideoCollectError as exc:
         raise ValueError(str(exc)) from exc

@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
+from uuid import uuid4
+
 from analytics.statman_iq import (
     GLOSSARY,
+    IQ_SOURCES,
     PitchLane,
     classify_distribution,
     classify_strike,
+    is_cross_flank,
     is_goalkeeper_actor,
     pitch_lane,
     progressive_from_half_space,
+    sanitize_film_events,
+    sanitize_film_goals,
+    sanitize_film_shots,
 )
-from data_models.events import EventType
+from data_models.events import EventType, MatchEvent, ShotOutcome
 
 
 def test_glossary_has_gk_rule_and_core_terms() -> None:
@@ -22,6 +29,126 @@ def test_glossary_has_gk_rule_and_core_terms() -> None:
     assert "goal" in GLOSSARY
     assert "danger_zone" in GLOSSARY
     assert "pass" in GLOSSARY
+    assert "cross" in GLOSSARY
+    assert "distinti_score" in GLOSSARY
+    assert any("wyscout.com" in url for _title, url in IQ_SOURCES)
+    assert any("opta-event" in url for _title, url in IQ_SOURCES)
+    assert any("coachesvoice.com" in url for _title, url in IQ_SOURCES)
+    assert any("spielverlagerung.com" in url for _title, url in IQ_SOURCES)
+
+
+def test_wyscout_cross_requires_flank_origin() -> None:
+    assert is_cross_flank(10.0)
+    assert is_cross_flank(90.0)
+    assert not is_cross_flank(50.0)
+    cross = classify_distribution(
+        start=(80.0, 10.0),
+        point=(90.0, 50.0),
+        travel=45.0,
+        toward_goal=True,
+        in_box=True,
+        touchline=False,
+        corner=False,
+        actor_is_gk=False,
+    )
+    assert cross is EventType.CROSS
+    centre_pass = classify_distribution(
+        start=(80.0, 50.0),
+        point=(90.0, 50.0),
+        travel=20.0,
+        toward_goal=True,
+        in_box=True,
+        touchline=False,
+        corner=False,
+        actor_is_gk=False,
+    )
+    assert centre_pass is EventType.PASS
+
+
+def test_sanitize_film_goals_demotes_excess(monkeypatch) -> None:
+    monkeypatch.setenv("STATMAN_MAX_GOALS", "2")
+    monkeypatch.setenv("STATMAN_MAX_GOALS_PER_TEAM", "10")
+    match_id = uuid4()
+    team_id = uuid4()
+    player_id = uuid4()
+    events = [
+        MatchEvent.model_validate(
+            {
+                "match_id": match_id,
+                "team_id": team_id,
+                "player_id": player_id,
+                "period": 1,
+                "minute": i,
+                "second": 0,
+                "event_type": EventType.GOAL,
+                "is_goal": True,
+                "shot_outcome": ShotOutcome.ON_TARGET,
+                "x": 90.0,
+                "y": 50.0,
+            }
+        )
+        for i in range(5)
+    ]
+    cleaned = sanitize_film_goals(events)
+    goals = [event for event in cleaned if event.is_goal or event.event_type is EventType.GOAL]
+    shots = [event for event in cleaned if event.event_type is EventType.SHOT]
+    assert len(goals) == 2
+    assert len(shots) == 3
+
+
+def test_sanitize_film_goals_caps_per_team(monkeypatch) -> None:
+    monkeypatch.setenv("STATMAN_MAX_GOALS", "20")
+    monkeypatch.setenv("STATMAN_MAX_GOALS_PER_TEAM", "3")
+    match_id = uuid4()
+    home = uuid4()
+    away = uuid4()
+    player = uuid4()
+    events = []
+    for i in range(8):
+        events.append(
+            MatchEvent.model_validate(
+                {
+                    "match_id": match_id,
+                    "team_id": home,
+                    "player_id": player,
+                    "period": 1,
+                    "minute": i,
+                    "second": 0,
+                    "event_type": EventType.GOAL,
+                    "is_goal": True,
+                    "shot_outcome": ShotOutcome.ON_TARGET,
+                    "x": 90.0,
+                    "y": 50.0,
+                }
+            )
+        )
+    for i in range(5):
+        events.append(
+            MatchEvent.model_validate(
+                {
+                    "match_id": match_id,
+                    "team_id": away,
+                    "player_id": player,
+                    "period": 2,
+                    "minute": i,
+                    "second": 0,
+                    "event_type": EventType.GOAL,
+                    "is_goal": True,
+                    "shot_outcome": ShotOutcome.ON_TARGET,
+                    "x": 10.0,
+                    "y": 50.0,
+                }
+            )
+        )
+    cleaned = sanitize_film_goals(events)
+    home_goals = sum(
+        1 for e in cleaned if e.team_id == home and (e.is_goal or e.event_type is EventType.GOAL)
+    )
+    away_goals = sum(
+        1 for e in cleaned if e.team_id == away and (e.is_goal or e.event_type is EventType.GOAL)
+    )
+    assert home_goals == 3
+    assert away_goals == 3
 
 
 def test_gk_rule_blocks_shots_and_goals() -> None:
@@ -45,12 +172,12 @@ def test_gk_rule_blocks_shots_and_goals() -> None:
     assert verdict.reason == "gk_rule"
 
 
-def test_central_strike_still_goals() -> None:
+def test_central_strike_without_pending_is_shot_not_goal() -> None:
     verdict = classify_strike(
-        start=(78.0, 50.0),
+        start=(88.0, 50.0),
         point=(98.0, 50.0),
         travel=20.0,
-        speed=30.0,
+        speed=36.0,
         attack_goal_x=100.0,
         shot_gap_ok=True,
         goal_gap_ok=True,
@@ -59,8 +186,101 @@ def test_central_strike_still_goals() -> None:
         pending_shot=False,
         pending_fresh=False,
     )
+    assert verdict.is_shot
+    assert not verdict.is_goal
+    assert verdict.on_target
+
+
+def test_box_traffic_without_strike_is_not_a_shot() -> None:
+    verdict = classify_strike(
+        start=(85.0, 50.0),
+        point=(90.0, 52.0),
+        travel=6.0,
+        speed=18.0,
+        attack_goal_x=100.0,
+        shot_gap_ok=True,
+        goal_gap_ok=True,
+        gap_ok=True,
+        actor_is_gk=False,
+        pending_shot=False,
+        pending_fresh=False,
+    )
+    assert not verdict.is_shot
+    assert verdict.reason == "not_a_shot"
+
+
+def test_carry_into_box_from_midfield_is_not_a_shot() -> None:
+    verdict = classify_strike(
+        start=(60.0, 50.0),
+        point=(90.0, 50.0),
+        travel=30.0,
+        speed=40.0,
+        attack_goal_x=100.0,
+        shot_gap_ok=True,
+        goal_gap_ok=True,
+        gap_ok=True,
+        actor_is_gk=False,
+        pending_shot=False,
+        pending_fresh=False,
+    )
+    assert not verdict.is_shot
+
+
+def test_sanitize_film_shots_demotes_excess(monkeypatch) -> None:
+    monkeypatch.setenv("STATMAN_MAX_SHOTS", "4")
+    monkeypatch.setenv("STATMAN_MAX_SHOTS_PER_TEAM", "10")
+    monkeypatch.setenv("STATMAN_MAX_GOALS", "2")
+    monkeypatch.setenv("STATMAN_MAX_GOALS_PER_TEAM", "2")
+    match_id = uuid4()
+    team_id = uuid4()
+    player_id = uuid4()
+    events = [
+        MatchEvent.model_validate(
+            {
+                "match_id": match_id,
+                "team_id": team_id,
+                "player_id": player_id,
+                "period": 1,
+                "minute": i,
+                "second": 0,
+                "event_type": EventType.SHOT,
+                "is_goal": False,
+                "shot_outcome": ShotOutcome.ON_TARGET,
+                "x": 88.0,
+                "y": 50.0,
+            }
+        )
+        for i in range(12)
+    ]
+    cleaned = sanitize_film_events(events)
+    shots = [
+        event
+        for event in cleaned
+        if event.event_type in {EventType.SHOT, EventType.GOAL} or event.is_goal
+    ]
+    passes = [event for event in cleaned if event.event_type is EventType.PASS]
+    assert len(shots) == 4
+    assert len(passes) == 8
+    assert sanitize_film_shots is not None
+
+
+def test_pending_shot_to_mouth_is_goal() -> None:
+    verdict = classify_strike(
+        start=(90.0, 50.0),
+        point=(98.0, 50.0),
+        travel=8.0,
+        speed=20.0,
+        attack_goal_x=100.0,
+        shot_gap_ok=True,
+        goal_gap_ok=True,
+        gap_ok=True,
+        actor_is_gk=False,
+        pending_shot=True,
+        pending_fresh=True,
+    )
     assert verdict.is_goal
     assert verdict.on_target
+    assert verdict.reason == "pending_shot_to_mouth"
 
 
 def test_box_dribble_is_not_a_shot() -> None:

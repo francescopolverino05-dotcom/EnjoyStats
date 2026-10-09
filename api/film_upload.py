@@ -40,7 +40,7 @@ def upload_page_html(api_origin: str = "") -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>EnjoyStats · Upload match film</title>
+  <title>Upload match film</title>
   <style>
     html {{ -webkit-text-size-adjust: 100%; }}
     body {{ font-family: ui-sans-serif, system-ui, sans-serif; background:#0f172a;
@@ -77,10 +77,8 @@ def upload_page_html(api_origin: str = "") -> str:
 </head>
 <body>
   <div class="card">
-    <h1>Upload a match film</h1>
-    <p>One upload path. Sends the file in 4&nbsp;MB chunks (up to {limit}),
-    with automatic retries if a chunk drops. When it says Saved, click
-    <b>Analyse Stats</b> on the main page — it uses this film.</p>
+    <h1>Upload match film</h1>
+    <p>Up to {limit}. When Saved, return to Analyse Stats.</p>
     <input id="file" type="file" accept="video/*,.mp4,.mov,.mkv,.avi,.m4v,.webm">
     <button id="go" type="button">Upload match film</button>
     <div id="bar"><i id="fill"></i></div>

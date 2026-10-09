@@ -131,17 +131,70 @@ class HighlightMoment(StrictModel):
 
 
 def _team_name(rundown: MatchRundown, team_id: UUID, *, fallback: str) -> str:
-    if fallback and fallback not in {"Home", "Away"}:
-        return fallback
-    members = [row for row in rundown.players if row.team_id == team_id]
-    counts: dict[str, int] = defaultdict(int)
-    for member in members:
-        parts = (member.player_name or "").split()
-        if len(parts) >= 2 and len(parts[0]) >= 3 and parts[0][1:2] != ".":
-            counts[parts[0]] += 1
-    if counts:
-        return max(counts, key=counts.get)
-    return fallback
+    """Prefer the explicit home/away label — never invent a club from player names."""
+
+    return (fallback or "Team").strip() or "Team"
+
+
+def _ordered_home_away_ids(rundown: MatchRundown) -> list[tuple[UUID, str]]:
+    """Return ``[(home_id, home_name), (away_id, away_name)]`` in that order.
+
+    Resolves home/away from film UUID5s, official ``team:home`` / ``team:away``
+    ids, then event volume (home sheet is usually denser) — never invent club
+    names from player surnames.
+    """
+
+    from uuid import uuid5
+
+    from analytics.video_auto_collect import AUTO_NAMESPACE
+
+    home_label = (rundown.summary.home_team_name or "Home").strip() or "Home"
+    away_label = (rundown.summary.away_team_name or "Away").strip() or "Away"
+    ids: list[UUID] = []
+    seen: set[UUID] = set()
+    for profile in rundown.players:
+        if profile.team_id not in seen:
+            seen.add(profile.team_id)
+            ids.append(profile.team_id)
+    for event in rundown.events:
+        if event.team_id not in seen:
+            seen.add(event.team_id)
+            ids.append(event.team_id)
+
+    candidates_home = (
+        uuid5(AUTO_NAMESPACE, f"{rundown.match_id}-team-{home_label}"),
+        uuid5(rundown.match_id, "team:home"),
+    )
+    candidates_away = (
+        uuid5(AUTO_NAMESPACE, f"{rundown.match_id}-team-{away_label}"),
+        uuid5(rundown.match_id, "team:away"),
+    )
+    ordered: list[tuple[UUID, str]] = []
+    home_id = next((team_id for team_id in candidates_home if team_id in seen), None)
+    away_id = next((team_id for team_id in candidates_away if team_id in seen), None)
+    if home_id is not None:
+        ordered.append((home_id, home_label))
+    if away_id is not None:
+        ordered.append((away_id, away_label))
+    used = {row[0] for row in ordered}
+    leftovers = [team_id for team_id in ids if team_id not in used]
+    if home_id is None and leftovers:
+        # Unknown ids: denser event volume is usually the home/analysed sheet.
+        leftovers.sort(
+            key=lambda team_id: -sum(
+                1 for event in rundown.events if event.team_id == team_id
+            )
+        )
+        ordered.insert(0, (leftovers.pop(0), home_label))
+        used.add(ordered[0][0])
+    if away_id is None and leftovers:
+        ordered.append((leftovers.pop(0), away_label))
+        used.add(ordered[-1][0])
+    for team_id in leftovers:
+        if team_id in used:
+            continue
+        ordered.append((team_id, f"Team {len(ordered) + 1}"))
+    return ordered
 
 
 def _is_key_pass(event: MatchEvent) -> bool:
@@ -158,23 +211,12 @@ def _is_key_pass(event: MatchEvent) -> bool:
 
 
 def team_sheets_from_rundown(rundown: MatchRundown) -> list[TeamBasicStats]:
-    """Fold the tag sheet into one 15-stat row per team."""
+    """Fold the tag sheet into one 15-stat row per team (home then away)."""
 
     events = rundown.events
-    team_ids = []
-    seen: set[UUID] = set()
-    for profile in rundown.players:
-        if profile.team_id not in seen:
-            seen.add(profile.team_id)
-            team_ids.append(profile.team_id)
-    team_ids.sort(key=lambda team_id: -sum(1 for row in rundown.players if row.team_id == team_id))
-    labels = (
-        rundown.summary.home_team_name or "Home",
-        rundown.summary.away_team_name or "Away",
-    )
     total = max(len(events), 1)
     sheets: list[TeamBasicStats] = []
-    for index, team_id in enumerate(team_ids):
+    for team_id, label in _ordered_home_away_ids(rundown):
         owned = [event for event in events if event.team_id == team_id]
         passes = [event for event in owned if event.event_type in PASS_TYPES]
         shots = [event for event in owned if event.event_type in SHOT_TYPES]
@@ -185,9 +227,7 @@ def team_sheets_from_rundown(rundown: MatchRundown) -> list[TeamBasicStats]:
         sheets.append(
             TeamBasicStats(
                 team_id=team_id,
-                team_name=_team_name(
-                    rundown, team_id, fallback=labels[index] if index < 2 else f"Team {index + 1}"
-                ),
+                team_name=_team_name(rundown, team_id, fallback=label),
                 goals=sum(
                     1 for event in owned if event.is_goal or event.event_type is EventType.GOAL
                 ),
@@ -207,6 +247,16 @@ def team_sheets_from_rundown(rundown: MatchRundown) -> list[TeamBasicStats]:
                 penalties=sum(1 for event in owned if event.is_penalty),
             )
         )
+    # Distinti scoreboard is law when present (tagged goals may be short).
+    official_h = getattr(rundown.summary, "official_home_goals", None)
+    official_a = getattr(rundown.summary, "official_away_goals", None)
+    if (
+        official_h is not None
+        and official_a is not None
+        and len(sheets) >= 2
+    ):
+        sheets[0] = sheets[0].model_copy(update={"goals": int(official_h)})
+        sheets[1] = sheets[1].model_copy(update={"goals": int(official_a)})
     return sheets
 
 

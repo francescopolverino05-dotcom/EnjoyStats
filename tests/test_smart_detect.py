@@ -5,7 +5,9 @@ from __future__ import annotations
 from analytics.smart_detect import (
     assign_side_by_kit,
     bgr_distance,
+    detect_people_hog,
     detector_label,
+    hog_available,
     parse_kit_hex,
     yolo_available,
 )
@@ -53,6 +55,20 @@ def test_detector_label_mentions_finder() -> None:
     label = detector_label()
     assert "finder" in label.lower()
     assert isinstance(yolo_available(), bool)
+
+
+def test_hog_missing_does_not_raise(monkeypatch) -> None:
+    import analytics.smart_detect as sd
+
+    monkeypatch.setattr(sd.cv2, "HOGDescriptor", None, raising=False)
+    # Simulate OpenCV 5 builds that omit HOG entirely.
+    if hasattr(sd.cv2, "HOGDescriptor"):
+        monkeypatch.delattr(sd.cv2, "HOGDescriptor", raising=False)
+    assert hog_available() is False
+    import numpy as np
+
+    assert detect_people_hog(np.zeros((48, 48, 3), dtype=np.uint8)) == []
+    assert "blob" in detector_label().lower() or "yolo" in detector_label().lower()
 
 
 def test_film_collect_with_kit_colours(tmp_path) -> None:

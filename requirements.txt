@@ -14,3 +14,4 @@ opencv-python-headless>=4.9,<5
 yt-dlp>=2024.8.0
 ultralytics>=8.0,<9
 pytesseract>=0.3.10,<1
+pypdf>=4.0,<6

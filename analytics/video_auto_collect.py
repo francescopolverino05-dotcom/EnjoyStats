@@ -47,7 +47,7 @@ from analytics.block_coverage import (
 )
 from analytics.game_ingest import GamePayload, MatchRundown, PlayerRosterEntry, collect_game
 from analytics.lineups import MatchLineups, LineupPlayer
-from analytics.match_tags import infer_team_names, write_sidecar_xml
+from analytics.match_tags import infer_team_names, prefer_team_name, write_sidecar_xml
 from analytics.oncesport_export import write_oncesport_pair
 from analytics.smart_detect import (
     assign_side_by_kit,
@@ -74,10 +74,44 @@ STREAMLIT_MAX_UPLOAD_MB: int = MAX_VIDEO_GIB * 1024
 DEFAULT_SAMPLE_HZ: float = 8.0
 DEFAULT_MAX_SIDE: int = 960
 DEFAULT_MAX_SAMPLE_FRAMES: int = 72_000
-# Arsenal v Palace (1-1) Wyscout analysis: 736 actions over 97.5 minutes.
+
+
+def env_sample_hz(default: float = DEFAULT_SAMPLE_HZ) -> float:
+    """``STATMAN_SAMPLE_HZ`` override (Railway embed uses a lower value)."""
+
+    raw = os.environ.get("STATMAN_SAMPLE_HZ", "").strip()
+    if not raw:
+        return float(default)
+    try:
+        return max(0.5, float(raw))
+    except ValueError:
+        return float(default)
+
+
+def env_max_side(default: int = DEFAULT_MAX_SIDE) -> int:
+    raw = os.environ.get("STATMAN_MAX_SIDE", "").strip()
+    if not raw:
+        return int(default)
+    try:
+        return max(320, int(raw))
+    except ValueError:
+        return int(default)
+
+
+def env_max_sample_frames(default: int = DEFAULT_MAX_SAMPLE_FRAMES) -> int:
+    raw = os.environ.get("STATMAN_MAX_SAMPLE_FRAMES", "").strip()
+    if not raw:
+        return int(default)
+    try:
+        return max(500, int(raw))
+    except ValueError:
+        return int(default)
+# Official Wyscout sheets are denser; film CV must stay sparser or every
+# box touch becomes a pass/shot. Target ~3 actions/min on film.
 WYSCOUT_ACTIONS_PER_MINUTE: float = 7.55
-TARGET_EVENT_GAP_S: float = 60.0 / WYSCOUT_ACTIONS_PER_MINUTE
-MIN_EVENT_GAP_S: float = 1.2
+FILM_ACTIONS_PER_MINUTE: float = 3.0
+TARGET_EVENT_GAP_S: float = 60.0 / FILM_ACTIONS_PER_MINUTE
+MIN_EVENT_GAP_S: float = 2.8
 VIDEO_SUFFIXES: tuple[str, ...] = (".mp4", ".mov", ".mkv", ".avi", ".m4v", ".webm")
 TAG_SUFFIXES: tuple[str, ...] = (".xml",)
 # Junk probe bytes and empty uploads must never become "Ready" films.
@@ -115,6 +149,26 @@ def film_checkpoint_path(film: Path) -> Path:
 
     resolved = film.expanduser().resolve()
     return resolved.with_name(f"{resolved.stem}.collect.checkpoint.json")
+
+
+def clear_film_collect_state(film: Path) -> list[str]:
+    """Delete checkpoint / coverage sidecars so Analyse truly re-watches."""
+
+    resolved = film.expanduser().resolve()
+    removed: list[str] = []
+    candidates = [
+        film_checkpoint_path(resolved),
+        resolved.with_name(f"{resolved.stem}.coverage.json"),
+        resolved.with_name(f"{resolved.stem}.collect.checkpoint.json.tmp"),
+    ]
+    for path in candidates:
+        try:
+            if path.is_file():
+                path.unlink()
+                removed.append(path.name)
+        except OSError:
+            continue
+    return removed
 
 
 def write_collect_checkpoint(
@@ -634,14 +688,19 @@ def _resize(frame: np.ndarray, max_side: int) -> np.ndarray:
     )
 
 
-def _to_pitch(x_px: float, y_px: float, width: int, height: int) -> tuple[float, float]:
-    """Map pixel centroids onto the FIFA 0–100 tagging grid."""
+def _to_pitch(
+    x_px: float,
+    y_px: float,
+    width: int,
+    height: int,
+    *,
+    roi: tuple[int, int, int, int] | None = None,
+) -> tuple[float, float]:
+    """Map pixel centroids onto the FIFA 0–100 tagging grid (grass ROI when known)."""
 
-    if width <= 0 or height <= 0:
-        return 50.0, 50.0
-    x = max(0.0, min(100.0, (x_px / width) * 100.0))
-    y = max(0.0, min(100.0, (y_px / height) * 100.0))
-    return x, y
+    from analytics.pitch_map import to_pitch
+
+    return to_pitch(x_px, y_px, width, height, roi=roi)
 
 
 def _pitch_mask(frame: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
@@ -681,7 +740,15 @@ def _contour_bgr(frame: np.ndarray, contour: np.ndarray) -> tuple[float, float, 
 def detect_objects(frame: np.ndarray) -> list[Detection]:
     """Find players/ball — smart HOG/YOLO first, pitch-blob fallback."""
 
-    smart = detect_objects_smart(frame, blob_fallback=_detect_objects_blob)
+    from analytics.pitch_map import grass_roi
+
+    # One grass key per frame — YOLO/HOG/blob used to each re-key the pitch.
+    roi = grass_roi(frame)
+
+    def _blob(frame_in: np.ndarray) -> list[Detection]:
+        return _detect_objects_blob(frame_in, roi=roi)
+
+    smart = detect_objects_smart(frame, blob_fallback=_blob, roi=roi)
     return [
         Detection(
             x=hit.x,
@@ -695,7 +762,11 @@ def detect_objects(frame: np.ndarray) -> list[Detection]:
     ]
 
 
-def _detect_objects_blob(frame: np.ndarray) -> list[Detection]:
+def _detect_objects_blob(
+    frame: np.ndarray,
+    *,
+    roi: tuple[int, int, int, int] | None = None,
+) -> list[Detection]:
     """Find player-sized blobs on the grass, ignoring stands and graphics.
 
     Broadcast films: key a wide grass window, keep the largest pitch
@@ -707,6 +778,10 @@ def _detect_objects_blob(frame: np.ndarray) -> list[Detection]:
         return []
     height, width = frame.shape[:2]
     mask, grass, pitch_ratio = _pitch_mask(frame)
+    if roi is None:
+        from analytics.pitch_map import grass_roi
+
+        roi = grass_roi(frame)
     if pitch_ratio < 0.12:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         objects = cv2.adaptiveThreshold(
@@ -732,7 +807,7 @@ def _detect_objects_blob(frame: np.ndarray) -> list[Detection]:
             continue
         cx = moments["m10"] / moments["m00"]
         cy = moments["m01"] / moments["m00"]
-        x, y = _to_pitch(cx, cy, width, height)
+        x, y = _to_pitch(cx, cy, width, height, roi=roi)
         kind = "ball" if frac < 0.0004 else "player"
         detection = Detection(
             x=x, y=y, area=area, kind=kind, bgr=_contour_bgr(color_source, contour)
@@ -947,14 +1022,38 @@ def _owner_near_point(
     return closest
 
 
-def _team_goal_x(team: int, players: list[Track]) -> float:
-    """Attacking goal X (0 or 100) from which way the team advances the ball."""
+def _team_goal_x(
+    team: int,
+    players: list[Track],
+    *,
+    frame_lo: int | None = None,
+    frame_hi: int | None = None,
+) -> float:
+    """Attacking goal X (0 or 100) from which way the team advances the ball.
+
+    Optional ``frame_lo`` / ``frame_hi`` limit the window (use per half so
+    ends switching at half-time does not invert every 2H strike).
+    """
 
     def _disp(side: int) -> float:
         members = [track for track in players if track.team == side]
         if not members:
             return 0.0
-        return sum(track.xs[-1] - track.xs[0] for track in members) / len(members)
+        deltas: list[float] = []
+        for track in members:
+            if frame_lo is None or frame_hi is None:
+                deltas.append(track.xs[-1] - track.xs[0])
+                continue
+            xs = [
+                x
+                for frame, x in zip(track.frames, track.xs, strict=True)
+                if frame_lo <= frame < frame_hi
+            ]
+            if len(xs) >= 2:
+                deltas.append(xs[-1] - xs[0])
+        if not deltas:
+            return 0.0
+        return sum(deltas) / len(deltas)
 
     home_disp = _disp(0)
     away_disp = _disp(1)
@@ -962,6 +1061,30 @@ def _team_goal_x(team: int, players: list[Track]) -> float:
     if team == 0:
         return 100.0 if home_attacks_right else 0.0
     return 0.0 if home_attacks_right else 100.0
+
+
+def _goal_x_by_period(
+    players: list[Track], fps: float
+) -> dict[int, tuple[float, float]]:
+    """Home/away attack goal X for period 1 and 2."""
+
+    half_frame = int(round(45 * 60 * max(fps, 0.01)))
+    p1 = (
+        _team_goal_x(0, players, frame_lo=0, frame_hi=half_frame),
+        _team_goal_x(1, players, frame_lo=0, frame_hi=half_frame),
+    )
+    # Fall back to full-film orientation when a half has no motion.
+    full = (_team_goal_x(0, players), _team_goal_x(1, players))
+    if p1[0] == p1[1]:
+        p1 = full
+    p2 = (
+        _team_goal_x(0, players, frame_lo=half_frame, frame_hi=10**12),
+        _team_goal_x(1, players, frame_lo=half_frame, frame_hi=10**12),
+    )
+    if p2[0] == p2[1]:
+        # Ends switch: invert period-1 if 2H had no clear displacement.
+        p2 = (100.0 - p1[0], 100.0 - p1[1]) if p1 != full else full
+    return {1: p1, 2: p2}
 
 
 def _clone_track(track: Track) -> Track:
@@ -1190,7 +1313,8 @@ def events_from_tracks(
         uuid5(AUTO_NAMESPACE, f"{match_id}-team-{home_name}"),
         uuid5(AUTO_NAMESPACE, f"{match_id}-team-{away_name}"),
     )
-    goal_x = (_team_goal_x(0, players), _team_goal_x(1, players))
+    goals_by_period = _goal_x_by_period(players, fps)
+    goal_x = goals_by_period[1]
 
     lookup: dict[int, dict[int, tuple[float, float]]] = {}
     for track in players:
@@ -1222,6 +1346,7 @@ def events_from_tracks(
     last_tag_point: tuple[float, float] | None = None
     last_owner: Track | None = None
     prev_point: tuple[float, float] | None = None
+    prev_frame_index: int | None = None
     pending_shot: MatchEvent | None = None
     pending_shot_s = -1e9
 
@@ -1243,6 +1368,7 @@ def events_from_tracks(
             last_tag_point = point
             last_owner = owner
             prev_point = point
+            prev_frame_index = frame_index
             last_event_s = now_s
             continue
         start = last_tag_point
@@ -1252,9 +1378,14 @@ def events_from_tracks(
             if prev_point is not None
             else travel
         )
-        dt = 1.0 / max(fps, 0.01)
+        # Sampled tracks skip frames — use stride, not 1/fps (that inflated speed
+        # by ~fps/sample_hz and invented 100+ "shots").
+        frame_dt = max(1, frame_index - (prev_frame_index or frame_index - 1))
+        dt = frame_dt / max(fps, 0.01)
         speed = step / max(dt, 1e-3)
-        attack_goal = goal_x[owner.team]
+        actor = last_owner if last_owner is not None else owner
+        period_goals = goals_by_period.get(period) or goal_x
+        attack_goal = period_goals[actor.team]
         toward_goal = abs(point[0] - attack_goal) < abs(start[0] - attack_goal)
         box_x = 82.0 if attack_goal >= 50 else 18.0
         in_box = point[0] >= box_x if attack_goal >= 50 else point[0] <= box_x
@@ -1264,7 +1395,6 @@ def events_from_tracks(
         due = (now_s - last_event_s) >= TARGET_EVENT_GAP_S
         shot_gap_ok = (now_s - last_shot_s) >= SHOT_MIN_GAP_S
         goal_gap_ok = (now_s - last_goal_s) >= GOAL_MIN_GAP_S
-        actor = last_owner if last_owner is not None else owner
         actor_player_id = player_ids[actor.track_id]
         actor_is_gk = is_goalkeeper_actor(
             position_by_player.get(actor_player_id),
@@ -1364,29 +1494,8 @@ def events_from_tracks(
                     }
                 )
                 tagged = True
-            elif last_owner is not None and owner.team != last_owner.team and gap_ok:
-                # Defensive transition → attacking transition for the winner.
-                _emit(
-                    {
-                        **payload,
-                        "event_type": EventType.BALL_LOST,
-                        "end_x": None,
-                        "end_y": None,
-                        "successful": False,
-                    }
-                )
-                _emit(
-                    {
-                        **payload,
-                        "team_id": team_ids[owner.team],
-                        "player_id": player_ids[owner.track_id],
-                        "event_type": EventType.INTERCEPTION,
-                        "end_x": None,
-                        "end_y": None,
-                        "x": point[0],
-                        "y": point[1],
-                    }
-                )
+            elif last_owner is not None and owner.team != last_owner.team and due:
+                # One recovery tag — not lost+intercept+recovery every 2.8s.
                 _emit(
                     {
                         **payload,
@@ -1403,7 +1512,7 @@ def events_from_tracks(
             elif (
                 last_owner is not None
                 and not _same_actor(last_owner, owner, lookup, frame_index)
-                and travel >= 3.5
+                and travel >= 6.0
                 and gap_ok
             ):
                 kind = classify_distribution(
@@ -1426,7 +1535,8 @@ def events_from_tracks(
                     extra["end_y"] = point[1]
                 _emit({**payload, **extra})
                 tagged = True
-            elif due and travel >= 4.0:
+            elif due and travel >= 12.0 and toward_goal:
+                # Sparse film: only recycle a possession pass on a clear advance.
                 kind = classify_distribution(
                     start=start,
                     point=point,
@@ -1447,6 +1557,7 @@ def events_from_tracks(
             last_tag_point = point
         last_owner = owner
         prev_point = point
+        prev_frame_index = frame_index
 
     play_types = {
         EventType.PASS,
@@ -1486,7 +1597,9 @@ def events_from_tracks(
             )
     if not events:
         raise VideoCollectError("The film produced no collectable actions.")
-    return events, roster
+    from analytics.statman_iq import sanitize_film_events
+
+    return sanitize_film_events(events), roster
 
 
 def sample_and_track(
@@ -1517,6 +1630,10 @@ def sample_and_track(
     step = max(1, int(round(info.fps / max(sample_hz, 0.1))))
     planned = int(window_duration * max(sample_hz, 0.1)) + 2
     planned = max(1, min(planned, max_sample_frames))
+    try:
+        cv2.setNumThreads(int(os.environ.get("CV_NUM_THREADS", "1") or "1"))
+    except Exception:  # noqa: BLE001 — optional
+        pass
     capture = cv2.VideoCapture(str(info.path))
     if not capture.isOpened():
         raise VideoCollectError(f"OpenCV could not open the match film: {info.path}")
@@ -1556,7 +1673,10 @@ def sample_and_track(
                 continue
             consecutive_fail = 0
             resized = _resize(frame, max_side)
-            detections = detect_objects(resized)
+            try:
+                detections = detect_objects(resized)
+            except Exception:  # noqa: BLE001 — one bad frame must not kill Analyse
+                detections = []
             next_id = _match_tracks(
                 tracks,
                 detections,
@@ -1573,6 +1693,10 @@ def sample_and_track(
                     (f"Watching minute {watched_min:.1f} " f"· sampled {sampled}/{planned}"),
                     0.08 + 0.82 * (sampled / planned),
                 )
+            if sampled % 50 == 0:
+                import gc
+
+                gc.collect()
             if sampled >= planned:
                 break
     finally:
@@ -1592,6 +1716,9 @@ def collect_from_video(
     home_team_name: str | None = None,
     away_team_name: str | None = None,
     lineups: MatchLineups | None = None,
+    official_home_goals: int | None = None,
+    official_away_goals: int | None = None,
+    force_fresh: bool = False,
 ) -> MatchRundown:
     """Watch a match film and return the collected four-pillar rundown.
 
@@ -1606,10 +1733,19 @@ def collect_from_video(
         home_team_name: Optional home display name (else inferred from filename).
         away_team_name: Optional away display name.
         lineups: Optional real Home/Away sheets (names + shirt numbers).
+        official_home_goals: Optional final score from distinti / tabellino.
+        official_away_goals: Optional final score from distinti / tabellino.
+        force_fresh: When True, delete prior checkpoints and re-watch the film.
     """
 
+    if force_fresh:
+        cleared = clear_film_collect_state(path)
+        if cleared:
+            _emit(on_progress, f"Cleared prior tags ({', '.join(cleared)})…", 0.02)
+
     # A prior watch that died at the final fold can finish here — no re-watch.
-    prior = load_collect_checkpoint(path)
+    # Skip when force_fresh: the operator asked for a full new rundown.
+    prior = None if force_fresh else load_collect_checkpoint(path)
     if prior is not None and str(prior.get("stage") or "") == "pre_collect_game":
         _emit(on_progress, "Finishing from saved tags (no re-watch)…", 0.95)
         rundown = finish_collect_from_checkpoint(path)
@@ -1622,6 +1758,14 @@ def collect_from_video(
             1.0,
         )
         return rundown
+
+    # Railway Web embed sets STATMAN_SAMPLE_HZ / MAX_SIDE to stay under RAM.
+    if sample_hz == DEFAULT_SAMPLE_HZ:
+        sample_hz = env_sample_hz()
+    if max_side == DEFAULT_MAX_SIDE:
+        max_side = env_max_side()
+    if max_sample_frames == DEFAULT_MAX_SAMPLE_FRAMES:
+        max_sample_frames = env_max_sample_frames()
 
     home_kit_bgr = parse_kit_hex(home_kit_hex)
     away_kit_bgr = parse_kit_hex(away_kit_hex)
@@ -1653,12 +1797,15 @@ def collect_from_video(
     team_id = uuid5(AUTO_NAMESPACE, f"team:{match_id}")
     clip_url = info.path.as_uri()
     inferred_home, inferred_away = infer_team_names(info.path.name)
-    if lineups is not None:
-        home_name = (home_team_name or "").strip() or lineups.home_team or inferred_home
-        away_name = (away_team_name or "").strip() or lineups.away_team or inferred_away
-    else:
-        home_name = (home_team_name or "").strip() or inferred_home
-        away_name = (away_team_name or "").strip() or inferred_away
+    lineup_home = lineups.home_team if lineups is not None else None
+    lineup_away = lineups.away_team if lineups is not None else None
+    # Explicit UI / distinti names beat line-up placeholders and filename.
+    home_name = prefer_team_name(
+        home_team_name, lineup_home, inferred_home, fallback="Home"
+    )
+    away_name = prefer_team_name(
+        away_team_name, lineup_away, inferred_away, fallback="Away"
+    )
     events, roster = events_from_tracks(
         tracks,
         fps=info.fps,
@@ -1671,6 +1818,26 @@ def collect_from_video(
         away_kit_bgr=away_kit_bgr,
         lineups=lineups,
     )
+    home_team_id = uuid5(AUTO_NAMESPACE, f"{match_id}-team-{home_name}")
+    away_team_id = uuid5(AUTO_NAMESPACE, f"{match_id}-team-{away_name}")
+    if official_home_goals is not None and official_away_goals is not None:
+        from analytics.distinti import apply_official_score
+
+        events = apply_official_score(
+            events,
+            home_team_id=home_team_id,
+            away_team_id=away_team_id,
+            home_goals=official_home_goals,
+            away_goals=official_away_goals,
+        )
+        _emit(
+            on_progress,
+            (
+                f"Pinned score to distinti {official_home_goals}-{official_away_goals} "
+                "· demoted extra film goals"
+            ),
+            0.935,
+        )
     write_collect_checkpoint(
         info.path,
         match_id=match_id,
@@ -1681,7 +1848,6 @@ def collect_from_video(
         stage="after_first_pass",
     )
     duration_minutes = max(minutes, rundown_minutes_from_events(events), 0.1)
-    home_team_id = uuid5(AUTO_NAMESPACE, f"{match_id}-team-{home_name}")
     coverage = build_coverage_report(
         events,
         duration_minutes,
@@ -1764,6 +1930,30 @@ def collect_from_video(
                 home_team_ids={home_team_id},
             )
 
+    # Re-pass merges skip the first-pass sanitize — re-cap goals + shots.
+    from analytics.statman_iq import sanitize_film_events
+
+    events = sanitize_film_events(events)
+    # Distinti scoreline is law when provided (after sanitize).
+    if official_home_goals is not None and official_away_goals is not None:
+        from analytics.distinti import apply_official_score
+
+        events = apply_official_score(
+            events,
+            home_team_id=home_team_id,
+            away_team_id=away_team_id,
+            home_goals=official_home_goals,
+            away_goals=official_away_goals,
+        )
+        _emit(
+            on_progress,
+            (
+                f"Final score pinned to distinti "
+                f"{official_home_goals}-{official_away_goals}"
+            ),
+            0.94,
+        )
+
     # Save tags BEFORE the final fold — if collect_game fails, we can finish
     # without re-watching the film.
     write_collect_checkpoint(
@@ -1785,6 +1975,8 @@ def collect_from_video(
                 home_team_name=home_name,
                 away_team_name=away_name,
                 tag_source="film",
+                official_home_goals=official_home_goals,
+                official_away_goals=official_away_goals,
             )
         )
     except ValueError as exc:
@@ -1796,6 +1988,13 @@ def collect_from_video(
                 f"Final fold failed ({exc}). Tags are saved — click Analyse again "
                 "to finish from the checkpoint without re-watching."
             ) from exc
+    else:
+        # Success — drop the resume checkpoint so the next Analyse re-watches
+        # unless the operator explicitly recovers from an error.
+        try:
+            film_checkpoint_path(info.path).unlink(missing_ok=True)
+        except OSError:
+            pass
     try:
         write_sidecar_xml(rundown, info.path)
     except OSError:

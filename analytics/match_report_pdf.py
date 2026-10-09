@@ -78,7 +78,7 @@ def build_match_report_pdf(
         fig, ax = plt.subplots(figsize=(11.69, 8.27))
         ax.axis("off")
         fig.patch.set_facecolor("#f8fafc")
-        ax.text(0.5, 0.72, "EnjoyStats", fontsize=28, fontweight="bold", ha="center")
+        ax.text(0.5, 0.72, "StatMan", fontsize=28, fontweight="bold", ha="center")
         ax.text(0.5, 0.62, "Match statistics report", fontsize=14, ha="center", color="#475569")
         ax.text(
             0.5,
