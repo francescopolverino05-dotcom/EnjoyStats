@@ -889,15 +889,34 @@ def render_perspective_banner(
     perspective: SheetPerspective,
     *,
     tag_source: str = "official",
+    rundown: MatchRundown | None = None,
 ) -> None:
     """Explain film vs one-team XML so Home/Away never overclaims the score."""
 
+    if tag_source == "film" and rundown is not None:
+        home = rundown.summary.home_team_name or "Home"
+        away = rundown.summary.away_team_name or "Away"
+        sheets = team_sheets_from_rundown(rundown)
+        tagged_h = sheets[0].goals if sheets else 0
+        tagged_a = sheets[1].goals if len(sheets) > 1 else 0
+        oh = getattr(rundown.summary, "official_home_goals", None)
+        oa = getattr(rundown.summary, "official_away_goals", None)
+        if oh is not None and oa is not None:
+            st.success(
+                f"Film Analyse · **{home} {int(oh)}–{int(oa)} {away}** "
+                f"(distinti score · tagged goals {tagged_h}–{tagged_a})."
+            )
+        else:
+            st.success(
+                f"Film Analyse · **{home} {tagged_h}–{tagged_a} {away}** "
+                "(auto-tagged — pin distinti score for the official result)."
+            )
+        return
     if tag_source == "film":
         st.success(
             f"Film Analyse Stats · both teams auto-tagged · "
             f"{perspective.analysed_team_name} {perspective.analysed_goals}–"
-            f"{perspective.opposition_goals_on_sheet} {perspective.opposition_team_name}. "
-            "This is the automated rundown (not a Wyscout scoresheet)."
+            f"{perspective.opposition_goals_on_sheet} {perspective.opposition_team_name}."
         )
         return
     if not perspective.one_sided:
@@ -940,26 +959,54 @@ def summary_shots_bogus(rundown: MatchRundown) -> bool:
 def render_score_repin(rundown: MatchRundown) -> None:
     """Fix a wrong film scoreboard (e.g. 16–4) without re-watching."""
 
+    from analytics.match_tags import is_placeholder_team_name, prefer_team_name
+
     tag_source = getattr(rundown.summary, "tag_source", "official") or "official"
     if tag_source != "film":
         return
     sheets = team_sheets_from_rundown(rundown)
-    home_name = rundown.summary.home_team_name or "Home"
-    away_name = rundown.summary.away_team_name or "Away"
-    goals_by_name = {(sheet.team_name or "").strip().casefold(): sheet.goals for sheet in sheets}
-    cur_home = goals_by_name.get(home_name.strip().casefold(), goals_by_name.get("home", 0))
-    cur_away = goals_by_name.get(away_name.strip().casefold(), goals_by_name.get("away", 0))
-    if not sheets:
-        cur_home, cur_away = 0, 0
-    elif home_name.strip().casefold() not in goals_by_name and "home" not in goals_by_name:
-        # Names mismatched — fall back to sheet order for the default inputs only.
+    home_name = prefer_team_name(
+        rundown.summary.home_team_name,
+        sheets[0].team_name if sheets else None,
+        str(st.session_state.get("analyse_home_name") or ""),
+        fallback="Home",
+    )
+    away_name = prefer_team_name(
+        rundown.summary.away_team_name,
+        sheets[1].team_name if len(sheets) > 1 else None,
+        str(st.session_state.get("analyse_away_name") or ""),
+        fallback="Away",
+    )
+    official_h = getattr(rundown.summary, "official_home_goals", None)
+    official_a = getattr(rundown.summary, "official_away_goals", None)
+    if official_h is not None and official_a is not None:
+        cur_home, cur_away = int(official_h), int(official_a)
+    elif sheets:
         cur_home = sheets[0].goals
         cur_away = sheets[1].goals if len(sheets) > 1 else 0
+    else:
+        cur_home, cur_away = 0, 0
+    # Prefill from Home Analyse widgets when the sheet still says Home/Away 0–3.
+    ui_h = st.session_state.get("analyse_official_home_goals")
+    ui_a = st.session_state.get("analyse_official_away_goals")
+    if (
+        official_h is None
+        and isinstance(ui_h, (int, float))
+        and isinstance(ui_a, (int, float))
+        and (int(ui_h), int(ui_a)) != (0, 0)
+    ):
+        cur_home, cur_away = int(ui_h), int(ui_a)
     bogus = cur_home + cur_away > 8 or summary_shots_bogus(rundown)
-    with st.expander("Fix film tags (shots / score)", expanded=bogus):
+    names_wrong = is_placeholder_team_name(
+        rundown.summary.home_team_name
+    ) or is_placeholder_team_name(rundown.summary.away_team_name)
+    with st.expander(
+        "Fix film tags (shots / score / names)",
+        expanded=bogus or names_wrong or official_h is None,
+    ):
         st.caption(
             "Film CV invents box traffic as shots and goals. "
-            "Clean noise and/or pin the official score — no re-analyse needed."
+            "Pin the distinti score and club names — no re-analyse needed."
         )
         if st.button(
             "Clean fake shots & goals",
@@ -980,22 +1027,35 @@ def render_score_repin(rundown: MatchRundown) -> None:
                 st.rerun()
             except ValueError as exc:
                 st.error(str(exc))
+        name_cols = st.columns(2)
+        with name_cols[0]:
+            fix_home_name = st.text_input(
+                "Home team name",
+                value=home_name,
+                key="repin_home_name",
+            ).strip()
+        with name_cols[1]:
+            fix_away_name = st.text_input(
+                "Away team name",
+                value=away_name,
+                key="repin_away_name",
+            ).strip()
         cols = st.columns(2)
         with cols[0]:
             fix_home = st.number_input(
-                f"{home_name} goals",
+                f"{fix_home_name or home_name} goals",
                 min_value=0,
                 max_value=30,
-                value=0 if bogus else min(cur_home, 30),
+                value=min(max(cur_home, 0), 30),
                 step=1,
                 key="repin_home_goals",
             )
         with cols[1]:
             fix_away = st.number_input(
-                f"{away_name} goals",
+                f"{fix_away_name or away_name} goals",
                 min_value=0,
                 max_value=30,
-                value=4 if bogus and cur_away >= 4 else (0 if bogus else min(cur_away, 30)),
+                value=min(max(cur_away, 0), 30),
                 step=1,
                 key="repin_away_goals",
             )
@@ -1004,13 +1064,21 @@ def render_score_repin(rundown: MatchRundown) -> None:
                 from analytics.distinti import pin_rundown_score
 
                 home_g, away_g = int(fix_home), int(fix_away)
-                updated = pin_rundown_score(rundown, home_goals=home_g, away_goals=away_g)
+                updated = pin_rundown_score(
+                    rundown,
+                    home_goals=home_g,
+                    away_goals=away_g,
+                    home_team_name=fix_home_name or home_name,
+                    away_team_name=fix_away_name or away_name,
+                )
                 st.session_state[RUNDOWN_KEY] = rundown_to_json(updated)
                 history_msg = _remember_collection(updated)
+                label_h = updated.summary.home_team_name
+                label_a = updated.summary.away_team_name
                 st.session_state[PERSIST_KEY] = (
-                    f"Score pinned to {home_g}–{away_g} · {history_msg}"
+                    f"Score pinned to {label_h} {home_g}–{away_g} {label_a} · {history_msg}"
                 )
-                st.success(f"Scoreboard set to {home_g}–{away_g}.")
+                st.success(f"Scoreboard set to {label_h} {home_g}–{away_g} {label_a}.")
                 st.rerun()
             except ValueError as exc:
                 st.error(str(exc))
@@ -1052,18 +1120,26 @@ def render_match_summary(rundown: MatchRundown) -> None:
     perspective = analysis_perspective(rundown)
     tag_source = getattr(rundown.summary, "tag_source", "official") or "official"
     st.subheader("Match rundown")
-    render_perspective_banner(perspective, tag_source=tag_source)
+    render_perspective_banner(perspective, tag_source=tag_source, rundown=rundown)
     render_score_repin(rundown)
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Events", summary.event_count)
     c2.metric("Players", summary.player_count)
-    if perspective.one_sided:
+    oh = getattr(summary, "official_home_goals", None)
+    oa = getattr(summary, "official_away_goals", None)
+    if oh is not None and oa is not None:
+        c3.metric("Score (distinti)", f"{int(oh)}–{int(oa)}")
+    elif perspective.one_sided:
         c3.metric(
             f"{perspective.analysed_team_name} goals",
             perspective.analysed_goals,
         )
     else:
-        c3.metric("Goals", summary.goals)
+        sheets = team_sheets_from_rundown(rundown)
+        if len(sheets) >= 2:
+            c3.metric("Score", f"{sheets[0].goals}–{sheets[1].goals}")
+        else:
+            c3.metric("Goals", summary.goals)
     c4.metric("Shots", summary.shots)
     c5.metric("Passes", summary.passes)
     st.caption(
@@ -1613,21 +1689,74 @@ def render_film_uploader_panel(base_url: str) -> None:
     components.html(upload_page_html(api_for_browser), height=320, scrolling=False)
 
 
+def _sync_analyse_identity_from_uploads(
+    lineup_file: object | None,
+    distinti_file: object | None,
+    latest_film: object | None,
+) -> None:
+    """Write club names + official score into session_state before widgets render."""
+
+    import hashlib
+
+    from analytics.match_tags import infer_team_names, is_placeholder_team_name
+
+    if latest_film is not None:
+        inferred_h, inferred_a = infer_team_names(getattr(latest_film, "name", ""))
+        if not is_placeholder_team_name(inferred_h) and is_placeholder_team_name(
+            str(st.session_state.get("analyse_home_name") or "Home")
+        ):
+            st.session_state["analyse_home_name"] = inferred_h
+        if not is_placeholder_team_name(inferred_a) and is_placeholder_team_name(
+            str(st.session_state.get("analyse_away_name") or "Away")
+        ):
+            st.session_state["analyse_away_name"] = inferred_a
+
+    if lineup_file is not None:
+        raw = lineup_file.getvalue()
+        sig = hashlib.sha1(raw).hexdigest()
+        if st.session_state.get("_analyse_lineup_sig") != sig:
+            st.session_state["_analyse_lineup_sig"] = sig
+            try:
+                parsed = parse_lineup_bytes(
+                    raw,
+                    filename=getattr(lineup_file, "name", ""),
+                    home_team=str(st.session_state.get("analyse_home_name") or "Home"),
+                    away_team=str(st.session_state.get("analyse_away_name") or "Away"),
+                )
+                if not is_placeholder_team_name(parsed.home_team):
+                    st.session_state["analyse_home_name"] = parsed.home_team
+                if not is_placeholder_team_name(parsed.away_team):
+                    st.session_state["analyse_away_name"] = parsed.away_team
+            except ValueError:
+                pass
+
+    if distinti_file is not None:
+        raw = distinti_file.getvalue()
+        sig = hashlib.sha1(raw).hexdigest()
+        if st.session_state.get("_analyse_distinti_sig") != sig:
+            st.session_state["_analyse_distinti_sig"] = sig
+            try:
+                facts = parse_distinti_pdf(
+                    raw,
+                    filename=getattr(distinti_file, "name", "distinti.pdf"),
+                )
+                if not is_placeholder_team_name(facts.home_team):
+                    st.session_state["analyse_home_name"] = facts.home_team
+                if not is_placeholder_team_name(facts.away_team):
+                    st.session_state["analyse_away_name"] = facts.away_team
+                if facts.home_goals is not None and facts.away_goals is not None:
+                    st.session_state["analyse_official_home_goals"] = int(facts.home_goals)
+                    st.session_state["analyse_official_away_goals"] = int(facts.away_goals)
+            except ValueError:
+                pass
+
+
 def render_analyse_landing(base_url: str) -> None:
     """Home: match film + line-up CSV + distinti PDF, then Analyse."""
 
     import json as _json
 
-    name_cols = st.columns(2)
-    with name_cols[0]:
-        home_team_name = st.text_input("Home team", value="Home", key="analyse_home_name").strip()
-    with name_cols[1]:
-        away_team_name = st.text_input("Away team", value="Away", key="analyse_away_name").strip()
-    kit_cols = st.columns(2)
-    with kit_cols[0]:
-        home_kit_hex = st.color_picker("Home kit colour", value="#1e3a8a", key="analyse_home_kit")
-    with kit_cols[1]:
-        away_kit_hex = st.color_picker("Away kit colour", value="#dc2626", key="analyse_away_kit")
+    from analytics.match_tags import prefer_team_name
 
     render_film_uploader_panel(base_url)
 
@@ -1652,13 +1781,31 @@ def render_analyse_landing(base_url: str) -> None:
         type=["pdf"],
         key="analyse_distinti_pdf",
     )
+
+    latest_film = latest_ready_film()
+    _sync_analyse_identity_from_uploads(lineup_file, distinti_file, latest_film)
+
+    name_cols = st.columns(2)
+    with name_cols[0]:
+        home_team_name = st.text_input("Home team", key="analyse_home_name").strip()
+    with name_cols[1]:
+        away_team_name = st.text_input("Away team", key="analyse_away_name").strip()
+    kit_cols = st.columns(2)
+    with kit_cols[0]:
+        home_kit_hex = st.color_picker("Home kit colour", value="#1e3a8a", key="analyse_home_kit")
+    with kit_cols[1]:
+        away_kit_hex = st.color_picker("Away kit colour", value="#dc2626", key="analyse_away_kit")
+
+    if "analyse_official_home_goals" not in st.session_state:
+        st.session_state["analyse_official_home_goals"] = 0
+    if "analyse_official_away_goals" not in st.session_state:
+        st.session_state["analyse_official_away_goals"] = 0
     score_cols = st.columns(2)
     with score_cols[0]:
         manual_home_goals = st.number_input(
             "Official home goals",
             min_value=0,
             max_value=30,
-            value=0,
             step=1,
             key="analyse_official_home_goals",
         )
@@ -1667,7 +1814,6 @@ def render_analyse_landing(base_url: str) -> None:
             "Official away goals",
             min_value=0,
             max_value=30,
-            value=0,
             step=1,
             key="analyse_official_away_goals",
         )
@@ -1679,8 +1825,8 @@ def render_analyse_landing(base_url: str) -> None:
 
     lineup_json_text = ""
     payload: dict[str, object] = {
-        "home_team": home_team_name or "Home",
-        "away_team": away_team_name or "Away",
+        "home_team": prefer_team_name(home_team_name, fallback="Home"),
+        "away_team": prefer_team_name(away_team_name, fallback="Away"),
         "home": [],
         "away": [],
     }
@@ -1693,8 +1839,12 @@ def render_analyse_landing(base_url: str) -> None:
                 away_team=away_team_name or "Away",
             )
             payload = {
-                "home_team": parsed.home_team,
-                "away_team": parsed.away_team,
+                "home_team": prefer_team_name(
+                    home_team_name, parsed.home_team, fallback="Home"
+                ),
+                "away_team": prefer_team_name(
+                    away_team_name, parsed.away_team, fallback="Away"
+                ),
                 "home": [
                     {
                         "jersey": p.jersey,
@@ -1712,10 +1862,6 @@ def render_analyse_landing(base_url: str) -> None:
                     for p in parsed.away
                 ],
             }
-            if parsed.home_team and parsed.home_team != "Home":
-                home_team_name = parsed.home_team
-            if parsed.away_team and parsed.away_team != "Away":
-                away_team_name = parsed.away_team
             st.success(
                 f"Line-up loaded · Home {len(parsed.home)} · Away {len(parsed.away)}"
             )
@@ -1728,12 +1874,20 @@ def render_analyse_landing(base_url: str) -> None:
                 filename=getattr(distinti_file, "name", "distinti.pdf"),
             )
             payload["match_facts"] = facts_to_payload(facts)
-            if facts.home_team and facts.home_team != "Home":
-                payload["home_team"] = facts.home_team
-                home_team_name = facts.home_team
-            if facts.away_team and facts.away_team != "Away":
-                payload["away_team"] = facts.away_team
-                away_team_name = facts.away_team
+            payload["home_team"] = prefer_team_name(
+                facts.home_team,
+                home_team_name,
+                str(payload.get("home_team") or ""),
+                fallback="Home",
+            )
+            payload["away_team"] = prefer_team_name(
+                facts.away_team,
+                away_team_name,
+                str(payload.get("away_team") or ""),
+                fallback="Away",
+            )
+            home_team_name = str(payload["home_team"])
+            away_team_name = str(payload["away_team"])
             if not payload.get("home") and facts.home:
                 payload["home"] = [
                     {
@@ -1753,13 +1907,10 @@ def render_analyse_landing(base_url: str) -> None:
                     for p in facts.away
                 ]
             st.success(
-                f"Distinti loaded · {facts.home_team} {facts.score_label()} "
-                f"{facts.away_team} · "
+                f"Distinti loaded · {payload['home_team']} {facts.score_label()} "
+                f"{payload['away_team']} · "
                 f"players Home {len(facts.home)} / Away {len(facts.away)}"
             )
-            if facts.home_goals is not None and facts.away_goals is not None:
-                manual_home_goals = int(facts.home_goals)
-                manual_away_goals = int(facts.away_goals)
         except ValueError as exc:
             st.error(str(exc))
     pdf_score = payload.get("match_facts") if isinstance(payload.get("match_facts"), dict) else None
@@ -1768,23 +1919,43 @@ def render_analyse_landing(base_url: str) -> None:
         and pdf_score.get("home_goals") is not None
         and pdf_score.get("away_goals") is not None
     )
-    # Always pin when the checkbox is on (default) or the PDF already has a score.
+    # Pin when checkbox is on or the PDF already has a score.
+    # Never let unsynced 0–0 widgets wipe a real distinti scoreline.
     if use_manual_score or pdf_has_score:
         facts_payload = dict(pdf_score or {})
-        if use_manual_score or not pdf_has_score:
-            facts_payload["home_goals"] = int(manual_home_goals)
-            facts_payload["away_goals"] = int(manual_away_goals)
+        widget_h, widget_a = int(manual_home_goals), int(manual_away_goals)
+        pdf_h = int(pdf_score["home_goals"]) if pdf_has_score else None
+        pdf_a = int(pdf_score["away_goals"]) if pdf_has_score else None
+        if pdf_has_score and widget_h == 0 and widget_a == 0 and (pdf_h, pdf_a) != (0, 0):
+            facts_payload["home_goals"] = pdf_h
+            facts_payload["away_goals"] = pdf_a
+        elif use_manual_score or not pdf_has_score:
+            facts_payload["home_goals"] = widget_h
+            facts_payload["away_goals"] = widget_a
             facts_payload["source"] = facts_payload.get("source") or "manual_distinti_score"
-        facts_payload.setdefault(
-            "home_team", payload.get("home_team") or home_team_name or "Home"
+        facts_payload["home_team"] = prefer_team_name(
+            home_team_name,
+            str(facts_payload.get("home_team") or ""),
+            str(payload.get("home_team") or ""),
+            fallback="Home",
         )
-        facts_payload.setdefault(
-            "away_team", payload.get("away_team") or away_team_name or "Away"
+        facts_payload["away_team"] = prefer_team_name(
+            away_team_name,
+            str(facts_payload.get("away_team") or ""),
+            str(payload.get("away_team") or ""),
+            fallback="Away",
         )
+        payload["home_team"] = facts_payload["home_team"]
+        payload["away_team"] = facts_payload["away_team"]
+        home_team_name = str(payload["home_team"])
+        away_team_name = str(payload["away_team"])
         payload["match_facts"] = facts_payload
         pinned_h = int(facts_payload["home_goals"])
         pinned_a = int(facts_payload["away_goals"])
-        st.info(f"Goals pinned to **{pinned_h}–{pinned_a}**")
+        st.info(
+            f"**{home_team_name} {pinned_h}–{pinned_a} {away_team_name}** "
+            "(goals pinned for Analyse)"
+        )
         if use_manual_score and pinned_h == 0 and pinned_a == 0 and not pdf_has_score:
             st.warning(
                 "Score is pinned at 0–0. Enter the real distinti result "

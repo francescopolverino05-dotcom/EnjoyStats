@@ -47,7 +47,7 @@ from analytics.block_coverage import (
 )
 from analytics.game_ingest import GamePayload, MatchRundown, PlayerRosterEntry, collect_game
 from analytics.lineups import MatchLineups, LineupPlayer
-from analytics.match_tags import infer_team_names, write_sidecar_xml
+from analytics.match_tags import infer_team_names, prefer_team_name, write_sidecar_xml
 from analytics.oncesport_export import write_oncesport_pair
 from analytics.smart_detect import (
     assign_side_by_kit,
@@ -1797,12 +1797,15 @@ def collect_from_video(
     team_id = uuid5(AUTO_NAMESPACE, f"team:{match_id}")
     clip_url = info.path.as_uri()
     inferred_home, inferred_away = infer_team_names(info.path.name)
-    if lineups is not None:
-        home_name = (home_team_name or "").strip() or lineups.home_team or inferred_home
-        away_name = (away_team_name or "").strip() or lineups.away_team or inferred_away
-    else:
-        home_name = (home_team_name or "").strip() or inferred_home
-        away_name = (away_team_name or "").strip() or inferred_away
+    lineup_home = lineups.home_team if lineups is not None else None
+    lineup_away = lineups.away_team if lineups is not None else None
+    # Explicit UI / distinti names beat line-up placeholders and filename.
+    home_name = prefer_team_name(
+        home_team_name, lineup_home, inferred_home, fallback="Home"
+    )
+    away_name = prefer_team_name(
+        away_team_name, lineup_away, inferred_away, fallback="Away"
+    )
     events, roster = events_from_tracks(
         tracks,
         fps=info.fps,
@@ -1972,6 +1975,8 @@ def collect_from_video(
                 home_team_name=home_name,
                 away_team_name=away_name,
                 tag_source="film",
+                official_home_goals=official_home_goals,
+                official_away_goals=official_away_goals,
             )
         )
     except ValueError as exc:

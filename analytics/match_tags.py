@@ -30,7 +30,10 @@ from data_models.events import EventType, MatchEvent, ShotOutcome
 
 TAG_NAMESPACE: UUID = UUID("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb")
 SIDECAR_SUFFIX = ".tags.xml"
-_TEAM_SPLIT = re.compile(r"\s+v(?:s\.?)?\s+|_-_|_vs_|_v_|vs\.?", re.IGNORECASE)
+_TEAM_SPLIT = re.compile(
+    r"\s+v(?:s\.?)?\s+|_-_|_vs_|_v_|vs\.?|\s+[-–]\s+",
+    re.IGNORECASE,
+)
 _AWAY_TRIM = re.compile(
     r"("
     r"\s*\(\d+\s*-\s*\d+\)"
@@ -222,6 +225,24 @@ def infer_team_names(filename: str) -> tuple[str, str]:
     away_raw = _AWAY_TRIM.sub("", parts[1])
     away = away_raw.replace("_", " ").strip().title() or "Away"
     return home, away
+
+
+def is_placeholder_team_name(name: str | None) -> bool:
+    """True for empty / Home / Away placeholders that should lose to real names."""
+
+    cleaned = (name or "").strip().casefold()
+    return cleaned in {"", "home", "away", "team", "home team", "away team"}
+
+
+def prefer_team_name(*candidates: str | None, fallback: str = "Home") -> str:
+    """First non-placeholder club name, else ``fallback``."""
+
+    for candidate in candidates:
+        cleaned = (candidate or "").strip()
+        if cleaned and not is_placeholder_team_name(cleaned):
+            return cleaned
+    cleaned_fallback = (fallback or "Home").strip() or "Home"
+    return cleaned_fallback
 
 
 def sidecar_path_for(video_path: Path) -> Path:

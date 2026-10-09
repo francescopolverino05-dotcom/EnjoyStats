@@ -37,6 +37,8 @@ def test_parse_distinti_score_and_players() -> None:
     assert facts.home_goals == 0
     assert facts.away_goals == 4
     assert facts.score_label() == "0-4"
+    assert facts.home_team.casefold() == "salernitana"
+    assert facts.away_team.casefold() == "bari"
     assert len(facts.home) >= 2
     assert len(facts.away) >= 2
     assert facts.home[0].jersey == 1
@@ -44,6 +46,74 @@ def test_parse_distinti_score_and_players() -> None:
     payload = facts_to_payload(facts)
     assert payload["home_goals"] == 0
     assert payload["away_goals"] == 4
+    assert payload["home_team"].casefold() == "salernitana"
+
+
+def test_apply_official_score_pads_missing_goals() -> None:
+    """Distinti 0–4 must win even when film only tagged three away goals."""
+
+    match_id = uuid4()
+    home_id = uuid4()
+    away_id = uuid4()
+    player = uuid4()
+    events = [
+        MatchEvent.model_validate(
+            {
+                "match_id": match_id,
+                "team_id": home_id,
+                "player_id": player,
+                "period": 1,
+                "minute": 5,
+                "second": 0,
+                "event_type": EventType.PASS,
+                "is_goal": False,
+                "x": 40.0,
+                "y": 50.0,
+                "end_x": 55.0,
+                "end_y": 50.0,
+                "successful": True,
+            }
+        )
+    ]
+    for minute in (20, 35, 60):
+        events.append(
+            MatchEvent.model_validate(
+                {
+                    "match_id": match_id,
+                    "team_id": away_id,
+                    "player_id": player,
+                    "period": 1 if minute < 45 else 2,
+                    "minute": minute % 45,
+                    "second": 0,
+                    "event_type": EventType.GOAL,
+                    "is_goal": True,
+                    "shot_outcome": ShotOutcome.ON_TARGET,
+                    "x": 10.0,
+                    "y": 50.0,
+                }
+            )
+        )
+    cleaned = apply_official_score(
+        events,
+        home_team_id=home_id,
+        away_team_id=away_id,
+        home_goals=0,
+        away_goals=4,
+    )
+    away_goals = sum(
+        1
+        for event in cleaned
+        if event.team_id == away_id
+        and (event.is_goal or event.event_type is EventType.GOAL)
+    )
+    home_goals = sum(
+        1
+        for event in cleaned
+        if event.team_id == home_id
+        and (event.is_goal or event.event_type is EventType.GOAL)
+    )
+    assert home_goals == 0
+    assert away_goals == 4
 
 
 def test_clean_film_rundown_cuts_shot_noise(monkeypatch) -> None:

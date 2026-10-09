@@ -364,10 +364,14 @@ def collect_from_film_path(
                 source_label=str(facts_raw.get("source") or "distinti"),
             )
             lineups = merge_lineups_with_facts(lineups, facts)
-            if facts.home_team and (not home_team_name or home_team_name == "Home"):
-                home_team_name = facts.home_team
-            if facts.away_team and (not away_team_name or away_team_name == "Away"):
-                away_team_name = facts.away_team
+            from analytics.match_tags import prefer_team_name
+
+            home_team_name = prefer_team_name(
+                facts.home_team, home_team_name, fallback=home_team_name or "Home"
+            )
+            away_team_name = prefer_team_name(
+                facts.away_team, away_team_name, fallback=away_team_name or "Away"
+            )
     try:
         return collect_from_video(
             resolved,

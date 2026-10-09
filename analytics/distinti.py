@@ -65,6 +65,19 @@ _SCORE_PATTERNS = (
     ),
 )
 
+# Fixture header lines: "SALERNITANA - BARI" / "Ascoli vs Spezia"
+_FIXTURE_LINE = re.compile(
+    r"^([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ0-9 .'\-]{1,40}?)\s+"
+    r"(?:[-–]|vs\.?|versus)\s+"
+    r"([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ0-9 .'\-]{1,40})$",
+    re.IGNORECASE,
+)
+_FIXTURE_SKIP = re.compile(
+    r"risultato|tabellino|distinti|campionato|giornata|girone|lega|"
+    r"formazione|titolari|panchina|arbitro|stadio|score",
+    re.IGNORECASE,
+)
+
 # "10 ROSSI Mario" / "10. Rossi" / "#10 Rossi"
 _PLAYER_LINE = re.compile(
     r"^\s*#?(\d{1,2})[.)\-\s]+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ .'\-]{1,60})\s*$"
@@ -115,16 +128,37 @@ def _pdf_text(data: bytes) -> str:
     return text
 
 
+def _extract_fixture_teams(text: str) -> tuple[str, str]:
+    """Pull home/away club names from a distinti header line."""
+
+    for raw_line in text.splitlines()[:60]:
+        line = raw_line.strip().strip("·|")
+        if not line or _FIXTURE_SKIP.search(line):
+            continue
+        # Drop trailing score fragments: "Salernitana - Bari 0-4"
+        line = re.sub(r"\s+\d{1,2}\s*[-–]\s*\d{1,2}\s*$", "", line).strip()
+        match = _FIXTURE_LINE.match(line)
+        if match is None:
+            continue
+        home = _clean_name(match.group(1))
+        away = _clean_name(match.group(2))
+        if not home or not away:
+            continue
+        if home.casefold() in {"home", "casa"} or away.casefold() in {"away", "ospite"}:
+            continue
+        return home, away
+    return "", ""
+
+
 def _extract_score(text: str) -> tuple[int | None, int | None, str, str]:
-    home_team = ""
-    away_team = ""
     for pattern in _SCORE_PATTERNS:
         match = pattern.search(text)
         if not match:
             continue
         groups = match.groups()
         if len(groups) == 2:
-            return int(groups[0]), int(groups[1]), home_team, away_team
+            fixture_h, fixture_a = _extract_fixture_teams(text)
+            return int(groups[0]), int(groups[1]), fixture_h, fixture_a
         if len(groups) == 4:
             return (
                 int(groups[1]),
@@ -135,9 +169,10 @@ def _extract_score(text: str) -> tuple[int | None, int | None, str, str]:
     # Bare score near top of document.
     head = "\n".join(text.splitlines()[:40])
     bare = re.search(r"\b(\d{1,2})\s*[-–]\s*(\d{1,2})\b", head)
+    fixture_h, fixture_a = _extract_fixture_teams(text)
     if bare:
-        return int(bare.group(1)), int(bare.group(2)), home_team, away_team
-    return None, None, home_team, away_team
+        return int(bare.group(1)), int(bare.group(2)), fixture_h, fixture_a
+    return None, None, fixture_h, fixture_a
 
 
 def _side_from_context(line: str, current: str) -> str:
@@ -183,10 +218,12 @@ def parse_distinti_text(text: str, *, source_label: str = "distinti") -> MatchFa
 
     home_goals, away_goals, home_team, away_team = _extract_score(text)
     home, away = _extract_players(text)
-    if not home_team and home:
-        home_team = "Home"
-    if not away_team and away:
-        away_team = "Away"
+    if not home_team:
+        fixture_h, _fixture_a = _extract_fixture_teams(text)
+        home_team = fixture_h
+    if not away_team:
+        _fixture_h, fixture_a = _extract_fixture_teams(text)
+        away_team = fixture_a
     if home_goals is None and away_goals is None and not home and not away:
         raise ValueError(
             "Could not find a score or line-up in the distinti. "
@@ -239,15 +276,17 @@ def merge_lineups_with_facts(
         return lineups
     if lineups is None:
         return facts.lineups
+    from analytics.match_tags import prefer_team_name
+
     home = list(lineups.home) or list(facts.home)
     away = list(lineups.away) or list(facts.away)
     return MatchLineups(
-        home_team=lineups.home_team
-        if lineups.home_team and lineups.home_team != "Home"
-        else (facts.home_team or lineups.home_team),
-        away_team=lineups.away_team
-        if lineups.away_team and lineups.away_team != "Away"
-        else (facts.away_team or lineups.away_team),
+        home_team=prefer_team_name(
+            facts.home_team, lineups.home_team, fallback="Home"
+        ),
+        away_team=prefer_team_name(
+            facts.away_team, lineups.away_team, fallback="Away"
+        ),
         home=tuple(home),
         away=tuple(away),
     )
@@ -272,19 +311,27 @@ def apply_official_score(
 
     from data_models.events import EventType, ShotOutcome
 
+    from uuid import uuid4
+
     home_goals = max(0, int(home_goals))
     away_goals = max(0, int(away_goals))
     kept_home = 0
     kept_away = 0
     out: list[Any] = []
+    template_home: Any | None = None
+    template_away: Any | None = None
     for event in events:
+        team_id = getattr(event, "team_id", None)
+        if team_id == home_team_id and template_home is None:
+            template_home = event
+        elif team_id == away_team_id and template_away is None:
+            template_away = event
         is_goal = bool(getattr(event, "is_goal", False)) or (
             getattr(event, "event_type", None) is EventType.GOAL
         )
         if not is_goal:
             out.append(event)
             continue
-        team_id = getattr(event, "team_id", None)
         if team_id == home_team_id:
             if kept_home < home_goals:
                 kept_home += 1
@@ -327,37 +374,79 @@ def apply_official_score(
                     }
                 )
             )
+
+    def _pad_goal(template: Any | None, *, team_id: Any, minute: int) -> Any | None:
+        if template is None and not events:
+            return None
+        base = template or events[0]
+        match_id = getattr(base, "match_id", None)
+        if match_id is None:
+            return None
+        return base.model_copy(
+            update={
+                "event_id": uuid4(),
+                "team_id": team_id,
+                "player_id": getattr(template, "player_id", None) if template else None,
+                "period": 2 if minute >= 45 else 1,
+                "minute": minute % 45,
+                "second": 0,
+                "event_type": EventType.GOAL,
+                "is_goal": True,
+                "successful": True,
+                "shot_outcome": ShotOutcome.ON_TARGET,
+                "x": 94.0 if team_id == home_team_id else 6.0,
+                "y": 50.0,
+            }
+        )
+
+    pad_minute = 88
+    while kept_home < home_goals:
+        padded = _pad_goal(template_home, team_id=home_team_id, minute=pad_minute)
+        if padded is None:
+            break
+        out.append(padded)
+        kept_home += 1
+        pad_minute = max(1, pad_minute - 3)
+    pad_minute = 90
+    while kept_away < away_goals:
+        padded = _pad_goal(template_away, team_id=away_team_id, minute=pad_minute)
+        if padded is None:
+            break
+        out.append(padded)
+        kept_away += 1
+        pad_minute = max(1, pad_minute - 3)
     return out
 
 
 def _home_away_team_ids(rundown: Any) -> tuple[Any, Any]:
     """Resolve home/away UUIDs from summary names (not sheet order)."""
 
-    from analytics.team_sheet import team_sheets_from_rundown
+    from uuid import uuid5
 
-    home_name = (rundown.summary.home_team_name or "Home").strip().casefold()
-    away_name = (rundown.summary.away_team_name or "Away").strip().casefold()
-    sheets = team_sheets_from_rundown(rundown)
-    home_team_id = None
-    away_team_id = None
-    for sheet in sheets:
-        name = (sheet.team_name or "").strip().casefold()
-        if name == home_name or name == "home":
-            home_team_id = sheet.team_id
-        elif name == away_name or name == "away":
-            away_team_id = sheet.team_id
-    if home_team_id is not None and away_team_id is not None:
-        return home_team_id, away_team_id
-    # Fallback: majority-tagged side first is unreliable for score — use event order.
-    team_ids: list[Any] = []
-    seen: set[Any] = set()
-    for event in rundown.events:
-        if event.team_id not in seen:
-            seen.add(event.team_id)
-            team_ids.append(event.team_id)
-    if len(team_ids) < 2:
-        raise ValueError("Need two teams on the sheet to pin a scoreline.")
-    return team_ids[0], team_ids[1]
+    from analytics.team_sheet import _ordered_home_away_ids
+    from analytics.video_auto_collect import AUTO_NAMESPACE
+
+    home_label = (rundown.summary.home_team_name or "Home").strip() or "Home"
+    away_label = (rundown.summary.away_team_name or "Away").strip() or "Away"
+    seen = {event.team_id for event in rundown.events} | {
+        player.team_id for player in rundown.players
+    }
+    for home_candidate, away_candidate in (
+        (
+            uuid5(AUTO_NAMESPACE, f"{rundown.match_id}-team-{home_label}"),
+            uuid5(AUTO_NAMESPACE, f"{rundown.match_id}-team-{away_label}"),
+        ),
+        (
+            uuid5(rundown.match_id, "team:home"),
+            uuid5(rundown.match_id, "team:away"),
+        ),
+    ):
+        if home_candidate in seen and away_candidate in seen:
+            return home_candidate, away_candidate
+    ordered = _ordered_home_away_ids(rundown)
+    if len(ordered) >= 2:
+        return ordered[0][0], ordered[1][0]
+    raise ValueError("Need two teams on the sheet to pin a scoreline.")
 
 
 def clean_film_rundown(rundown: Any) -> Any:
@@ -395,6 +484,8 @@ def pin_rundown_score(
     *,
     home_goals: int,
     away_goals: int,
+    home_team_name: str | None = None,
+    away_team_name: str | None = None,
 ) -> Any:
     """Re-fold a film rundown so the scoreboard matches the distinti.
 
@@ -403,9 +494,35 @@ def pin_rundown_score(
     """
 
     from analytics.game_ingest import GamePayload, PlayerRosterEntry, collect_game
+    from analytics.match_tags import prefer_team_name
 
     home_goals = max(0, int(home_goals))
     away_goals = max(0, int(away_goals))
+    home_label = prefer_team_name(
+        home_team_name,
+        rundown.summary.home_team_name,
+        fallback="Home",
+    )
+    away_label = prefer_team_name(
+        away_team_name,
+        rundown.summary.away_team_name,
+        fallback="Away",
+    )
+    # Temporarily align summary names so UUID resolution matches collect-time ids
+    # when the sheet still says Home/Away but the operator types real clubs.
+    if home_label != (rundown.summary.home_team_name or "Home") or away_label != (
+        rundown.summary.away_team_name or "Away"
+    ):
+        rundown = rundown.model_copy(
+            update={
+                "summary": rundown.summary.model_copy(
+                    update={
+                        "home_team_name": home_label,
+                        "away_team_name": away_label,
+                    }
+                )
+            }
+        )
     home_team_id, away_team_id = _home_away_team_ids(rundown)
 
     events = apply_official_score(
@@ -431,8 +548,10 @@ def pin_rundown_score(
             match_id=rundown.match_id,
             players=roster,
             events=events,
-            home_team_name=rundown.summary.home_team_name or "Home",
-            away_team_name=rundown.summary.away_team_name or "Away",
+            home_team_name=home_label,
+            away_team_name=away_label,
             tag_source=tag_source,  # type: ignore[arg-type]
+            official_home_goals=home_goals,
+            official_away_goals=away_goals,
         )
     )

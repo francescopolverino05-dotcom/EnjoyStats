@@ -48,6 +48,9 @@ class GamePayload(StrictModel):
     home_team_name: str = Field(default="Home", max_length=80)
     away_team_name: str = Field(default="Away", max_length=80)
     tag_source: TagSource = "official"
+    # Distinti / manual score — scoreboard law when set (may exceed tagged goals).
+    official_home_goals: int | None = Field(default=None, ge=0, le=30)
+    official_away_goals: int | None = Field(default=None, ge=0, le=30)
 
 
 class MatchSummary(StrictModel):
@@ -63,6 +66,8 @@ class MatchSummary(StrictModel):
     home_team_name: str = Field(default="Home", max_length=80)
     away_team_name: str = Field(default="Away", max_length=80)
     tag_source: TagSource = "official"
+    official_home_goals: int | None = Field(default=None, ge=0, le=30)
+    official_away_goals: int | None = Field(default=None, ge=0, le=30)
 
 
 class MatchRundown(StrictModel):
@@ -271,6 +276,8 @@ def collect_game(payload: GamePayload) -> MatchRundown:
         home_team_name=payload.home_team_name or "Home",
         away_team_name=payload.away_team_name or "Away",
         tag_source=payload.tag_source,
+        official_home_goals=payload.official_home_goals,
+        official_away_goals=payload.official_away_goals,
     )
     return MatchRundown(
         match_id=match_id,
