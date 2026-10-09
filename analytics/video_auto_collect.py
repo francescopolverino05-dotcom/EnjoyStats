@@ -1840,7 +1840,11 @@ def collect_from_video(
                 home_team_ids={home_team_id},
             )
 
-    # Re-apply after re-pass (extra blocks can mint more false goals).
+    # Re-pass merges skip the first-pass sanitize — always re-cap goals here.
+    from analytics.statman_iq import sanitize_film_goals
+
+    events = sanitize_film_goals(events)
+    # Distinti scoreline is law when provided (after sanitize).
     if official_home_goals is not None and official_away_goals is not None:
         from analytics.distinti import apply_official_score
 
@@ -1850,6 +1854,14 @@ def collect_from_video(
             away_team_id=away_team_id,
             home_goals=official_home_goals,
             away_goals=official_away_goals,
+        )
+        _emit(
+            on_progress,
+            (
+                f"Final score pinned to distinti "
+                f"{official_home_goals}-{official_away_goals}"
+            ),
+            0.94,
         )
 
     # Save tags BEFORE the final fold — if collect_game fails, we can finish

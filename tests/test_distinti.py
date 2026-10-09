@@ -46,6 +46,94 @@ def test_parse_distinti_score_and_players() -> None:
     assert payload["away_goals"] == 4
 
 
+def test_pin_rundown_score_fixes_bogus_film_score() -> None:
+    from analytics.distinti import pin_rundown_score
+    from analytics.game_ingest import GamePayload, PlayerRosterEntry, collect_game
+
+    match_id = uuid4()
+    home_id = uuid4()
+    away_id = uuid4()
+    home_player = uuid4()
+    away_player = uuid4()
+    events = []
+    for i in range(10):
+        events.append(
+            MatchEvent.model_validate(
+                {
+                    "match_id": match_id,
+                    "team_id": home_id,
+                    "player_id": home_player,
+                    "period": 1,
+                    "minute": i,
+                    "second": 0,
+                    "event_type": EventType.GOAL,
+                    "is_goal": True,
+                    "shot_outcome": ShotOutcome.ON_TARGET,
+                    "x": 90.0,
+                    "y": 50.0,
+                }
+            )
+        )
+    for i in range(6):
+        events.append(
+            MatchEvent.model_validate(
+                {
+                    "match_id": match_id,
+                    "team_id": away_id,
+                    "player_id": away_player,
+                    "period": 2,
+                    "minute": i,
+                    "second": 0,
+                    "event_type": EventType.GOAL,
+                    "is_goal": True,
+                    "shot_outcome": ShotOutcome.ON_TARGET,
+                    "x": 10.0,
+                    "y": 50.0,
+                }
+            )
+        )
+    rundown = collect_game(
+        GamePayload(
+            match_id=match_id,
+            players=[
+                PlayerRosterEntry(
+                    player_id=home_player,
+                    team_id=home_id,
+                    jersey_number=9,
+                    player_name="Home Striker",
+                    position="ST",
+                ),
+                PlayerRosterEntry(
+                    player_id=away_player,
+                    team_id=away_id,
+                    jersey_number=10,
+                    player_name="Away Striker",
+                    position="ST",
+                ),
+            ],
+            events=events,
+            home_team_name="Salernitana",
+            away_team_name="Bari",
+            tag_source="film",
+        )
+    )
+    assert rundown.summary.goals == 16
+    pinned = pin_rundown_score(rundown, home_goals=0, away_goals=4)
+    assert pinned.summary.goals == 4
+    home_goals = sum(
+        1
+        for event in pinned.events
+        if event.team_id == home_id and (event.is_goal or event.event_type is EventType.GOAL)
+    )
+    away_goals = sum(
+        1
+        for event in pinned.events
+        if event.team_id == away_id and (event.is_goal or event.event_type is EventType.GOAL)
+    )
+    assert home_goals == 0
+    assert away_goals == 4
+
+
 def test_apply_official_score_demotes_extra_goals() -> None:
     match_id = uuid4()
     home_id = uuid4()

@@ -328,3 +328,81 @@ def apply_official_score(
                 )
             )
     return out
+
+
+def _home_away_team_ids(rundown: Any) -> tuple[Any, Any]:
+    """Resolve home/away UUIDs from summary names (not sheet order)."""
+
+    from analytics.team_sheet import team_sheets_from_rundown
+
+    home_name = (rundown.summary.home_team_name or "Home").strip().casefold()
+    away_name = (rundown.summary.away_team_name or "Away").strip().casefold()
+    sheets = team_sheets_from_rundown(rundown)
+    home_team_id = None
+    away_team_id = None
+    for sheet in sheets:
+        name = (sheet.team_name or "").strip().casefold()
+        if name == home_name or name == "home":
+            home_team_id = sheet.team_id
+        elif name == away_name or name == "away":
+            away_team_id = sheet.team_id
+    if home_team_id is not None and away_team_id is not None:
+        return home_team_id, away_team_id
+    # Fallback: majority-tagged side first is unreliable for score — use event order.
+    team_ids: list[Any] = []
+    seen: set[Any] = set()
+    for event in rundown.events:
+        if event.team_id not in seen:
+            seen.add(event.team_id)
+            team_ids.append(event.team_id)
+    if len(team_ids) < 2:
+        raise ValueError("Need two teams on the sheet to pin a scoreline.")
+    return team_ids[0], team_ids[1]
+
+
+def pin_rundown_score(
+    rundown: Any,
+    *,
+    home_goals: int,
+    away_goals: int,
+) -> Any:
+    """Re-fold a film rundown so the scoreboard matches the distinti.
+
+    Use this to fix an already-collected sheet (e.g. 16–4 → 0–4) without
+    re-watching the film.
+    """
+
+    from analytics.game_ingest import GamePayload, PlayerRosterEntry, collect_game
+
+    home_goals = max(0, int(home_goals))
+    away_goals = max(0, int(away_goals))
+    home_team_id, away_team_id = _home_away_team_ids(rundown)
+
+    events = apply_official_score(
+        list(rundown.events),
+        home_team_id=home_team_id,
+        away_team_id=away_team_id,
+        home_goals=home_goals,
+        away_goals=away_goals,
+    )
+    roster = [
+        PlayerRosterEntry(
+            player_id=player.player_id,
+            team_id=player.team_id,
+            jersey_number=player.jersey_number,
+            player_name=player.player_name or "",
+            position=player.position or "",
+        )
+        for player in rundown.players
+    ]
+    tag_source = getattr(rundown.summary, "tag_source", "film") or "film"
+    return collect_game(
+        GamePayload(
+            match_id=rundown.match_id,
+            players=roster,
+            events=events,
+            home_team_name=rundown.summary.home_team_name or "Home",
+            away_team_name=rundown.summary.away_team_name or "Away",
+            tag_source=tag_source,  # type: ignore[arg-type]
+        )
+    )

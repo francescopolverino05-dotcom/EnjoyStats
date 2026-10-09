@@ -933,6 +933,66 @@ def render_perspective_banner(
     )
 
 
+def render_score_repin(rundown: MatchRundown) -> None:
+    """Fix a wrong film scoreboard (e.g. 16–4) without re-watching."""
+
+    tag_source = getattr(rundown.summary, "tag_source", "official") or "official"
+    if tag_source != "film":
+        return
+    sheets = team_sheets_from_rundown(rundown)
+    home_name = rundown.summary.home_team_name or "Home"
+    away_name = rundown.summary.away_team_name or "Away"
+    goals_by_name = {(sheet.team_name or "").strip().casefold(): sheet.goals for sheet in sheets}
+    cur_home = goals_by_name.get(home_name.strip().casefold(), goals_by_name.get("home", 0))
+    cur_away = goals_by_name.get(away_name.strip().casefold(), goals_by_name.get("away", 0))
+    if not sheets:
+        cur_home, cur_away = 0, 0
+    elif home_name.strip().casefold() not in goals_by_name and "home" not in goals_by_name:
+        # Names mismatched — fall back to sheet order for the default inputs only.
+        cur_home = sheets[0].goals
+        cur_away = sheets[1].goals if len(sheets) > 1 else 0
+    bogus = cur_home + cur_away > 8
+    with st.expander("Fix scoreline (distinti)", expanded=bogus):
+        st.caption(
+            "Film tagged too many goals. Enter the official result "
+            "(e.g. 0–4) to demote extras to shots — no re-analyse needed."
+        )
+        cols = st.columns(2)
+        with cols[0]:
+            fix_home = st.number_input(
+                f"{home_name} goals",
+                min_value=0,
+                max_value=30,
+                value=0 if bogus else min(cur_home, 30),
+                step=1,
+                key="repin_home_goals",
+            )
+        with cols[1]:
+            fix_away = st.number_input(
+                f"{away_name} goals",
+                min_value=0,
+                max_value=30,
+                value=4 if bogus and cur_away >= 4 else (0 if bogus else min(cur_away, 30)),
+                step=1,
+                key="repin_away_goals",
+            )
+        if st.button("Apply official score", type="primary", use_container_width=True):
+            try:
+                from analytics.distinti import pin_rundown_score
+
+                home_g, away_g = int(fix_home), int(fix_away)
+                updated = pin_rundown_score(rundown, home_goals=home_g, away_goals=away_g)
+                st.session_state[RUNDOWN_KEY] = rundown_to_json(updated)
+                history_msg = _remember_collection(updated)
+                st.session_state[PERSIST_KEY] = (
+                    f"Score pinned to {home_g}–{away_g} · {history_msg}"
+                )
+                st.success(f"Scoreboard set to {home_g}–{away_g}.")
+                st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
+
+
 def render_match_summary(rundown: MatchRundown) -> None:
     """Headline match totals collected from the uploaded event feed."""
 
@@ -941,6 +1001,7 @@ def render_match_summary(rundown: MatchRundown) -> None:
     tag_source = getattr(rundown.summary, "tag_source", "official") or "official"
     st.subheader("Match rundown")
     render_perspective_banner(perspective, tag_source=tag_source)
+    render_score_repin(rundown)
     c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("Events", summary.event_count)
     c2.metric("Players", summary.player_count)
@@ -1559,8 +1620,8 @@ def render_analyse_landing(base_url: str) -> None:
             key="analyse_official_away_goals",
         )
     use_manual_score = st.checkbox(
-        "Pin goals to official scoreline",
-        value=False,
+        "Pin goals to official scoreline (required for a real result)",
+        value=True,
         key="analyse_pin_official_score",
     )
 
@@ -1650,13 +1711,15 @@ def render_analyse_landing(base_url: str) -> None:
         except ValueError as exc:
             st.error(str(exc))
     pdf_score = payload.get("match_facts") if isinstance(payload.get("match_facts"), dict) else None
-    if use_manual_score or (
+    pdf_has_score = (
         isinstance(pdf_score, dict)
         and pdf_score.get("home_goals") is not None
         and pdf_score.get("away_goals") is not None
-    ):
+    )
+    # Always pin when the checkbox is on (default) or the PDF already has a score.
+    if use_manual_score or pdf_has_score:
         facts_payload = dict(pdf_score or {})
-        if use_manual_score:
+        if use_manual_score or not pdf_has_score:
             facts_payload["home_goals"] = int(manual_home_goals)
             facts_payload["away_goals"] = int(manual_away_goals)
             facts_payload["source"] = facts_payload.get("source") or "manual_distinti_score"
@@ -1667,10 +1730,14 @@ def render_analyse_landing(base_url: str) -> None:
             "away_team", payload.get("away_team") or away_team_name or "Away"
         )
         payload["match_facts"] = facts_payload
-        st.info(
-            f"Goals pinned to **{int(facts_payload['home_goals'])}–"
-            f"{int(facts_payload['away_goals'])}**"
-        )
+        pinned_h = int(facts_payload["home_goals"])
+        pinned_a = int(facts_payload["away_goals"])
+        st.info(f"Goals pinned to **{pinned_h}–{pinned_a}**")
+        if use_manual_score and pinned_h == 0 and pinned_a == 0 and not pdf_has_score:
+            st.warning(
+                "Score is pinned at 0–0. Enter the real distinti result "
+                "(e.g. 0 and 4) or upload the PDF before Analyse."
+            )
     if payload.get("home") or payload.get("away") or payload.get("match_facts"):
         lineup_json_text = _json.dumps(payload)
 

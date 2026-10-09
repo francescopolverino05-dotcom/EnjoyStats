@@ -43,8 +43,9 @@ GOAL_POST_Y_MIN: Final[float] = 38.0
 GOAL_POST_Y_MAX: Final[float] = 62.0
 # Sparse film needs a longer window to link shot → mouth.
 PENDING_SHOT_TTL_S: Final[float] = 5.0
-# Film CV hard cap — real matches almost never need more; 20 goals was noise.
-DEFAULT_MAX_FILM_GOALS: Final[int] = 8
+# Film CV hard caps — re-pass used to remint goals past the first-pass sanitize.
+DEFAULT_MAX_FILM_GOALS: Final[int] = 6
+DEFAULT_MAX_FILM_GOALS_PER_TEAM: Final[int] = 4
 
 
 def max_film_goals() -> int:
@@ -57,37 +58,56 @@ def max_film_goals() -> int:
         return DEFAULT_MAX_FILM_GOALS
 
 
+def max_film_goals_per_team() -> int:
+    raw = os.environ.get("STATMAN_MAX_GOALS_PER_TEAM", "").strip()
+    if not raw:
+        return DEFAULT_MAX_FILM_GOALS_PER_TEAM
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return DEFAULT_MAX_FILM_GOALS_PER_TEAM
+
+
+def _demote_goal(event: MatchEvent) -> MatchEvent:
+    return event.model_copy(
+        update={
+            "event_type": EventType.SHOT,
+            "is_goal": False,
+            "shot_outcome": event.shot_outcome or ShotOutcome.ON_TARGET,
+        }
+    )
+
+
 def sanitize_film_goals(events: list[MatchEvent]) -> list[MatchEvent]:
     """Demote excess film goals to shots (Opta: goal = deliberate attempt that scores).
 
-    Sparse tracking invents dozens of mouth hits; keep the earliest goals only.
+    Applies a per-team cap first, then a match-total cap. Must run again after
+    any re-pass merge — otherwise sparse blocks reintroduce a 16–4 scoreline.
     """
 
-    limit = max_film_goals()
-    if limit <= 0:
+    per_team = max_film_goals_per_team()
+    total_limit = max_film_goals()
+    if per_team <= 0 and total_limit <= 0:
         return events
-    goal_idxs = [
-        i
-        for i, event in enumerate(events)
-        if event.event_type is EventType.GOAL or event.is_goal
-    ]
-    if len(goal_idxs) <= limit:
-        return events
-    drop = set(goal_idxs[limit:])
+
+    kept_by_team: dict[object, int] = {}
+    total_kept = 0
     cleaned: list[MatchEvent] = []
-    for i, event in enumerate(events):
-        if i not in drop:
+    for event in events:
+        is_goal = event.event_type is EventType.GOAL or event.is_goal
+        if not is_goal:
             cleaned.append(event)
             continue
-        cleaned.append(
-            event.model_copy(
-                update={
-                    "event_type": EventType.SHOT,
-                    "is_goal": False,
-                    "shot_outcome": event.shot_outcome or ShotOutcome.ON_TARGET,
-                }
-            )
-        )
+        team_key = event.team_id
+        team_count = kept_by_team.get(team_key, 0)
+        over_team = per_team > 0 and team_count >= per_team
+        over_total = total_limit > 0 and total_kept >= total_limit
+        if over_team or over_total:
+            cleaned.append(_demote_goal(event))
+            continue
+        kept_by_team[team_key] = team_count + 1
+        total_kept += 1
+        cleaned.append(event)
     return cleaned
 
 # Half-spaces (Halbraum): between wing and centre — Spielverlagerung / CV.

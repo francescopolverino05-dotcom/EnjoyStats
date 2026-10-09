@@ -65,6 +65,7 @@ def test_wyscout_cross_requires_flank_origin() -> None:
 
 def test_sanitize_film_goals_demotes_excess(monkeypatch) -> None:
     monkeypatch.setenv("STATMAN_MAX_GOALS", "2")
+    monkeypatch.setenv("STATMAN_MAX_GOALS_PER_TEAM", "10")
     match_id = uuid4()
     team_id = uuid4()
     player_id = uuid4()
@@ -91,6 +92,61 @@ def test_sanitize_film_goals_demotes_excess(monkeypatch) -> None:
     shots = [event for event in cleaned if event.event_type is EventType.SHOT]
     assert len(goals) == 2
     assert len(shots) == 3
+
+
+def test_sanitize_film_goals_caps_per_team(monkeypatch) -> None:
+    monkeypatch.setenv("STATMAN_MAX_GOALS", "20")
+    monkeypatch.setenv("STATMAN_MAX_GOALS_PER_TEAM", "3")
+    match_id = uuid4()
+    home = uuid4()
+    away = uuid4()
+    player = uuid4()
+    events = []
+    for i in range(8):
+        events.append(
+            MatchEvent.model_validate(
+                {
+                    "match_id": match_id,
+                    "team_id": home,
+                    "player_id": player,
+                    "period": 1,
+                    "minute": i,
+                    "second": 0,
+                    "event_type": EventType.GOAL,
+                    "is_goal": True,
+                    "shot_outcome": ShotOutcome.ON_TARGET,
+                    "x": 90.0,
+                    "y": 50.0,
+                }
+            )
+        )
+    for i in range(5):
+        events.append(
+            MatchEvent.model_validate(
+                {
+                    "match_id": match_id,
+                    "team_id": away,
+                    "player_id": player,
+                    "period": 2,
+                    "minute": i,
+                    "second": 0,
+                    "event_type": EventType.GOAL,
+                    "is_goal": True,
+                    "shot_outcome": ShotOutcome.ON_TARGET,
+                    "x": 10.0,
+                    "y": 50.0,
+                }
+            )
+        )
+    cleaned = sanitize_film_goals(events)
+    home_goals = sum(
+        1 for e in cleaned if e.team_id == home and (e.is_goal or e.event_type is EventType.GOAL)
+    )
+    away_goals = sum(
+        1 for e in cleaned if e.team_id == away and (e.is_goal or e.event_type is EventType.GOAL)
+    )
+    assert home_goals == 3
+    assert away_goals == 3
 
 
 def test_gk_rule_blocks_shots_and_goals() -> None:
