@@ -106,10 +106,12 @@ def env_max_sample_frames(default: int = DEFAULT_MAX_SAMPLE_FRAMES) -> int:
         return max(500, int(raw))
     except ValueError:
         return int(default)
-# Arsenal v Palace (1-1) Wyscout analysis: 736 actions over 97.5 minutes.
+# Official Wyscout sheets are denser; film CV must stay sparser or every
+# box touch becomes a pass/shot. Target ~3 actions/min on film.
 WYSCOUT_ACTIONS_PER_MINUTE: float = 7.55
-TARGET_EVENT_GAP_S: float = 60.0 / WYSCOUT_ACTIONS_PER_MINUTE
-MIN_EVENT_GAP_S: float = 1.2
+FILM_ACTIONS_PER_MINUTE: float = 3.0
+TARGET_EVENT_GAP_S: float = 60.0 / FILM_ACTIONS_PER_MINUTE
+MIN_EVENT_GAP_S: float = 2.8
 VIDEO_SUFFIXES: tuple[str, ...] = (".mp4", ".mov", ".mkv", ".avi", ".m4v", ".webm")
 TAG_SUFFIXES: tuple[str, ...] = (".xml",)
 # Junk probe bytes and empty uploads must never become "Ready" films.
@@ -147,6 +149,26 @@ def film_checkpoint_path(film: Path) -> Path:
 
     resolved = film.expanduser().resolve()
     return resolved.with_name(f"{resolved.stem}.collect.checkpoint.json")
+
+
+def clear_film_collect_state(film: Path) -> list[str]:
+    """Delete checkpoint / coverage sidecars so Analyse truly re-watches."""
+
+    resolved = film.expanduser().resolve()
+    removed: list[str] = []
+    candidates = [
+        film_checkpoint_path(resolved),
+        resolved.with_name(f"{resolved.stem}.coverage.json"),
+        resolved.with_name(f"{resolved.stem}.collect.checkpoint.json.tmp"),
+    ]
+    for path in candidates:
+        try:
+            if path.is_file():
+                path.unlink()
+                removed.append(path.name)
+        except OSError:
+            continue
+    return removed
 
 
 def write_collect_checkpoint(
@@ -666,14 +688,19 @@ def _resize(frame: np.ndarray, max_side: int) -> np.ndarray:
     )
 
 
-def _to_pitch(x_px: float, y_px: float, width: int, height: int) -> tuple[float, float]:
-    """Map pixel centroids onto the FIFA 0–100 tagging grid."""
+def _to_pitch(
+    x_px: float,
+    y_px: float,
+    width: int,
+    height: int,
+    *,
+    roi: tuple[int, int, int, int] | None = None,
+) -> tuple[float, float]:
+    """Map pixel centroids onto the FIFA 0–100 tagging grid (grass ROI when known)."""
 
-    if width <= 0 or height <= 0:
-        return 50.0, 50.0
-    x = max(0.0, min(100.0, (x_px / width) * 100.0))
-    y = max(0.0, min(100.0, (y_px / height) * 100.0))
-    return x, y
+    from analytics.pitch_map import to_pitch
+
+    return to_pitch(x_px, y_px, width, height, roi=roi)
 
 
 def _pitch_mask(frame: np.ndarray) -> tuple[np.ndarray, np.ndarray, float]:
@@ -739,6 +766,9 @@ def _detect_objects_blob(frame: np.ndarray) -> list[Detection]:
         return []
     height, width = frame.shape[:2]
     mask, grass, pitch_ratio = _pitch_mask(frame)
+    from analytics.pitch_map import grass_roi
+
+    roi = grass_roi(frame)
     if pitch_ratio < 0.12:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         objects = cv2.adaptiveThreshold(
@@ -764,7 +794,7 @@ def _detect_objects_blob(frame: np.ndarray) -> list[Detection]:
             continue
         cx = moments["m10"] / moments["m00"]
         cy = moments["m01"] / moments["m00"]
-        x, y = _to_pitch(cx, cy, width, height)
+        x, y = _to_pitch(cx, cy, width, height, roi=roi)
         kind = "ball" if frac < 0.0004 else "player"
         detection = Detection(
             x=x, y=y, area=area, kind=kind, bgr=_contour_bgr(color_source, contour)
@@ -1435,7 +1465,7 @@ def events_from_tracks(
             elif (
                 last_owner is not None
                 and not _same_actor(last_owner, owner, lookup, frame_index)
-                and travel >= 3.5
+                and travel >= 6.0
                 and gap_ok
             ):
                 kind = classify_distribution(
@@ -1458,7 +1488,8 @@ def events_from_tracks(
                     extra["end_y"] = point[1]
                 _emit({**payload, **extra})
                 tagged = True
-            elif due and travel >= 4.0:
+            elif due and travel >= 12.0 and toward_goal:
+                # Sparse film: only recycle a possession pass on a clear advance.
                 kind = classify_distribution(
                     start=start,
                     point=point,
@@ -1639,6 +1670,7 @@ def collect_from_video(
     lineups: MatchLineups | None = None,
     official_home_goals: int | None = None,
     official_away_goals: int | None = None,
+    force_fresh: bool = False,
 ) -> MatchRundown:
     """Watch a match film and return the collected four-pillar rundown.
 
@@ -1655,10 +1687,17 @@ def collect_from_video(
         lineups: Optional real Home/Away sheets (names + shirt numbers).
         official_home_goals: Optional final score from distinti / tabellino.
         official_away_goals: Optional final score from distinti / tabellino.
+        force_fresh: When True, delete prior checkpoints and re-watch the film.
     """
 
+    if force_fresh:
+        cleared = clear_film_collect_state(path)
+        if cleared:
+            _emit(on_progress, f"Cleared prior tags ({', '.join(cleared)})…", 0.02)
+
     # A prior watch that died at the final fold can finish here — no re-watch.
-    prior = load_collect_checkpoint(path)
+    # Skip when force_fresh: the operator asked for a full new rundown.
+    prior = None if force_fresh else load_collect_checkpoint(path)
     if prior is not None and str(prior.get("stage") or "") == "pre_collect_game":
         _emit(on_progress, "Finishing from saved tags (no re-watch)…", 0.95)
         rundown = finish_collect_from_checkpoint(path)

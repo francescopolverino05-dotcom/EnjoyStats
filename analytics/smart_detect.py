@@ -101,12 +101,17 @@ def assign_side_by_kit(
     return 0 if d_home <= d_away else 1
 
 
-def _to_pitch(x_px: float, y_px: float, width: int, height: int) -> tuple[float, float]:
-    if width <= 0 or height <= 0:
-        return 50.0, 50.0
-    x = max(0.0, min(100.0, (x_px / width) * 100.0))
-    y = max(0.0, min(100.0, (y_px / height) * 100.0))
-    return x, y
+def _to_pitch(
+    x_px: float,
+    y_px: float,
+    width: int,
+    height: int,
+    *,
+    roi: tuple[int, int, int, int] | None = None,
+) -> tuple[float, float]:
+    from analytics.pitch_map import to_pitch
+
+    return to_pitch(x_px, y_px, width, height, roi=roi)
 
 
 def _mean_bgr_box(
@@ -165,13 +170,16 @@ def detect_people_hog(frame: np.ndarray) -> list[SmartDetection]:
         )
     except Exception:  # noqa: BLE001 — optional path must never break collect
         return []
+    from analytics.pitch_map import grass_roi
+
+    roi = grass_roi(frame)
     found: list[SmartDetection] = []
     for (bx, by, bw, bh), weight in zip(boxes, weights, strict=False):
         if float(weight) < 0.3:
             continue
         cx = bx + bw / 2.0
         cy = by + bh / 2.0
-        x, y = _to_pitch(cx, cy, width, height)
+        x, y = _to_pitch(cx, cy, width, height, roi=roi)
         area = float(bw * bh)
         bgr = _mean_bgr_box(frame, int(bx), int(by), int(bx + bw), int(by + bh))
         jersey = _sparse_jersey(frame, int(bx), int(by), int(bx + bw), int(by + bh))
@@ -213,6 +221,9 @@ def detect_people_yolo(frame: np.ndarray) -> list[SmartDetection]:
     except Exception:  # noqa: BLE001 — optional path must never break collect
         return []
     height, width = frame.shape[:2]
+    from analytics.pitch_map import grass_roi
+
+    roi = grass_roi(frame)
     found: list[SmartDetection] = []
     for result in results:
         boxes = getattr(result, "boxes", None)
@@ -226,7 +237,7 @@ def detect_people_yolo(frame: np.ndarray) -> list[SmartDetection]:
             x1, y1, x2, y2 = (int(v) for v in xyxy)
             cx = (x1 + x2) / 2.0
             cy = (y1 + y2) / 2.0
-            x, y = _to_pitch(cx, cy, width, height)
+            x, y = _to_pitch(cx, cy, width, height, roi=roi)
             area = float(max(1, (x2 - x1) * (y2 - y1)))
             kind = "ball" if cls_id == _YOLO_SPORTS_BALL else "player"
             bgr = _mean_bgr_box(frame, x1, y1, x2, y2)

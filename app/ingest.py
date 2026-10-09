@@ -279,6 +279,7 @@ def collect_from_film_path(
     home_team_name: str | None = None,
     away_team_name: str | None = None,
     lineup_json: str | None = None,
+    force_fresh: bool = False,
 ) -> MatchRundown:
     """Collect tags from a film (both teams) or from an explicit XML path.
 
@@ -378,6 +379,7 @@ def collect_from_film_path(
             lineups=lineups,
             official_home_goals=official_home_goals,
             official_away_goals=official_away_goals,
+            force_fresh=force_fresh,
         )
     except VideoCollectError as exc:
         raise ValueError(str(exc)) from exc

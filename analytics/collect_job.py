@@ -132,6 +132,12 @@ def run_collect_job(film: Path, status_path: Path) -> MatchRundown:
     home_name = str(prior.get("home_team_name") or "").strip() or None
     away_name = str(prior.get("away_team_name") or "").strip() or None
     lineup_json = str(prior.get("lineup_json") or "").strip() or None
+    force_fresh = str(prior.get("force_fresh") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
     status: dict[str, Any] = {
         "job_id": status_path.stem.replace(".status", "") if status_path.stem else uuid4().hex[:12],
@@ -147,6 +153,7 @@ def run_collect_job(film: Path, status_path: Path) -> MatchRundown:
         "home_team_name": home_name or "",
         "away_team_name": away_name or "",
         "lineup_json": lineup_json or "",
+        "force_fresh": "1" if force_fresh else "",
         "started_at": str(prior.get("started_at") or _now()),
         "updated_at": _now(),
     }
@@ -161,12 +168,18 @@ def run_collect_job(film: Path, status_path: Path) -> MatchRundown:
 
     try:
         # Prefer finishing a saved tag sheet when the last run died at the fold.
+        # force_fresh skips that — operator asked for a full new rundown.
         from analytics.video_auto_collect import (
+            clear_film_collect_state,
             finish_collect_from_checkpoint,
             load_collect_checkpoint,
         )
 
-        prior_sheet = load_collect_checkpoint(film)
+        if force_fresh:
+            clear_film_collect_state(film)
+            prior_sheet = None
+        else:
+            prior_sheet = load_collect_checkpoint(film)
         if prior_sheet is not None and str(prior_sheet.get("stage") or "") == "pre_collect_game":
             _progress("Finishing from saved tags (no re-watch)…", 0.95)
             rundown = finish_collect_from_checkpoint(film)
@@ -179,6 +192,7 @@ def run_collect_job(film: Path, status_path: Path) -> MatchRundown:
                 home_team_name=home_name,
                 away_team_name=away_name,
                 lineup_json=lineup_json,
+                force_fresh=force_fresh,
             )
     except Exception as exc:  # noqa: BLE001 — persist any crash for the UI/worker
         # Last chance: fold a real checkpoint only (missing sheet must not
@@ -226,6 +240,7 @@ def start_collect_job(
     home_team_name: str | None = None,
     away_team_name: str | None = None,
     lineup_json: str | None = None,
+    force_fresh: bool = False,
 ) -> Path:
     """Queue a collect for ``film``. Returns the status path.
 
@@ -235,6 +250,10 @@ def start_collect_job(
     """
 
     resolved = film.expanduser().resolve()
+    if force_fresh:
+        from analytics.video_auto_collect import clear_film_collect_state
+
+        clear_film_collect_state(resolved)
     folder = collect_jobs_dir()
     folder.mkdir(parents=True, exist_ok=True)
     job_id = uuid4().hex[:12]
@@ -252,7 +271,11 @@ def start_collect_job(
             "state": "queued",
             "film": str(resolved),
             "jobs_dir": str(folder),
-            "label": "Queued full-match collect…",
+            "label": (
+                "Queued fresh full-match collect…"
+                if force_fresh
+                else "Queued full-match collect…"
+            ),
             "fraction": 0.0,
             "pid": 0,
             "error": "",
@@ -262,6 +285,7 @@ def start_collect_job(
             "home_team_name": (home_team_name or "").strip(),
             "away_team_name": (away_team_name or "").strip(),
             "lineup_json": (lineup_json or "").strip(),
+            "force_fresh": "1" if force_fresh else "",
             "started_at": _now(),
             "updated_at": _now(),
         },

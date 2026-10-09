@@ -1014,6 +1014,35 @@ def render_score_repin(rundown: MatchRundown) -> None:
                 st.rerun()
             except ValueError as exc:
                 st.error(str(exc))
+        if st.button(
+            "Re-analyse film from scratch",
+            use_container_width=True,
+            key="reanalyse_film_fresh",
+        ):
+            try:
+                source = latest_ready_film()
+                if source is None:
+                    raise ValueError("No match film in the inbox to re-analyse.")
+                status_path = start_collect_job(
+                    source,
+                    home_kit_hex=str(st.session_state.get("last_home_kit") or "") or None,
+                    away_kit_hex=str(st.session_state.get("last_away_kit") or "") or None,
+                    home_team_name=str(st.session_state.get("last_home_name") or "") or None,
+                    away_team_name=str(st.session_state.get("last_away_name") or "") or None,
+                    lineup_json=str(st.session_state.get("last_lineup_json") or "") or None,
+                    force_fresh=True,
+                )
+                st.session_state[JOB_KEY] = str(status_path)
+                st.session_state.pop(RUNDOWN_KEY, None)
+                st.session_state.pop("analyse_cleared", None)
+                st.session_state[PERSIST_KEY] = (
+                    "Fresh re-analyse queued (old tags cleared). "
+                    f"Status: {status_path.name}"
+                )
+                _request_nav("Analysing")
+                st.rerun()
+            except ValueError as exc:
+                st.error(str(exc))
 
 
 def render_match_summary(rundown: MatchRundown) -> None:
@@ -1772,6 +1801,11 @@ def render_analyse_landing(base_url: str) -> None:
             + (f" · {len(films)} films in inbox" if len(films) > 1 else "")
         )
 
+    force_fresh = st.checkbox(
+        "Re-watch from scratch (clear old tags — use this for a new rundown)",
+        value=bool(st.session_state.get(RUNDOWN_KEY)),
+        key="analyse_force_fresh",
+    )
     analyse = st.button(
         "Analyse Stats",
         use_container_width=True,
@@ -1826,6 +1860,11 @@ def render_analyse_landing(base_url: str) -> None:
             raise ValueError(
                 "Upload the match film above, then click Analyse Stats."
             )
+        st.session_state["last_home_kit"] = home_kit_hex
+        st.session_state["last_away_kit"] = away_kit_hex
+        st.session_state["last_home_name"] = home_team_name or "Home"
+        st.session_state["last_away_name"] = away_team_name or "Away"
+        st.session_state["last_lineup_json"] = lineup_json_text or ""
         update, finish = render_upload_loader()
         update("Preparing the match…", 0.04)
         if film_has_official_tags(source):
@@ -1842,6 +1881,7 @@ def render_analyse_landing(base_url: str) -> None:
                 home_team_name=home_team_name or None,
                 away_team_name=away_team_name or None,
                 lineup_json=lineup_json_text or None,
+                force_fresh=force_fresh,
             )
             finish()
             st.session_state[RUNDOWN_KEY] = rundown_to_json(rundown)
@@ -1860,6 +1900,7 @@ def render_analyse_landing(base_url: str) -> None:
                 home_team_name=home_team_name or None,
                 away_team_name=away_team_name or None,
                 lineup_json=lineup_json_text or None,
+                force_fresh=force_fresh,
             )
             st.session_state[JOB_KEY] = str(status_path)
             st.session_state.pop(RUNDOWN_KEY, None)
