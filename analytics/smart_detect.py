@@ -153,7 +153,11 @@ def _hog_detector():  # type: ignore[no-untyped-def]
     return hog
 
 
-def detect_people_hog(frame: np.ndarray) -> list[SmartDetection]:
+def detect_people_hog(
+    frame: np.ndarray,
+    *,
+    roi: tuple[int, int, int, int] | None = None,
+) -> list[SmartDetection]:
     """OpenCV HOG people finder when the build includes it; else empty."""
 
     if frame.size == 0 or not hog_available():
@@ -170,9 +174,10 @@ def detect_people_hog(frame: np.ndarray) -> list[SmartDetection]:
         )
     except Exception:  # noqa: BLE001 — optional path must never break collect
         return []
-    from analytics.pitch_map import grass_roi
+    if roi is None:
+        from analytics.pitch_map import grass_roi
 
-    roi = grass_roi(frame)
+        roi = grass_roi(frame)
     found: list[SmartDetection] = []
     for (bx, by, bw, bh), weight in zip(boxes, weights, strict=False):
         if float(weight) < 0.3:
@@ -210,7 +215,11 @@ def _yolo_model():  # type: ignore[no-untyped-def]
     return YOLO("yolov8n.pt")
 
 
-def detect_people_yolo(frame: np.ndarray) -> list[SmartDetection]:
+def detect_people_yolo(
+    frame: np.ndarray,
+    *,
+    roi: tuple[int, int, int, int] | None = None,
+) -> list[SmartDetection]:
     """Optional YOLOv8 person + sports-ball detector."""
 
     if not yolo_available() or frame.size == 0:
@@ -221,9 +230,10 @@ def detect_people_yolo(frame: np.ndarray) -> list[SmartDetection]:
     except Exception:  # noqa: BLE001 — optional path must never break collect
         return []
     height, width = frame.shape[:2]
-    from analytics.pitch_map import grass_roi
+    if roi is None:
+        from analytics.pitch_map import grass_roi
 
-    roi = grass_roi(frame)
+        roi = grass_roi(frame)
     found: list[SmartDetection] = []
     for result in results:
         boxes = getattr(result, "boxes", None)
@@ -284,6 +294,7 @@ def detect_objects_smart(
     frame: np.ndarray,
     *,
     blob_fallback,  # Callable[[np.ndarray], list] — avoids circular imports
+    roi: tuple[int, int, int, int] | None = None,
 ) -> list[SmartDetection]:
     """Best available detector: YOLO → HOG+blob → blob only."""
 
@@ -301,12 +312,12 @@ def detect_objects_smart(
         for item in blob_raw
     ]
     if yolo_available():
-        yolo_hits = detect_people_yolo(frame)
+        yolo_hits = detect_people_yolo(frame, roi=roi)
         if yolo_hits:
             return merge_detections(yolo_hits, blob_hits)
 
     if hog_available():
-        hog_hits = detect_people_hog(frame)
+        hog_hits = detect_people_hog(frame, roi=roi)
         if hog_hits:
             return merge_detections(hog_hits, blob_hits)
     return blob_hits

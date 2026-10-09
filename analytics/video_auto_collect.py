@@ -740,7 +740,15 @@ def _contour_bgr(frame: np.ndarray, contour: np.ndarray) -> tuple[float, float, 
 def detect_objects(frame: np.ndarray) -> list[Detection]:
     """Find players/ball — smart HOG/YOLO first, pitch-blob fallback."""
 
-    smart = detect_objects_smart(frame, blob_fallback=_detect_objects_blob)
+    from analytics.pitch_map import grass_roi
+
+    # One grass key per frame — YOLO/HOG/blob used to each re-key the pitch.
+    roi = grass_roi(frame)
+
+    def _blob(frame_in: np.ndarray) -> list[Detection]:
+        return _detect_objects_blob(frame_in, roi=roi)
+
+    smart = detect_objects_smart(frame, blob_fallback=_blob, roi=roi)
     return [
         Detection(
             x=hit.x,
@@ -754,7 +762,11 @@ def detect_objects(frame: np.ndarray) -> list[Detection]:
     ]
 
 
-def _detect_objects_blob(frame: np.ndarray) -> list[Detection]:
+def _detect_objects_blob(
+    frame: np.ndarray,
+    *,
+    roi: tuple[int, int, int, int] | None = None,
+) -> list[Detection]:
     """Find player-sized blobs on the grass, ignoring stands and graphics.
 
     Broadcast films: key a wide grass window, keep the largest pitch
@@ -766,9 +778,10 @@ def _detect_objects_blob(frame: np.ndarray) -> list[Detection]:
         return []
     height, width = frame.shape[:2]
     mask, grass, pitch_ratio = _pitch_mask(frame)
-    from analytics.pitch_map import grass_roi
+    if roi is None:
+        from analytics.pitch_map import grass_roi
 
-    roi = grass_roi(frame)
+        roi = grass_roi(frame)
     if pitch_ratio < 0.12:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         objects = cv2.adaptiveThreshold(
@@ -1009,14 +1022,38 @@ def _owner_near_point(
     return closest
 
 
-def _team_goal_x(team: int, players: list[Track]) -> float:
-    """Attacking goal X (0 or 100) from which way the team advances the ball."""
+def _team_goal_x(
+    team: int,
+    players: list[Track],
+    *,
+    frame_lo: int | None = None,
+    frame_hi: int | None = None,
+) -> float:
+    """Attacking goal X (0 or 100) from which way the team advances the ball.
+
+    Optional ``frame_lo`` / ``frame_hi`` limit the window (use per half so
+    ends switching at half-time does not invert every 2H strike).
+    """
 
     def _disp(side: int) -> float:
         members = [track for track in players if track.team == side]
         if not members:
             return 0.0
-        return sum(track.xs[-1] - track.xs[0] for track in members) / len(members)
+        deltas: list[float] = []
+        for track in members:
+            if frame_lo is None or frame_hi is None:
+                deltas.append(track.xs[-1] - track.xs[0])
+                continue
+            xs = [
+                x
+                for frame, x in zip(track.frames, track.xs, strict=True)
+                if frame_lo <= frame < frame_hi
+            ]
+            if len(xs) >= 2:
+                deltas.append(xs[-1] - xs[0])
+        if not deltas:
+            return 0.0
+        return sum(deltas) / len(deltas)
 
     home_disp = _disp(0)
     away_disp = _disp(1)
@@ -1024,6 +1061,30 @@ def _team_goal_x(team: int, players: list[Track]) -> float:
     if team == 0:
         return 100.0 if home_attacks_right else 0.0
     return 0.0 if home_attacks_right else 100.0
+
+
+def _goal_x_by_period(
+    players: list[Track], fps: float
+) -> dict[int, tuple[float, float]]:
+    """Home/away attack goal X for period 1 and 2."""
+
+    half_frame = int(round(45 * 60 * max(fps, 0.01)))
+    p1 = (
+        _team_goal_x(0, players, frame_lo=0, frame_hi=half_frame),
+        _team_goal_x(1, players, frame_lo=0, frame_hi=half_frame),
+    )
+    # Fall back to full-film orientation when a half has no motion.
+    full = (_team_goal_x(0, players), _team_goal_x(1, players))
+    if p1[0] == p1[1]:
+        p1 = full
+    p2 = (
+        _team_goal_x(0, players, frame_lo=half_frame, frame_hi=10**12),
+        _team_goal_x(1, players, frame_lo=half_frame, frame_hi=10**12),
+    )
+    if p2[0] == p2[1]:
+        # Ends switch: invert period-1 if 2H had no clear displacement.
+        p2 = (100.0 - p1[0], 100.0 - p1[1]) if p1 != full else full
+    return {1: p1, 2: p2}
 
 
 def _clone_track(track: Track) -> Track:
@@ -1252,7 +1313,8 @@ def events_from_tracks(
         uuid5(AUTO_NAMESPACE, f"{match_id}-team-{home_name}"),
         uuid5(AUTO_NAMESPACE, f"{match_id}-team-{away_name}"),
     )
-    goal_x = (_team_goal_x(0, players), _team_goal_x(1, players))
+    goals_by_period = _goal_x_by_period(players, fps)
+    goal_x = goals_by_period[1]
 
     lookup: dict[int, dict[int, tuple[float, float]]] = {}
     for track in players:
@@ -1284,6 +1346,7 @@ def events_from_tracks(
     last_tag_point: tuple[float, float] | None = None
     last_owner: Track | None = None
     prev_point: tuple[float, float] | None = None
+    prev_frame_index: int | None = None
     pending_shot: MatchEvent | None = None
     pending_shot_s = -1e9
 
@@ -1305,6 +1368,7 @@ def events_from_tracks(
             last_tag_point = point
             last_owner = owner
             prev_point = point
+            prev_frame_index = frame_index
             last_event_s = now_s
             continue
         start = last_tag_point
@@ -1314,9 +1378,14 @@ def events_from_tracks(
             if prev_point is not None
             else travel
         )
-        dt = 1.0 / max(fps, 0.01)
+        # Sampled tracks skip frames — use stride, not 1/fps (that inflated speed
+        # by ~fps/sample_hz and invented 100+ "shots").
+        frame_dt = max(1, frame_index - (prev_frame_index or frame_index - 1))
+        dt = frame_dt / max(fps, 0.01)
         speed = step / max(dt, 1e-3)
-        attack_goal = goal_x[owner.team]
+        actor = last_owner if last_owner is not None else owner
+        period_goals = goals_by_period.get(period) or goal_x
+        attack_goal = period_goals[actor.team]
         toward_goal = abs(point[0] - attack_goal) < abs(start[0] - attack_goal)
         box_x = 82.0 if attack_goal >= 50 else 18.0
         in_box = point[0] >= box_x if attack_goal >= 50 else point[0] <= box_x
@@ -1326,7 +1395,6 @@ def events_from_tracks(
         due = (now_s - last_event_s) >= TARGET_EVENT_GAP_S
         shot_gap_ok = (now_s - last_shot_s) >= SHOT_MIN_GAP_S
         goal_gap_ok = (now_s - last_goal_s) >= GOAL_MIN_GAP_S
-        actor = last_owner if last_owner is not None else owner
         actor_player_id = player_ids[actor.track_id]
         actor_is_gk = is_goalkeeper_actor(
             position_by_player.get(actor_player_id),
@@ -1426,29 +1494,8 @@ def events_from_tracks(
                     }
                 )
                 tagged = True
-            elif last_owner is not None and owner.team != last_owner.team and gap_ok:
-                # Defensive transition → attacking transition for the winner.
-                _emit(
-                    {
-                        **payload,
-                        "event_type": EventType.BALL_LOST,
-                        "end_x": None,
-                        "end_y": None,
-                        "successful": False,
-                    }
-                )
-                _emit(
-                    {
-                        **payload,
-                        "team_id": team_ids[owner.team],
-                        "player_id": player_ids[owner.track_id],
-                        "event_type": EventType.INTERCEPTION,
-                        "end_x": None,
-                        "end_y": None,
-                        "x": point[0],
-                        "y": point[1],
-                    }
-                )
+            elif last_owner is not None and owner.team != last_owner.team and due:
+                # One recovery tag — not lost+intercept+recovery every 2.8s.
                 _emit(
                     {
                         **payload,
@@ -1510,6 +1557,7 @@ def events_from_tracks(
             last_tag_point = point
         last_owner = owner
         prev_point = point
+        prev_frame_index = frame_index
 
     play_types = {
         EventType.PASS,
@@ -1935,6 +1983,13 @@ def collect_from_video(
                 f"Final fold failed ({exc}). Tags are saved — click Analyse again "
                 "to finish from the checkpoint without re-watching."
             ) from exc
+    else:
+        # Success — drop the resume checkpoint so the next Analyse re-watches
+        # unless the operator explicitly recovers from an error.
+        try:
+            film_checkpoint_path(info.path).unlink(missing_ok=True)
+        except OSError:
+            pass
     try:
         write_sidecar_xml(rundown, info.path)
     except OSError:
