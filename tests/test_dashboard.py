@@ -200,12 +200,13 @@ def test_sidebar_sample_opens_tag_inventory(tmp_path, monkeypatch) -> None:
     assert not at.exception
     subheaders = [str(element.value) for element in at.subheader]
     assert "Match rundown" in subheaders
-    assert "What you no longer have to tag" in subheaders
-    assert "Collective team stats" in subheaders or any(
-        "collective" in header.lower() for header in subheaders
+    assert any(
+        "team statistics" in header.lower() or "Team statistics" in header
+        for header in subheaders
     )
-    body_bits = " ".join(subheaders)
-    assert "Collective" in body_bits or any("Napoleon Bot" in header for header in subheaders)
+    assert "Individual stat log" in subheaders
+    assert "Match tags" not in subheaders
+    assert "15-second moments" not in subheaders
     downloads = [str(button.label) for button in at.download_button]
     assert any("CSV" in label for label in downloads)
     assert any("XML" in label for label in downloads)
@@ -215,7 +216,7 @@ def test_sidebar_sample_opens_tag_inventory(tmp_path, monkeypatch) -> None:
     assert "Napoleon" in history[0].label or "Jeans" in history[0].label
 
 
-def test_collected_rundown_shows_match_tags(tmp_path, monkeypatch) -> None:
+def test_collected_rundown_shows_team_and_individual_stats(tmp_path, monkeypatch) -> None:
     from streamlit.testing.v1 import AppTest
 
     from analytics.game_ingest import rundown_to_json
@@ -231,17 +232,17 @@ def test_collected_rundown_shows_match_tags(tmp_path, monkeypatch) -> None:
     assert not at.exception
     subheaders = [str(element.value) for element in at.subheader]
     assert "Match rundown" in subheaders
-    assert "What you no longer have to tag" in subheaders
-    assert "Match tags" in subheaders
+    assert "Individual stat log" in subheaders
+    assert "Match tags" not in subheaders
+    assert "15-second moments" not in subheaders
     assert any(
         "team statistics" in header.lower() or "Team statistics" in header for header in subheaders
     )
-    assert any("collective" in header.lower() for header in subheaders)
-    assert "Offensive" in subheaders
-    assert "Defensive" in subheaders
-    assert any(
-        "Individual" in header or "Individual players" in header for header in subheaders
-    ) or any("Open player sheet" in str(box.label) for box in at.selectbox)
+    assert any("Open player sheet" in str(box.label) for box in at.selectbox)
+    # Deep pillars stay available but are not the primary timeline view.
+    assert "Offensive" in subheaders or any(
+        "Deep team pillars" in str(getattr(block, "label", "")) for block in at.expander
+    )
     downloads = [str(button.label) for button in at.download_button]
     assert any("PDF" in label for label in downloads)
     # Home tab returns to Analyse Stats without clearing the match.

@@ -88,7 +88,6 @@ from analytics.collection_history import (
 from analytics.game_ingest import MatchRundown, rundown_from_mapping, rundown_to_json
 from analytics.match_report_pdf import build_match_report_pdf
 from analytics.team_sheet import (
-    highlight_moments_from_rundown,
     tag_inventory_rows,
     team_sheet_rows,
     team_sheets_from_rundown,
@@ -96,7 +95,7 @@ from analytics.team_sheet import (
 from analytics.batch_collect import list_inbox_films, start_batch_collect, summarize_batch
 from analytics.distinti import facts_to_payload, parse_distinti_pdf
 from analytics.lineups import example_lineup_csv, parse_lineup_bytes
-from analytics.match_tags import attacks_from_events, rundown_to_csv, rundown_to_xml
+from analytics.match_tags import rundown_to_csv, rundown_to_xml
 from analytics.oncesport_export import export_both_oncesport_xml
 from analytics.review_edits import (
     apply_review_edits,
@@ -1114,7 +1113,7 @@ def render_score_repin(rundown: MatchRundown) -> None:
 
 
 def render_match_summary(rundown: MatchRundown) -> None:
-    """Headline match totals collected from the uploaded event feed."""
+    """Scoreboard + club names — stats boards follow separately."""
 
     summary = rundown.summary
     perspective = analysis_perspective(rundown)
@@ -1143,14 +1142,10 @@ def render_match_summary(rundown: MatchRundown) -> None:
     c4.metric("Shots", summary.shots)
     c5.metric("Passes", summary.passes)
     st.caption(
-        f"Match `{summary.match_id}`  ·  {summary.duration_minutes:.1f} minutes of collected play. "
-        "Every number below is counted from the match tags (passes, shots, "
-        "recoveries) — the same sheet Spiideo / Wyscout XML export uses."
+        f"{summary.home_team_name} vs {summary.away_team_name}  ·  "
+        f"{summary.duration_minutes:.1f} minutes collected. "
+        "Team board and player log below — not an action timeline."
     )
-    render_tag_inventory(rundown, perspective=perspective)
-    render_team_sheet(rundown, perspective=perspective)
-    render_match_tags(rundown)
-    render_highlight_moments(rundown)
 
 
 def render_tag_inventory(
@@ -1214,66 +1209,9 @@ def render_team_sheet(
     st.dataframe(team_sheet_rows(sheets), hide_index=True, width="stretch")
 
 
-def render_highlight_moments(rundown: MatchRundown) -> None:
-    """15-second windows around goals, shots, saves, and corners."""
+def render_match_exports(rundown: MatchRundown) -> None:
+    """XML/CSV/OnceSport downloads — no action timeline on the main page."""
 
-    moments = highlight_moments_from_rundown(rundown)
-    if not moments:
-        return
-    st.subheader("15-second moments")
-    st.caption(
-        "Each row is a 15-second clip window around a tagged highlight "
-        "(goal, shot, save, corner). Same clock as the tag sheet."
-    )
-    rows = [
-        {
-            "Clock": moment.clock,
-            "Moment": moment.kind,
-            "Player": moment.player,
-            "Team": moment.team_name,
-            "Window ms": f"{moment.start_ms}–{moment.end_ms}",
-        }
-        for moment in moments[:80]
-    ]
-    st.dataframe(rows, hide_index=True, width="stretch")
-    if len(moments) > 80:
-        st.caption(f"Showing the first 80 of {len(moments)} highlight windows.")
-
-
-def render_match_tags(rundown: MatchRundown) -> None:
-    """Show the tag sheet the rundown was counted from, plus XML download."""
-
-    st.subheader("Match tags")
-    st.caption(
-        "Each row is one tagged action. Player pillars are the sums of these "
-        "tags. Download XML for a tagger re-import, or CSV for a spreadsheet."
-    )
-    attacks = attacks_from_events(rundown.events)
-    a1, a2 = st.columns(2)
-    a1.metric("Attack sequences", len(attacks))
-    a2.metric(
-        "Attacks ending in a shot/goal",
-        sum(1 for attack in attacks if attack["end_type"] in {"shot", "goal"}),
-    )
-    names = {profile.player_id: profile_label(profile) for profile in rundown.players}
-    rows = []
-    preview = rundown.events[:500]
-    for event in preview:
-        actor = names.get(event.player_id, "—") if event.player_id else "—"
-        rows.append(
-            {
-                "Clock": f"{event.period}' {event.minute:02d}:{event.second:02d}",
-                "Tag": event.event_type.value,
-                "Player": actor,
-                "X": round(event.x, 1),
-                "Y": round(event.y, 1),
-                "End X": None if event.end_x is None else round(event.end_x, 1),
-                "Goal": event.is_goal,
-            }
-        )
-    st.dataframe(rows, hide_index=True, width="stretch")
-    if len(rundown.events) > 500:
-        st.caption(f"Showing the first 500 of {len(rundown.events)} tags.")
     pair = export_both_oncesport_xml(rundown)
     home_name = rundown.summary.home_team_name or "Home"
     away_name = rundown.summary.away_team_name or "Away"
@@ -2093,31 +2031,83 @@ def render_analyse_landing(base_url: str) -> None:
         st.error(f"{exc}. {UPLOAD_DISCONNECT_HINT}")
 
 
+def _players_for_stat_log(rundown: MatchRundown) -> list:
+    """Named line-up players when present; otherwise film roster labels."""
+
+    named = named_player_profiles(rundown)
+    if named:
+        return named
+    return list(rundown.players)
+
+
 def _individual_player_rows(rundown: MatchRundown) -> list[dict[str, object]]:
-    """Compact roster table: minutes, goals, assists per named player."""
+    """Individual stat log: one row per player with headline match numbers."""
 
     sheets = {sheet.team_id: sheet.team_name for sheet in team_sheets_from_rundown(rundown)}
     rows: list[dict[str, object]] = []
-    for profile in named_player_profiles(rundown):
+    for profile in _players_for_stat_log(rundown):
+        passes = profile.distribution.passes
+        pass_acc = round(100.0 * passes.success_rate, 1) if passes.total else 0.0
         rows.append(
             {
                 "Team": sheets.get(profile.team_id, rundown.summary.home_team_name),
                 "Player": profile.player_name or "Player",
                 "#": profile.jersey_number or "—",
                 "Pos": profile.position or "—",
-                "Minutes": round(profile.offensive.minutes, 1),
-                "Goals": profile.offensive.goals,
-                "Assists": profile.offensive.assists,
+                "Min": round(profile.offensive.minutes, 1),
+                "G": profile.offensive.goals,
+                "A": profile.offensive.assists,
                 "Shots": profile.offensive.total_shots,
-                "Passes": profile.distribution.passes.total,
+                "SoT": profile.offensive.shots_on_target,
+                "Passes": passes.total,
+                "Pass %": pass_acc,
+                "Prog": profile.distribution.progressive_passes.total,
+                "Cross": profile.distribution.crosses.total,
+                "Rec": profile.defensive.ball_recoveries.total,
+                "Int": profile.defensive.interceptions.total,
+                "Fouls": profile.defensive.fouls.committed,
             }
         )
-    rows.sort(key=lambda row: (str(row["Team"]), row["#"] == "—", row["#"] or 99))
+    rows.sort(
+        key=lambda row: (
+            str(row["Team"]),
+            -(int(row["G"]) + int(row["A"])),
+            -(int(row["Passes"])),
+            row["#"] == "—",
+            row["#"] or 99,
+        )
+    )
     return rows
 
 
+def render_individual_stat_log(rundown: MatchRundown) -> None:
+    """Match page individual board — stats table, not an action timeline."""
+
+    rows = _individual_player_rows(rundown)
+    st.subheader("Individual stat log")
+    if not rows:
+        st.info("No player rows on this collect yet.")
+        return
+    st.caption(
+        "One row per player: goals, shots, passes (with accuracy), recoveries. "
+        "Open a full pillar sheet below if you need the deep dive."
+    )
+    st.dataframe(rows, hide_index=True, width="stretch")
+    players = _players_for_stat_log(rundown)
+    if not players:
+        return
+    player_map = {profile_label(profile): profile.player_id for profile in players}
+    player_label = st.selectbox(
+        "Open player sheet",
+        options=list(player_map.keys()),
+        key="individual_stat_log_player",
+    )
+    load = load_from_rundown(rundown, player_map[player_label])
+    render_dashboard(load, collective=False, show_chrome=False)
+
+
 def render_collective_section(rundown: MatchRundown) -> None:
-    """Team-level Impact / Spiideo boards."""
+    """Optional deep team pillars (offensive / defensive / distribution)."""
 
     perspective = analysis_perspective(rundown)
     tag_source = getattr(rundown.summary, "tag_source", "official") or "official"
@@ -2128,17 +2118,14 @@ def render_collective_section(rundown: MatchRundown) -> None:
         )
         profile = analysed_team_profile(rundown)
         if profile is not None:
-            st.subheader(f"{perspective.analysed_team_name} collective stats")
             st.caption(
-                "Offensive = analysed team. Defensive = analysed team defending. "
-                "Same four Spiideo pillars as the individual sheets."
+                "Offensive = analysed team. Defensive = analysed team defending."
             )
             render_dashboard(load_from_team_profile(rundown, profile), collective=True)
         return
     teams = team_profiles_from_rundown(rundown)
     if not teams:
         return
-    st.subheader("Collective team stats")
     st.caption(
         "Every tagged event for a side folded into offensive, defensive, "
         "distribution, and possession."
@@ -2147,29 +2134,6 @@ def render_collective_section(rundown: MatchRundown) -> None:
     for tab, profile in zip(tabs, teams, strict=True):
         with tab:
             render_dashboard(load_from_team_profile(rundown, profile), collective=True)
-
-
-def render_individual_section(rundown: MatchRundown) -> None:
-    """Player list + full individual pillar sheet."""
-
-    named = named_player_profiles(rundown)
-    if not named:
-        st.info(
-            "No named individual sheets on this collect. "
-            "Invented film player names (Home CM 4) are draft labels — "
-            "edit line-ups in OnceSport after import if needed."
-        )
-        return
-    st.subheader("Individual players")
-    st.caption(
-        "Everyone who was tagged in the match. Minutes are match-clock "
-        "minutes from tags (not true on/off unless you tag substitutions)."
-    )
-    st.dataframe(_individual_player_rows(rundown), hide_index=True, width="stretch")
-    player_map = {profile_label(profile): profile.player_id for profile in named}
-    player_label = st.selectbox("Open player sheet", options=list(player_map.keys()))
-    load = load_from_rundown(rundown, player_map[player_label])
-    render_dashboard(load, collective=False, show_chrome=False)
 
 
 def render_review_section(rundown: MatchRundown) -> None:
@@ -2228,18 +2192,22 @@ def render_review_section(rundown: MatchRundown) -> None:
 
 
 def render_collective_rundown(rundown: MatchRundown) -> None:
-    """Match page: summary, then Collective / Individual / Review views."""
+    """Match page: scoreboard, team stats, individual log — not a timeline."""
 
+    perspective = analysis_perspective(rundown)
     render_match_summary(rundown)
     render_pdf_download(rundown, key="match_pdf_report")
-    collective_tab, individual_tab, review_tab = st.tabs(
-        ["Collective", "Individual", "Review tags"]
-    )
-    with collective_tab:
+    render_team_sheet(rundown, perspective=perspective)
+    render_individual_stat_log(rundown)
+    with st.expander("Deep team pillars (optional)", expanded=False):
         render_collective_section(rundown)
-    with individual_tab:
-        render_individual_section(rundown)
-    with review_tab:
+    with st.expander("Exports & tag review", expanded=False):
+        st.caption(
+            "Download XML/CSV for OnceSport or spreadsheets. "
+            "Review is for fixing wrong tags — not the primary match view."
+        )
+        render_match_exports(rundown)
+        render_tag_inventory(rundown, perspective=perspective)
         render_review_section(rundown)
 
 
