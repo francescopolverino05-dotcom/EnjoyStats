@@ -104,6 +104,7 @@ from analytics.team_sheet import (
     team_sheets_from_rundown,
 )
 from analytics.batch_collect import list_inbox_films, start_batch_collect, summarize_batch
+from analytics.distinti import facts_to_payload, parse_distinti_pdf
 from analytics.lineups import example_lineup_csv, parse_lineup_bytes
 from analytics.match_tags import attacks_from_events, rundown_to_csv, rundown_to_xml
 from analytics.oncesport_export import export_both_oncesport_xml
@@ -1637,11 +1638,15 @@ def render_analyse_landing(base_url: str) -> None:
         home_kit_hex = st.color_picker("Home kit colour", value="#1e3a8a", key="analyse_home_kit")
     with kit_cols[1]:
         away_kit_hex = st.color_picker("Away kit colour", value="#dc2626", key="analyse_away_kit")
-    with st.expander("Line-ups (names + shirt numbers) — strongly recommended", expanded=True):
+    with st.expander(
+        "Line-ups + distinti (boost accuracy) — strongly recommended",
+        expanded=True,
+    ):
         st.caption(
-            "Upload a CSV or JSON with real players. "
-            "This is how tags get real names instead of “Home CM 4”. "
-            "Columns: side, jersey, name, position."
+            "**Goal rule:** the distinti scoreline is law. "
+            "Film CV may invent shots; goals are capped to that result "
+            "(e.g. 0–4 keeps at most 0 home + 4 away goals — the rest become shots). "
+            "CSV/JSON = player names. Distinti PDF or manual score = official result."
         )
         st.download_button(
             "Download sample line-up CSV",
@@ -1656,7 +1661,44 @@ def render_analyse_landing(base_url: str) -> None:
             type=["csv", "json"],
             key="analyse_lineup_file",
         )
+        distinti_file = st.file_uploader(
+            "Upload distinti / tabellino (PDF)",
+            type=["pdf"],
+            key="analyse_distinti_pdf",
+        )
+        score_cols = st.columns(2)
+        with score_cols[0]:
+            manual_home_goals = st.number_input(
+                "Official home goals (distinti)",
+                min_value=0,
+                max_value=30,
+                value=0,
+                step=1,
+                key="analyse_official_home_goals",
+            )
+        with score_cols[1]:
+            manual_away_goals = st.number_input(
+                "Official away goals (distinti)",
+                min_value=0,
+                max_value=30,
+                value=0,
+                step=1,
+                key="analyse_official_away_goals",
+            )
+        use_manual_score = st.checkbox(
+            "Pin goals to distinti scoreline (e.g. 0–4) — stops film shots becoming goals",
+            value=False,
+            key="analyse_pin_official_score",
+        )
         lineup_json_text = ""
+        import json as _json
+
+        payload: dict[str, object] = {
+            "home_team": home_team_name or "Home",
+            "away_team": away_team_name or "Away",
+            "home": [],
+            "away": [],
+        }
         if lineup_file is not None:
             try:
                 parsed = parse_lineup_bytes(
@@ -1665,33 +1707,103 @@ def render_analyse_landing(base_url: str) -> None:
                     home_team=home_team_name or "Home",
                     away_team=away_team_name or "Away",
                 )
-                import json as _json
-
-                lineup_json_text = _json.dumps(
-                    {
-                        "home_team": parsed.home_team,
-                        "away_team": parsed.away_team,
-                        "home": [
-                            {
-                                "jersey": p.jersey,
-                                "name": p.name,
-                                "position": p.position,
-                            }
-                            for p in parsed.home
-                        ],
-                        "away": [
-                            {
-                                "jersey": p.jersey,
-                                "name": p.name,
-                                "position": p.position,
-                            }
-                            for p in parsed.away
-                        ],
-                    }
+                payload = {
+                    "home_team": parsed.home_team,
+                    "away_team": parsed.away_team,
+                    "home": [
+                        {
+                            "jersey": p.jersey,
+                            "name": p.name,
+                            "position": p.position,
+                        }
+                        for p in parsed.home
+                    ],
+                    "away": [
+                        {
+                            "jersey": p.jersey,
+                            "name": p.name,
+                            "position": p.position,
+                        }
+                        for p in parsed.away
+                    ],
+                }
+                if parsed.home_team and parsed.home_team != "Home":
+                    home_team_name = parsed.home_team
+                if parsed.away_team and parsed.away_team != "Away":
+                    away_team_name = parsed.away_team
+                st.success(
+                    f"Line-up loaded · Home {len(parsed.home)} · Away {len(parsed.away)}"
                 )
-                st.success(f"Line-up loaded · Home {len(parsed.home)} · Away {len(parsed.away)}")
             except ValueError as exc:
                 st.error(str(exc))
+        if distinti_file is not None:
+            try:
+                facts = parse_distinti_pdf(
+                    distinti_file.getvalue(),
+                    filename=getattr(distinti_file, "name", "distinti.pdf"),
+                )
+                payload["match_facts"] = facts_to_payload(facts)
+                if facts.home_team and facts.home_team != "Home":
+                    payload["home_team"] = facts.home_team
+                    home_team_name = facts.home_team
+                if facts.away_team and facts.away_team != "Away":
+                    payload["away_team"] = facts.away_team
+                    away_team_name = facts.away_team
+                if not payload.get("home") and facts.home:
+                    payload["home"] = [
+                        {
+                            "jersey": p.jersey,
+                            "name": p.name,
+                            "position": p.position,
+                        }
+                        for p in facts.home
+                    ]
+                if not payload.get("away") and facts.away:
+                    payload["away"] = [
+                        {
+                            "jersey": p.jersey,
+                            "name": p.name,
+                            "position": p.position,
+                        }
+                        for p in facts.away
+                    ]
+                st.success(
+                    f"Distinti loaded · {facts.home_team} {facts.score_label()} "
+                    f"{facts.away_team} · "
+                    f"players Home {len(facts.home)} / Away {len(facts.away)}"
+                )
+                if facts.home_goals is not None and facts.away_goals is not None:
+                    # Prefer PDF score when parse succeeded.
+                    manual_home_goals = int(facts.home_goals)
+                    manual_away_goals = int(facts.away_goals)
+            except ValueError as exc:
+                st.error(str(exc))
+        pdf_score = payload.get("match_facts") if isinstance(payload.get("match_facts"), dict) else None
+        if use_manual_score or (
+            isinstance(pdf_score, dict)
+            and pdf_score.get("home_goals") is not None
+            and pdf_score.get("away_goals") is not None
+        ):
+            facts_payload = dict(pdf_score or {})
+            # Manual checkbox overrides / fills score; PDF alone also pins.
+            if use_manual_score:
+                facts_payload["home_goals"] = int(manual_home_goals)
+                facts_payload["away_goals"] = int(manual_away_goals)
+                facts_payload["source"] = facts_payload.get("source") or "manual_distinti_score"
+            facts_payload.setdefault(
+                "home_team", payload.get("home_team") or home_team_name or "Home"
+            )
+            facts_payload.setdefault(
+                "away_team", payload.get("away_team") or away_team_name or "Away"
+            )
+            payload["match_facts"] = facts_payload
+            st.info(
+                f"Goals pinned to distinti **{int(facts_payload['home_goals'])}–"
+                f"{int(facts_payload['away_goals'])}** "
+                "(extra film “goals” become shots)."
+            )
+        if payload.get("home") or payload.get("away") or payload.get("match_facts"):
+            lineup_json_text = _json.dumps(payload)
 
     render_film_uploader_panel(base_url)
 

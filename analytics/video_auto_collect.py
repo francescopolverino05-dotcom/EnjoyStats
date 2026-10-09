@@ -1637,6 +1637,8 @@ def collect_from_video(
     home_team_name: str | None = None,
     away_team_name: str | None = None,
     lineups: MatchLineups | None = None,
+    official_home_goals: int | None = None,
+    official_away_goals: int | None = None,
 ) -> MatchRundown:
     """Watch a match film and return the collected four-pillar rundown.
 
@@ -1651,6 +1653,8 @@ def collect_from_video(
         home_team_name: Optional home display name (else inferred from filename).
         away_team_name: Optional away display name.
         lineups: Optional real Home/Away sheets (names + shirt numbers).
+        official_home_goals: Optional final score from distinti / tabellino.
+        official_away_goals: Optional final score from distinti / tabellino.
     """
 
     # A prior watch that died at the final fold can finish here — no re-watch.
@@ -1724,6 +1728,26 @@ def collect_from_video(
         away_kit_bgr=away_kit_bgr,
         lineups=lineups,
     )
+    home_team_id = uuid5(AUTO_NAMESPACE, f"{match_id}-team-{home_name}")
+    away_team_id = uuid5(AUTO_NAMESPACE, f"{match_id}-team-{away_name}")
+    if official_home_goals is not None and official_away_goals is not None:
+        from analytics.distinti import apply_official_score
+
+        events = apply_official_score(
+            events,
+            home_team_id=home_team_id,
+            away_team_id=away_team_id,
+            home_goals=official_home_goals,
+            away_goals=official_away_goals,
+        )
+        _emit(
+            on_progress,
+            (
+                f"Pinned score to distinti {official_home_goals}-{official_away_goals} "
+                "· demoted extra film goals"
+            ),
+            0.935,
+        )
     write_collect_checkpoint(
         info.path,
         match_id=match_id,
@@ -1734,7 +1758,6 @@ def collect_from_video(
         stage="after_first_pass",
     )
     duration_minutes = max(minutes, rundown_minutes_from_events(events), 0.1)
-    home_team_id = uuid5(AUTO_NAMESPACE, f"{match_id}-team-{home_name}")
     coverage = build_coverage_report(
         events,
         duration_minutes,
@@ -1816,6 +1839,18 @@ def collect_from_video(
                 duration_minutes,
                 home_team_ids={home_team_id},
             )
+
+    # Re-apply after re-pass (extra blocks can mint more false goals).
+    if official_home_goals is not None and official_away_goals is not None:
+        from analytics.distinti import apply_official_score
+
+        events = apply_official_score(
+            events,
+            home_team_id=home_team_id,
+            away_team_id=away_team_id,
+            home_goals=official_home_goals,
+            away_goals=official_away_goals,
+        )
 
     # Save tags BEFORE the final fold — if collect_game fails, we can finish
     # without re-watching the film.
