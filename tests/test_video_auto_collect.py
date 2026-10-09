@@ -270,6 +270,71 @@ def test_box_carries_are_not_mass_goals() -> None:
     assert shots <= 4
 
 
+def test_ball_to_opponent_is_misplaced_pass_not_completed() -> None:
+    """A→B possession change must lower pass accuracy (unsuccessful pass)."""
+
+    from uuid import uuid4
+
+    from data_models.events import EventType
+
+    n_frames = 80
+    fps = 8.0
+    home = Track(
+        track_id=1,
+        kind="player",
+        xs=[30.0] * n_frames,
+        ys=[50.0] * n_frames,
+        frames=list(range(n_frames)),
+        last_x=30.0,
+        last_y=50.0,
+        bgr=(20.0, 40.0, 200.0),
+        team=0,
+    )
+    away = Track(
+        track_id=2,
+        kind="player",
+        xs=[70.0] * n_frames,
+        ys=[50.0] * n_frames,
+        frames=list(range(n_frames)),
+        last_x=70.0,
+        last_y=50.0,
+        bgr=(200.0, 80.0, 20.0),
+        team=1,
+    )
+    # Ball sits with home, then flies to away (clear team-to-team transfer).
+    ball_xs = [30.0] * 40 + [30.0 + (i + 1) * (40.0 / 40.0) for i in range(40)]
+    ball = Track(
+        track_id=3,
+        kind="ball",
+        xs=ball_xs,
+        ys=[50.0] * n_frames,
+        frames=list(range(n_frames)),
+        last_x=ball_xs[-1],
+        last_y=50.0,
+    )
+    events, roster = events_from_tracks(
+        [home, away, ball],
+        fps=fps,
+        match_id=uuid4(),
+        team_id=uuid4(),
+        clip_url="file:///tmp/turnover.avi",
+        home_name="Home",
+        away_name="Away",
+    )
+    assert roster
+    passes = [
+        event
+        for event in events
+        if event.event_type in {EventType.PASS, EventType.CROSS, EventType.CUTBACK}
+    ]
+    assert passes, "expected a distribution tag on the A→B transfer"
+    failed = [event for event in passes if not event.successful]
+    assert failed, "A→B ball must count as a misplaced (unsuccessful) pass"
+    assert any(
+        event.event_type is EventType.BALL_RECOVERY for event in events
+    ), "opponent should get a recovery after winning the ball"
+
+
 def test_clear_central_strike_counts_shot_goal_needs_pending() -> None:
     """A single strike to the mouth is a shot; goal needs shot → mouth follow-up."""
 
