@@ -1161,7 +1161,7 @@ def _remember_collection(rundown: MatchRundown) -> str:
 
 def _pdf_filename(label: str) -> str:
     safe = "".join(ch if ch.isalnum() or ch in {"-", "_"} else "_" for ch in label)
-    return f"enjoystats_{safe[:80] or 'match'}.pdf"
+    return f"statman_{safe[:80] or 'match'}.pdf"
 
 
 def render_pdf_download(rundown: MatchRundown, *, key: str, label: str | None = None) -> None:
