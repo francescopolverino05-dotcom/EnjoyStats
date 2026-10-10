@@ -199,10 +199,115 @@ def sanitize_film_shots(events: list[MatchEvent]) -> list[MatchEvent]:
     return cleaned
 
 
-def sanitize_film_events(events: list[MatchEvent]) -> list[MatchEvent]:
-    """Full film noise scrub: goals first, then shot attempts."""
+DEFAULT_MAX_FILM_PASSES: Final[int] = 420
+DEFAULT_MAX_FILM_PASSES_PER_TEAM: Final[int] = 260
 
-    return sanitize_film_shots(sanitize_film_goals(events))
+
+def max_film_passes() -> int:
+    raw = os.environ.get("STATMAN_MAX_PASSES", "").strip()
+    if not raw:
+        return DEFAULT_MAX_FILM_PASSES
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return DEFAULT_MAX_FILM_PASSES
+
+
+def max_film_passes_per_team() -> int:
+    raw = os.environ.get("STATMAN_MAX_PASSES_PER_TEAM", "").strip()
+    if not raw:
+        return DEFAULT_MAX_FILM_PASSES_PER_TEAM
+    try:
+        return max(0, int(raw))
+    except ValueError:
+        return DEFAULT_MAX_FILM_PASSES_PER_TEAM
+
+
+def _event_key(event: MatchEvent) -> tuple[object, ...]:
+    return (
+        event.event_type,
+        event.team_id,
+        event.player_id,
+        event.period,
+        event.minute,
+        event.second,
+        round(event.x, 0),
+        round(event.y, 0),
+    )
+
+
+def dedupe_near_identical_events(events: list[MatchEvent]) -> list[MatchEvent]:
+    """Drop exact duplicate tags minted by overlapping sample windows."""
+
+    seen: set[tuple[object, ...]] = set()
+    out: list[MatchEvent] = []
+    for event in events:
+        key = _event_key(event)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(event)
+    return out
+
+
+def sanitize_film_passes(events: list[MatchEvent]) -> list[MatchEvent]:
+    """Cap absurd film pass spam (same spirit as shot/goal caps)."""
+
+    pass_types = {EventType.PASS, EventType.CROSS, EventType.CUTBACK}
+    per_team = max_film_passes_per_team()
+    total_limit = max_film_passes()
+    if per_team <= 0 and total_limit <= 0:
+        return events
+    kept_by_team: dict[object, int] = {}
+    total_kept = 0
+    cleaned: list[MatchEvent] = []
+    for event in events:
+        if event.event_type not in pass_types:
+            cleaned.append(event)
+            continue
+        team_count = kept_by_team.get(event.team_id, 0)
+        over_team = per_team > 0 and team_count >= per_team
+        over_total = total_limit > 0 and total_kept >= total_limit
+        if over_team or over_total:
+            continue
+        kept_by_team[event.team_id] = team_count + 1
+        total_kept += 1
+        cleaned.append(event)
+    return cleaned
+
+
+def sanitize_film_events(events: list[MatchEvent]) -> list[MatchEvent]:
+    """Full film noise scrub: goals, shots, duplicate tags, pass spam."""
+
+    return sanitize_film_passes(
+        dedupe_near_identical_events(sanitize_film_shots(sanitize_film_goals(events)))
+    )
+
+
+def film_quality_summary(events: list[MatchEvent]) -> dict[str, object]:
+    """Headline auto-polish stats for the Review panel."""
+
+    goals = sum(1 for event in events if event.is_goal or event.event_type is EventType.GOAL)
+    shots = sum(1 for event in events if event.event_type in {EventType.SHOT, EventType.GOAL})
+    passes = sum(
+        1
+        for event in events
+        if event.event_type in {EventType.PASS, EventType.CROSS, EventType.CUTBACK}
+    )
+    failed_passes = sum(
+        1
+        for event in events
+        if event.event_type in {EventType.PASS, EventType.CROSS, EventType.CUTBACK}
+        and not event.successful
+    )
+    return {
+        "events": len(events),
+        "goals": goals,
+        "shots": shots,
+        "passes": passes,
+        "misplaced_passes": failed_passes,
+        "auto_polished": True,
+    }
 
 # Half-spaces (Halbraum): between wing and centre — Spielverlagerung / CV.
 HALF_SPACE_Y_LO: Final[tuple[float, float]] = (20.0, 40.0)

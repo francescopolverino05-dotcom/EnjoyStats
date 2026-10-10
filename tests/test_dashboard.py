@@ -214,6 +214,10 @@ def test_sidebar_sample_opens_tag_inventory(tmp_path, monkeypatch) -> None:
     assert any("CSV" in label for label in downloads)
     assert any("XML" in label for label in downloads)
     assert any("PDF" in label for label in downloads)
+    assert any("Excel" in label or ".xlsx" in label for label in downloads)
+    assert any("share pack" in label.lower() or "ZIP" in label for label in downloads)
+    tab_bits = " ".join(str(getattr(tab, "label", tab)) for tab in getattr(at, "tabs", []))
+    assert "Off-ball IQ" in tab_bits or "Off-ball" in " ".join(subheaders)
     history = list_history()
     assert len(history) == 1
     assert "Napoleon" in history[0].label or "Jeans" in history[0].label
@@ -244,7 +248,11 @@ def test_collected_rundown_shows_team_and_individual_stats(tmp_path, monkeypatch
     assert "Individual Statistics" in tab_bits or any(
         "Individual Statistics" in header for header in subheaders
     )
+    assert "Off-ball IQ" in tab_bits
     assert any("Open player sheet" in str(box.label) for box in at.selectbox)
+    downloads = [str(button.label) for button in at.download_button]
+    assert any("Excel" in label for label in downloads)
+    assert any("highlights" in label.lower() for label in downloads)
     # Deep pillars stay available but are not the primary timeline view.
     assert "Offensive" in subheaders or any(
         "Deep team pillars" in str(getattr(block, "label", "")) for block in at.expander
