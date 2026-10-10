@@ -67,7 +67,6 @@ from analytics.team_collect import (
     SheetPerspective,
     analysed_team_profile,
     analysis_perspective,
-    named_player_profiles,
     team_profiles_from_rundown,
 )
 from analytics.video_auto_collect import (
@@ -87,6 +86,18 @@ from analytics.collection_history import (
 )
 from analytics.game_ingest import MatchRundown, rundown_from_mapping, rundown_to_json
 from analytics.match_report_pdf import build_match_report_pdf
+from analytics.match_export_pack import (
+    build_match_excel,
+    build_share_pack,
+    highlights_to_csv,
+)
+from analytics.offball_iq import (
+    offball_player_rows,
+    offball_player_stats,
+    offball_team_rows,
+    offball_team_stats,
+)
+from analytics.player_log import individual_stat_log_rows, players_for_stat_log
 from analytics.team_sheet import (
     tag_inventory_rows,
     team_sheet_rows,
@@ -1144,7 +1155,7 @@ def render_match_summary(rundown: MatchRundown) -> None:
     st.caption(
         f"{summary.home_team_name} vs {summary.away_team_name}  ·  "
         f"{summary.duration_minutes:.1f} minutes collected. "
-        "Impact-style Match Statistics and Individual Statistics below."
+        "Impact-style Match Statistics, Individual Statistics, and Off-ball IQ below."
     )
 
 
@@ -1212,11 +1223,43 @@ def render_team_sheet(
 
 
 def render_match_exports(rundown: MatchRundown) -> None:
-    """XML/CSV/OnceSport downloads — no action timeline on the main page."""
+    """Excel, highlights, share pack, OnceSport XML — Impact-parity downloads."""
 
-    pair = export_both_oncesport_xml(rundown)
     home_name = rundown.summary.home_team_name or "Home"
     away_name = rundown.summary.away_team_name or "Away"
+    stem = f"{home_name}_vs_{away_name}".replace(" ", "_")
+    st.caption(
+        "Share-friendly pack (Excel + highlights + tags), or OnceSport XML for import."
+    )
+    share_cols = st.columns(3)
+    with share_cols[0]:
+        st.download_button(
+            "Download Excel (.xlsx)",
+            data=build_match_excel(rundown),
+            file_name=f"{stem}_stats.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+            key="dl_match_excel",
+        )
+    with share_cols[1]:
+        st.download_button(
+            "Download highlights (CSV)",
+            data=highlights_to_csv(rundown),
+            file_name=f"{stem}_highlights.csv",
+            mime="text/csv",
+            use_container_width=True,
+            key="dl_highlights_csv",
+        )
+    with share_cols[2]:
+        st.download_button(
+            "Download share pack (ZIP)",
+            data=build_share_pack(rundown),
+            file_name=f"{stem}_share_pack.zip",
+            mime="application/zip",
+            use_container_width=True,
+            key="dl_share_pack",
+        )
+    pair = export_both_oncesport_xml(rundown)
     xml_home, xml_away, xml_all, csv_col = st.columns(4)
     with xml_home:
         st.download_button(
@@ -2033,55 +2076,6 @@ def render_analyse_landing(base_url: str) -> None:
         st.error(f"{exc}. {UPLOAD_DISCONNECT_HINT}")
 
 
-def _players_for_stat_log(rundown: MatchRundown) -> list:
-    """Named line-up players when present; otherwise film roster labels."""
-
-    named = named_player_profiles(rundown)
-    if named:
-        return named
-    return list(rundown.players)
-
-
-def _individual_player_rows(rundown: MatchRundown) -> list[dict[str, object]]:
-    """Individual stat log: one row per player with headline match numbers."""
-
-    sheets = {sheet.team_id: sheet.team_name for sheet in team_sheets_from_rundown(rundown)}
-    rows: list[dict[str, object]] = []
-    for profile in _players_for_stat_log(rundown):
-        passes = profile.distribution.passes
-        pass_acc = round(100.0 * passes.success_rate, 1) if passes.total else 0.0
-        rows.append(
-            {
-                "Team": sheets.get(profile.team_id, rundown.summary.home_team_name),
-                "Player": profile.player_name or "Player",
-                "#": profile.jersey_number or "—",
-                "Pos": profile.position or "—",
-                "Min": round(profile.offensive.minutes, 1),
-                "G": profile.offensive.goals,
-                "A": profile.offensive.assists,
-                "Shots": profile.offensive.total_shots,
-                "SoT": profile.offensive.shots_on_target,
-                "Passes": passes.total,
-                "Pass %": pass_acc,
-                "Prog": profile.distribution.progressive_passes.total,
-                "Cross": profile.distribution.crosses.total,
-                "Rec": profile.defensive.ball_recoveries.total,
-                "Int": profile.defensive.interceptions.total,
-                "Fouls": profile.defensive.fouls.committed,
-            }
-        )
-    rows.sort(
-        key=lambda row: (
-            str(row["Team"]),
-            -(int(row["G"]) + int(row["A"])),
-            -(int(row["Passes"])),
-            row["#"] == "—",
-            row["#"] or 99,
-        )
-    )
-    return rows
-
-
 def render_individual_stat_log(
     rundown: MatchRundown,
     *,
@@ -2089,7 +2083,7 @@ def render_individual_stat_log(
 ) -> None:
     """Impact Individual Statistics — player log, not an action timeline."""
 
-    rows = _individual_player_rows(rundown)
+    rows = individual_stat_log_rows(rundown)
     if show_heading:
         st.subheader("Individual Statistics")
     if not rows:
@@ -2101,7 +2095,7 @@ def render_individual_stat_log(
         "Open a full pillar sheet below for the deep dive."
     )
     st.dataframe(rows, hide_index=True, width="stretch")
-    players = _players_for_stat_log(rundown)
+    players = players_for_stat_log(rundown)
     if not players:
         return
     player_map = {profile_label(profile): profile.player_id for profile in players}
@@ -2112,6 +2106,28 @@ def render_individual_stat_log(
     )
     load = load_from_rundown(rundown, player_map[player_label])
     render_dashboard(load, collective=False, show_chrome=False)
+
+
+def render_offball_iq_section(rundown: MatchRundown) -> None:
+    """Impact-style off-ball / Influence IQ boards."""
+
+    teams = offball_team_stats(rundown)
+    st.caption(
+        "Off-ball Influence IQ from match tags (halos, triangles, compact/stretched "
+        "defence, alleys, recoveries, pressing). Event-derived proxies — not full "
+        "22-player optical tracking."
+    )
+    if teams:
+        st.dataframe(offball_team_rows(teams), hide_index=True, width="stretch")
+        iq_cols = st.columns(len(teams))
+        for col, team in zip(iq_cols, teams, strict=True):
+            col.metric(f"{team.team_name} Influence IQ", f"{team.influence_iq:.0f}")
+    players = offball_player_stats(rundown)
+    if players:
+        st.subheader("Player Influence IQ")
+        st.dataframe(offball_player_rows(players)[:40], hide_index=True, width="stretch")
+    elif not teams:
+        st.info("No off-ball rows yet — collect a match first.")
 
 
 def render_collective_section(rundown: MatchRundown) -> None:
@@ -2145,14 +2161,21 @@ def render_collective_section(rundown: MatchRundown) -> None:
 
 
 def render_review_section(rundown: MatchRundown) -> None:
-    """Step D: fix only wrong tags, then export uses the cleaned sheet."""
+    """Optional tag fix — film collects are auto-polished first."""
 
-    st.subheader("Review tags")
+    from analytics.statman_iq import film_quality_summary
+
+    quality = film_quality_summary(list(rundown.events))
+    st.subheader("Review tags (optional)")
+    st.success(
+        f"Auto-polished · {quality['events']} tags · "
+        f"{quality['goals']} goals · {quality['shots']} shots · "
+        f"{quality['misplaced_passes']} misplaced passes. "
+        "Only open this if something still looks wrong."
+    )
     st.caption(
-        "The computer already tagged the match. "
-        "Only change rows that look wrong — untick Keep to delete, "
-        "or change Tag / Player. Then press Apply. "
-        "You do **not** re-tag the whole game by hand."
+        "Film Analyse already scrubbed goal/shot/pass noise and turnovers. "
+        "Untick Keep to delete a row, or change Tag / Player, then Apply."
     )
     labels = list(player_label_map(rundown).keys()) or ["—"]
     tag_choices = event_type_choices()
@@ -2200,24 +2223,25 @@ def render_review_section(rundown: MatchRundown) -> None:
 
 
 def render_collective_rundown(rundown: MatchRundown) -> None:
-    """Match page shaped like Impact: Match Statistics + Individual Statistics."""
+    """Match page: Match / Individual / Off-ball IQ + share exports."""
 
     perspective = analysis_perspective(rundown)
     render_match_summary(rundown)
     render_pdf_download(rundown, key="match_pdf_report")
-    match_tab, individual_tab = st.tabs(["Match Statistics", "Individual Statistics"])
+    match_tab, individual_tab, offball_tab = st.tabs(
+        ["Match Statistics", "Individual Statistics", "Off-ball IQ"]
+    )
     with match_tab:
         render_team_sheet(rundown, perspective=perspective, show_heading=False)
         with st.expander("Deep team pillars (optional)", expanded=False):
             render_collective_section(rundown)
     with individual_tab:
         render_individual_stat_log(rundown, show_heading=False)
-    with st.expander("Exports & tag review", expanded=False):
-        st.caption(
-            "Download XML/CSV for OnceSport or spreadsheets. "
-            "Review is for fixing wrong tags — not the primary match view."
-        )
+    with offball_tab:
+        render_offball_iq_section(rundown)
+    with st.expander("Exports & share pack", expanded=True):
         render_match_exports(rundown)
+    with st.expander("Tag inventory & optional review", expanded=False):
         render_tag_inventory(rundown, perspective=perspective)
         render_review_section(rundown)
 

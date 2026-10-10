@@ -1991,10 +1991,19 @@ def collect_from_video(
                 home_team_ids={home_team_id},
             )
 
-    # Re-pass merges skip the first-pass sanitize — re-cap goals + shots.
-    from analytics.statman_iq import sanitize_film_events
+    # Re-pass merges skip the first-pass sanitize — re-cap goals/shots/passes.
+    from analytics.statman_iq import film_quality_summary, sanitize_film_events
 
     events = sanitize_film_events(events)
+    quality = film_quality_summary(events)
+    _emit(
+        on_progress,
+        (
+            f"Auto-polished tags · {quality['events']} events · "
+            f"{quality['goals']} goals · {quality['misplaced_passes']} misplaced"
+        ),
+        0.93,
+    )
     # Distinti scoreline is law when provided (after sanitize).
     if official_home_goals is not None and official_away_goals is not None:
         from analytics.distinti import apply_official_score

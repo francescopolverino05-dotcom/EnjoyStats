@@ -226,6 +226,40 @@ def test_carry_into_box_from_midfield_is_not_a_shot() -> None:
     assert not verdict.is_shot
 
 
+def test_dedupe_and_pass_cap_auto_polish(monkeypatch) -> None:
+    from analytics.statman_iq import dedupe_near_identical_events, sanitize_film_passes
+
+    monkeypatch.setenv("STATMAN_MAX_PASSES", "5")
+    monkeypatch.setenv("STATMAN_MAX_PASSES_PER_TEAM", "5")
+    match_id = uuid4()
+    team_id = uuid4()
+    player_id = uuid4()
+    base = {
+        "match_id": match_id,
+        "team_id": team_id,
+        "player_id": player_id,
+        "period": 1,
+        "minute": 10,
+        "second": 0,
+        "event_type": EventType.PASS,
+        "is_goal": False,
+        "successful": True,
+        "x": 40.0,
+        "y": 50.0,
+        "end_x": 55.0,
+        "end_y": 50.0,
+    }
+    events = [MatchEvent.model_validate(base) for _ in range(3)]
+    for minute in range(11, 25):
+        events.append(
+            MatchEvent.model_validate({**base, "minute": minute, "second": minute % 60})
+        )
+    deduped = dedupe_near_identical_events(events)
+    assert len(deduped) == 1 + (25 - 11)
+    capped = sanitize_film_passes(deduped)
+    assert len(capped) == 5
+
+
 def test_sanitize_film_shots_demotes_excess(monkeypatch) -> None:
     monkeypatch.setenv("STATMAN_MAX_SHOTS", "4")
     monkeypatch.setenv("STATMAN_MAX_SHOTS_PER_TEAM", "10")
