@@ -376,21 +376,22 @@ def team_sheet_rows(sheets: Sequence[TeamBasicStats]) -> list[dict[str, object]]
 
     if not sheets:
         return []
+    # Labels match Impact Soccer Match Statistics (display.mpact.ai).
     fields = (
         ("Goals", "goals"),
         ("Assists", "assists"),
         ("Possession %", "possession_pct"),
-        ("Total shots", "total_shots"),
-        ("Shots on target", "shots_on_target"),
+        ("Total Shots", "total_shots"),
+        ("Shots on Target", "shots_on_target"),
         ("Saves", "saves"),
         ("Offsides", "offsides"),
-        ("Total passes", "total_passes"),
-        ("Pass accuracy %", "pass_accuracy"),
-        ("Key passes", "key_passes"),
+        ("Total Passes", "total_passes"),
+        ("Pass Accuracy %", "pass_accuracy"),
+        ("Key Passes", "key_passes"),
         ("Duels", "duels"),
         ("Fouls", "fouls"),
         ("Corners", "corners"),
-        ("Free kicks", "free_kicks"),
+        ("Free Kicks", "free_kicks"),
         ("Penalties", "penalties"),
     )
     rows: list[dict[str, object]] = []

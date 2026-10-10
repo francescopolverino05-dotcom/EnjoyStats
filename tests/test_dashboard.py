@@ -200,13 +200,16 @@ def test_sidebar_sample_opens_tag_inventory(tmp_path, monkeypatch) -> None:
     assert not at.exception
     subheaders = [str(element.value) for element in at.subheader]
     assert "Match rundown" in subheaders
-    assert any(
-        "team statistics" in header.lower() or "Team statistics" in header
-        for header in subheaders
-    )
-    assert "Individual stat log" in subheaders
     assert "Match tags" not in subheaders
     assert "15-second moments" not in subheaders
+    tab_labels = " ".join(str(tab.label) for tab in at.tabs) if hasattr(at, "tabs") else ""
+    body = " ".join(subheaders) + " " + tab_labels
+    assert "Match Statistics" in body or any(
+        "match statistics" in header.lower() for header in subheaders
+    )
+    assert "Individual Statistics" in body or any(
+        "individual" in header.lower() for header in subheaders
+    )
     downloads = [str(button.label) for button in at.download_button]
     assert any("CSV" in label for label in downloads)
     assert any("XML" in label for label in downloads)
@@ -232,11 +235,14 @@ def test_collected_rundown_shows_team_and_individual_stats(tmp_path, monkeypatch
     assert not at.exception
     subheaders = [str(element.value) for element in at.subheader]
     assert "Match rundown" in subheaders
-    assert "Individual stat log" in subheaders
     assert "Match tags" not in subheaders
     assert "15-second moments" not in subheaders
-    assert any(
-        "team statistics" in header.lower() or "Team statistics" in header for header in subheaders
+    tab_bits = " ".join(str(getattr(tab, "label", tab)) for tab in getattr(at, "tabs", []))
+    assert "Match Statistics" in tab_bits or any(
+        "Match Statistics" in header for header in subheaders
+    )
+    assert "Individual Statistics" in tab_bits or any(
+        "Individual Statistics" in header for header in subheaders
     )
     assert any("Open player sheet" in str(box.label) for box in at.selectbox)
     # Deep pillars stay available but are not the primary timeline view.
