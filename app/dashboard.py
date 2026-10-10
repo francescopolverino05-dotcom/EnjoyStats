@@ -1144,7 +1144,7 @@ def render_match_summary(rundown: MatchRundown) -> None:
     st.caption(
         f"{summary.home_team_name} vs {summary.away_team_name}  ·  "
         f"{summary.duration_minutes:.1f} minutes collected. "
-        "Team board and player log below — not an action timeline."
+        "Impact-style Match Statistics and Individual Statistics below."
     )
 
 
@@ -1185,8 +1185,9 @@ def render_team_sheet(
     rundown: MatchRundown,
     *,
     perspective: SheetPerspective | None = None,
+    show_heading: bool = True,
 ) -> None:
-    """Impact-style 15-stat board — analysed side only when the sheet is one-team."""
+    """Impact Match Statistics board — analysed side only when the sheet is one-team."""
 
     view = perspective or analysis_perspective(rundown)
     sheets = team_sheets_from_rundown(rundown)
@@ -1194,17 +1195,18 @@ def render_team_sheet(
         return
     if view.one_sided and view.analysed_team_id is not None:
         sheets = [sheet for sheet in sheets if sheet.team_id == view.analysed_team_id] or sheets[:1]
-        st.subheader(f"{view.analysed_team_name} team statistics")
+        if show_heading:
+            st.subheader(f"{view.analysed_team_name} · Match Statistics")
         st.caption(
-            f"15 basic Impact-style stats for the analysed side only. "
-            f"{view.opposition_team_name} does not get a parallel board from this "
-            "one-team XML — pair their analysis file for a full two-team sheet."
+            f"Impact-style Match Statistics for the analysed side only. "
+            f"{view.opposition_team_name} needs their analysis file for a full board."
         )
     else:
-        st.subheader("Team statistics")
+        if show_heading:
+            st.subheader("Match Statistics")
         st.caption(
-            "The 15 basic team stats Impact-style analysis publishes: counted "
-            "from this match's tags, not a second spreadsheet."
+            "Impact Soccer Match Statistics: goals, shots, passes, duels, set pieces — "
+            "counted from this match's tags."
         )
     st.dataframe(team_sheet_rows(sheets), hide_index=True, width="stretch")
 
@@ -2080,17 +2082,23 @@ def _individual_player_rows(rundown: MatchRundown) -> list[dict[str, object]]:
     return rows
 
 
-def render_individual_stat_log(rundown: MatchRundown) -> None:
-    """Match page individual board — stats table, not an action timeline."""
+def render_individual_stat_log(
+    rundown: MatchRundown,
+    *,
+    show_heading: bool = True,
+) -> None:
+    """Impact Individual Statistics — player log, not an action timeline."""
 
     rows = _individual_player_rows(rundown)
-    st.subheader("Individual stat log")
+    if show_heading:
+        st.subheader("Individual Statistics")
     if not rows:
         st.info("No player rows on this collect yet.")
         return
     st.caption(
-        "One row per player: goals, shots, passes (with accuracy), recoveries. "
-        "Open a full pillar sheet below if you need the deep dive."
+        "Impact-style Individual Statistics: one row per player "
+        "(goals, shots, passes with accuracy, recoveries). "
+        "Open a full pillar sheet below for the deep dive."
     )
     st.dataframe(rows, hide_index=True, width="stretch")
     players = _players_for_stat_log(rundown)
@@ -2192,15 +2200,18 @@ def render_review_section(rundown: MatchRundown) -> None:
 
 
 def render_collective_rundown(rundown: MatchRundown) -> None:
-    """Match page: scoreboard, team stats, individual log — not a timeline."""
+    """Match page shaped like Impact: Match Statistics + Individual Statistics."""
 
     perspective = analysis_perspective(rundown)
     render_match_summary(rundown)
     render_pdf_download(rundown, key="match_pdf_report")
-    render_team_sheet(rundown, perspective=perspective)
-    render_individual_stat_log(rundown)
-    with st.expander("Deep team pillars (optional)", expanded=False):
-        render_collective_section(rundown)
+    match_tab, individual_tab = st.tabs(["Match Statistics", "Individual Statistics"])
+    with match_tab:
+        render_team_sheet(rundown, perspective=perspective, show_heading=False)
+        with st.expander("Deep team pillars (optional)", expanded=False):
+            render_collective_section(rundown)
+    with individual_tab:
+        render_individual_stat_log(rundown, show_heading=False)
     with st.expander("Exports & tag review", expanded=False):
         st.caption(
             "Download XML/CSV for OnceSport or spreadsheets. "
