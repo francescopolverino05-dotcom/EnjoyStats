@@ -5,6 +5,13 @@ stretched defence, alleys, recovery, pressing). We do not have full 22-player
 tracking on every frame, so these metrics are **event-derived proxies** that
 approximate the same ideas from passes, recoveries, interceptions, and duels.
 
+Set pieces (corners, free kicks, throw-ins) are a high-signal IQ lever —
+roughly 10–25% of goals in elite football. Public models (StatsBomb phases,
+Hudl IQ corners, wa-setpieces) split value into:
+
+* **Phase 1** — delivery + first contact (aerial / recovery / block)
+* **Phase 2** — second-ball shots and retained pressure after the restart
+
 Scores are 0–100 team/player Influence IQ figures for the Match rundown.
 """
 
@@ -13,6 +20,7 @@ from __future__ import annotations
 import math
 from collections import defaultdict
 from collections.abc import Sequence
+from dataclasses import dataclass
 from uuid import UUID
 
 from pydantic import Field
@@ -32,6 +40,20 @@ DEF_ACTIONS = {
     EventType.GROUND_DUEL,
     EventType.AERIAL_DUEL,
 }
+SET_PIECE_TYPES = {EventType.CORNER, EventType.FREE_KICK, EventType.THROW_IN}
+FIRST_CONTACT_TYPES = {
+    EventType.AERIAL_DUEL,
+    EventType.BALL_RECOVERY,
+    EventType.INTERCEPTION,
+    EventType.BLOCK_SHOT,
+    EventType.BLOCK_CROSS,
+    EventType.BLOCK_PASS,
+    EventType.GROUND_DUEL,
+}
+PHASE2_SHOT_TYPES = {EventType.SHOT, EventType.GOAL}
+# StatsBomb-style windows: first contact ~8–12s; second phase out to ~30s.
+PHASE1_WINDOW_S = 12.0
+PHASE2_WINDOW_S = 30.0
 
 
 class OffBallTeamStats(StrictModel):
@@ -47,6 +69,9 @@ class OffBallTeamStats(StrictModel):
     uncontested_alleys: int = Field(ge=0)
     defensive_recoveries: int = Field(ge=0)
     pressing_ability: float = Field(ge=0.0, le=100.0)
+    set_piece_deliveries: int = Field(ge=0)
+    set_piece_first_contact: int = Field(ge=0)
+    set_piece_second_phase: int = Field(ge=0)
     influence_iq: float = Field(ge=0.0, le=100.0)
 
 
@@ -63,7 +88,17 @@ class OffBallPlayerStats(StrictModel):
     defensive_recoveries: int = Field(ge=0)
     uncontested_alleys: int = Field(ge=0)
     pressing_actions: int = Field(ge=0)
+    set_piece_deliveries: int = Field(ge=0)
+    set_piece_first_contact: int = Field(ge=0)
+    set_piece_second_phase: int = Field(ge=0)
     influence_iq: float = Field(ge=0.0, le=100.0)
+
+
+@dataclass(frozen=True)
+class _SetPieceTally:
+    deliveries: int = 0
+    first_contact: int = 0
+    second_phase: int = 0
 
 
 def _clock_s(event: MatchEvent) -> float:
@@ -138,6 +173,118 @@ def _pressing_score(*, def_actions: int, opp_passes: int) -> float:
     return max(0.0, min(100.0, (20.0 - ppda) * (100.0 / 16.0)))
 
 
+def _set_piece_tally(
+    events: Sequence[MatchEvent],
+    *,
+    team_id: UUID,
+) -> _SetPieceTally:
+    """Count deliveries, first-contact wins, and second-phase shots for a team.
+
+    Attacking credit: own restarts → own first contact / own shots in window.
+    Defensive credit: opponent restarts → our first-contact clears/duels.
+    """
+
+    ordered = sorted(events, key=_clock_s)
+    deliveries = 0
+    first_contact = 0
+    second_phase = 0
+    for index, restart in enumerate(ordered):
+        if restart.event_type not in SET_PIECE_TYPES:
+            continue
+        t0 = _clock_s(restart)
+        attacking = restart.team_id == team_id
+        if attacking:
+            deliveries += 1
+        phase1_claimed = False
+        for follow in ordered[index + 1 :]:
+            dt = _clock_s(follow) - t0
+            if dt < 0.0:
+                continue
+            if dt > PHASE2_WINDOW_S:
+                break
+            if (
+                not phase1_claimed
+                and dt <= PHASE1_WINDOW_S
+                and follow.event_type in FIRST_CONTACT_TYPES
+            ):
+                if attacking and follow.team_id == team_id and follow.successful:
+                    first_contact += 1
+                    phase1_claimed = True
+                elif (
+                    not attacking
+                    and follow.team_id == team_id
+                    and follow.successful
+                ):
+                    # Defensive first contact on opponent delivery.
+                    first_contact += 1
+                    phase1_claimed = True
+            if (
+                attacking
+                and follow.team_id == team_id
+                and (
+                    follow.event_type in PHASE2_SHOT_TYPES
+                    or follow.is_goal
+                )
+            ):
+                second_phase += 1
+    return _SetPieceTally(
+        deliveries=deliveries,
+        first_contact=first_contact,
+        second_phase=second_phase,
+    )
+
+
+def _player_set_piece_tally(
+    events: Sequence[MatchEvent],
+    *,
+    player_id: UUID,
+    team_id: UUID,
+) -> _SetPieceTally:
+    """Per-player set-piece roles: taker, first contact, second-phase shot."""
+
+    ordered = sorted(events, key=_clock_s)
+    deliveries = 0
+    first_contact = 0
+    second_phase = 0
+    for index, restart in enumerate(ordered):
+        if restart.event_type not in SET_PIECE_TYPES:
+            continue
+        t0 = _clock_s(restart)
+        if restart.player_id == player_id:
+            deliveries += 1
+        phase1_claimed = False
+        for follow in ordered[index + 1 :]:
+            dt = _clock_s(follow) - t0
+            if dt < 0.0:
+                continue
+            if dt > PHASE2_WINDOW_S:
+                break
+            if (
+                not phase1_claimed
+                and dt <= PHASE1_WINDOW_S
+                and follow.event_type in FIRST_CONTACT_TYPES
+                and follow.successful
+            ):
+                # Only one first-contact winner per restart; credit the actor.
+                phase1_claimed = True
+                if follow.player_id == player_id:
+                    first_contact += 1
+            if (
+                follow.player_id == player_id
+                and follow.team_id == team_id
+                and (
+                    follow.event_type in PHASE2_SHOT_TYPES
+                    or follow.is_goal
+                )
+            ):
+                second_phase += 1
+    return _SetPieceTally(
+        deliveries=deliveries,
+        first_contact=first_contact,
+        second_phase=second_phase,
+    )
+
+
 def _influence_iq(
     *,
     halos: int,
@@ -146,7 +293,17 @@ def _influence_iq(
     alleys: int,
     pressing: float,
     compact: float,
+    set_piece_deliveries: int = 0,
+    set_piece_first_contact: int = 0,
+    set_piece_second_phase: int = 0,
 ) -> float:
+    # Set-piece weight mirrors research: first contact + second phase outrank
+    # raw delivery volume (taking many corners ≠ creating threat).
+    set_piece_raw = (
+        min(set_piece_deliveries, 20) * 0.6
+        + min(set_piece_first_contact, 25) * 1.4
+        + min(set_piece_second_phase, 15) * 2.0
+    )
     raw = (
         min(halos, 40) * 0.8
         + min(triangles, 30) * 1.1
@@ -154,8 +311,9 @@ def _influence_iq(
         + min(alleys, 25) * 1.0
         + pressing * 0.25
         + (100.0 - abs(compact - 35.0)) * 0.15
+        + set_piece_raw
     )
-    return round(max(0.0, min(100.0, raw / 1.6)), 1)
+    return round(max(0.0, min(100.0, raw / 1.85)), 1)
 
 
 def offball_team_stats(rundown: MatchRundown) -> list[OffBallTeamStats]:
@@ -213,6 +371,7 @@ def offball_team_stats(rundown: MatchRundown) -> list[OffBallTeamStats]:
         def_actions = sum(1 for event in owned if event.event_type in DEF_ACTIONS)
         opp_passes = sum(1 for event in opp if event.event_type in PASS_TYPES)
         pressing = _pressing_score(def_actions=def_actions, opp_passes=opp_passes)
+        set_pieces = _set_piece_tally(events, team_id=team_id)
         iq = _influence_iq(
             halos=halos,
             triangles=att_tri + def_tri,
@@ -220,6 +379,9 @@ def offball_team_stats(rundown: MatchRundown) -> list[OffBallTeamStats]:
             alleys=alleys,
             pressing=pressing,
             compact=compact,
+            set_piece_deliveries=set_pieces.deliveries,
+            set_piece_first_contact=set_pieces.first_contact,
+            set_piece_second_phase=set_pieces.second_phase,
         )
         out.append(
             OffBallTeamStats(
@@ -233,6 +395,9 @@ def offball_team_stats(rundown: MatchRundown) -> list[OffBallTeamStats]:
                 uncontested_alleys=alleys,
                 defensive_recoveries=len(recoveries),
                 pressing_ability=round(pressing, 1),
+                set_piece_deliveries=set_pieces.deliveries,
+                set_piece_first_contact=set_pieces.first_contact,
+                set_piece_second_phase=set_pieces.second_phase,
                 influence_iq=iq,
             )
         )
@@ -282,6 +447,9 @@ def offball_player_stats(rundown: MatchRundown) -> list[OffBallPlayerStats]:
             def_actions=max(pressing_actions, 1),
             opp_passes=max(8, 40 - pressing_actions),
         )
+        set_pieces = _player_set_piece_tally(
+            events, player_id=player_id, team_id=profile.team_id
+        )
         iq = _influence_iq(
             halos=halo,
             triangles=triangles,
@@ -289,6 +457,9 @@ def offball_player_stats(rundown: MatchRundown) -> list[OffBallPlayerStats]:
             alleys=alleys,
             pressing=pressing,
             compact=50.0,
+            set_piece_deliveries=set_pieces.deliveries,
+            set_piece_first_contact=set_pieces.first_contact,
+            set_piece_second_phase=set_pieces.second_phase,
         )
         rows.append(
             OffBallPlayerStats(
@@ -302,6 +473,9 @@ def offball_player_stats(rundown: MatchRundown) -> list[OffBallPlayerStats]:
                 defensive_recoveries=recoveries,
                 uncontested_alleys=alleys,
                 pressing_actions=pressing_actions,
+                set_piece_deliveries=set_pieces.deliveries,
+                set_piece_first_contact=set_pieces.first_contact,
+                set_piece_second_phase=set_pieces.second_phase,
                 influence_iq=iq,
             )
         )
@@ -324,6 +498,9 @@ def offball_team_rows(teams: Sequence[OffBallTeamStats]) -> list[dict[str, objec
         ("Uncontested Alleys", "uncontested_alleys"),
         ("Defensive Recoveries", "defensive_recoveries"),
         ("Pressing Ability", "pressing_ability"),
+        ("Set-Piece Deliveries", "set_piece_deliveries"),
+        ("Set-Piece First Contact", "set_piece_first_contact"),
+        ("Set-Piece Second Phase", "set_piece_second_phase"),
     )
     rows: list[dict[str, object]] = []
     for label, attr in fields:
@@ -348,6 +525,9 @@ def offball_player_rows(players: Sequence[OffBallPlayerStats]) -> list[dict[str,
             "Recoveries": row.defensive_recoveries,
             "Alleys": row.uncontested_alleys,
             "Press": row.pressing_actions,
+            "SP Del": row.set_piece_deliveries,
+            "SP 1st": row.set_piece_first_contact,
+            "SP 2nd": row.set_piece_second_phase,
         }
         for row in players
     ]
