@@ -2114,8 +2114,8 @@ def render_offball_iq_section(rundown: MatchRundown) -> None:
     teams = offball_team_stats(rundown)
     st.caption(
         "Off-ball Influence IQ from match tags (halos, triangles, compact/stretched "
-        "defence, alleys, recoveries, pressing). Event-derived proxies — not full "
-        "22-player optical tracking."
+        "defence, alleys, recoveries, pressing, set-piece first contact + second phase). "
+        "Event-derived proxies — not full 22-player optical tracking."
     )
     if teams:
         st.dataframe(offball_team_rows(teams), hide_index=True, width="stretch")

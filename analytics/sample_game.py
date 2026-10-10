@@ -287,6 +287,70 @@ def sample_events() -> list[MatchEvent]:
             )
         add(AWAY_TEAM_ID, aj[jersey], minute_abs, kind, x, y, **extras)
 
+    # Tight set-piece phase chains (delivery → first contact → second-phase shot)
+    # so Influence IQ can credit Phase 1 / Phase 2 windows.
+    # Home corner at abs min 22 → second = (22 * 17) % 60 = 14.
+    events.append(
+        _event(
+            team_id=HOME_TEAM_ID,
+            player_id=nb[5],
+            period=1,
+            minute=22,
+            second=18,
+            event_type=EventType.AERIAL_DUEL,
+            x=92.0,
+            y=48.0,
+            successful=True,
+        )
+    )
+    events.append(
+        _event(
+            team_id=HOME_TEAM_ID,
+            player_id=nb[9],
+            period=1,
+            minute=22,
+            second=26,
+            event_type=EventType.SHOT,
+            x=90.0,
+            y=50.0,
+            end_x=100.0,
+            end_y=50.0,
+            shot_outcome=ShotOutcome.MISSED,
+            successful=False,
+        )
+    )
+    # Away corner at abs min 33 → second = (33 * 17) % 60 = 21; home CB clears.
+    events.append(
+        _event(
+            team_id=HOME_TEAM_ID,
+            player_id=nb[5],
+            period=1,
+            minute=33,
+            second=25,
+            event_type=EventType.AERIAL_DUEL,
+            x=12.0,
+            y=50.0,
+            successful=True,
+        )
+    )
+    # Home free kick at abs min 77 → period 2, minute 32, second = (77 * 17) % 60 = 49.
+    events.append(
+        _event(
+            team_id=HOME_TEAM_ID,
+            player_id=nb[9],
+            period=2,
+            minute=32,
+            second=55,
+            event_type=EventType.SHOT,
+            x=86.0,
+            y=48.0,
+            end_x=100.0,
+            end_y=52.0,
+            shot_outcome=ShotOutcome.ON_TARGET,
+            successful=True,
+        )
+    )
+
     # Goals: Napoleon Bot 3 – 80s Jeans 2
     add(
         HOME_TEAM_ID,
